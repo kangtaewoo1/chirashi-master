@@ -1,0 +1,29 @@
+{
+  "name": "chirashi-master",
+  "version": "6.0.0",
+  "description": "찌라시 마스터 v6 - 정직한 자동 발행 시스템",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "cd chirashi && python app.py",
+    "build": "echo 'Build complete'",
+    "deploy": "wrangler deploy",
+    "deploy:prod": "wrangler deploy --env production"
+  },
+  "keywords": [
+    "chirashi",
+    "automation",
+    "flask",
+    "cloudflare",
+    "workers"
+  ],
+  "author": "Aveydg",
+  "license": "MIT",
+  "devDependencies": {
+    "wrangler": "^4.127.1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aveydg/chirashi-master.git"
+  }
+}

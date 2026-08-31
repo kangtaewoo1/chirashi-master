@@ -1,0 +1,17 @@
+name = "chirashi-master"
+type = "javascript"
+compatibility_date = "2026-08-31"
+
+[env.production]
+name = "chirashi-master-prod"
+routes = [
+  { pattern = "google.twseo.kr", zone_name = "twseo.kr" }
+]
+vars = { ENVIRONMENT = "production" }
+
+[env.staging]
+name = "chirashi-master-staging"
+routes = [
+  { pattern = "staging.google.twseo.kr", zone_name = "twseo.kr" }
+]
+vars = { ENVIRONMENT = "staging" }
