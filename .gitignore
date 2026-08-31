@@ -1,0 +1,32 @@
+# Node
+node_modules/
+
+# Python venv (절대 커밋 금지 — OS 종속)
+chirashi/venv/
+chirashi/**/__pycache__/
+chirashi/**/*.py[cod]
+
+# 민감 데이터 (chirashi/.gitignore와 동일 정책)
+chirashi/data/config.json
+chirashi/data/sites.json
+chirashi/data/members.json
+chirashi/data/history.json
+chirashi/data/queue.json
+chirashi/data/schedules.json
+chirashi/data/keywords.json
+chirashi/data/images.json
+chirashi/data/candidates.json
+chirashi/data/discover.json
+chirashi/data/uniq.json
+chirashi/data/signup_profiles.json
+chirashi/data/openai_usage.json
+chirashi/data/workrooms.json
+chirashi/data/logs.json
+chirashi/data/uploads/*
+!chirashi/data/uploads/.gitkeep
+chirashi/**/*.tmp
+
+# Secrets
+**/.env
+**/.env.local
+**/secret.key

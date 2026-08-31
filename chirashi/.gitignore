@@ -1,0 +1,70 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Flask
+instance/
+.webassets-cache
+
+# Data & Config (민감 정보 제외)
+data/config.json
+data/sites.json
+data/members.json
+data/history.json
+data/queue.json
+data/schedules.json
+data/keywords.json
+data/images.json
+data/candidates.json
+data/discover.json
+data/uniq.json
+data/signup_profiles.json
+data/openai_usage.json
+data/workrooms.json
+data/logs.json
+data/*.tmp
+
+# Uploads
+data/uploads/*
+!data/uploads/.gitkeep
+
+# Backups
+*.bak
+app.py.bak*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Secrets
+secret.key
