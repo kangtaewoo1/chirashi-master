@@ -1787,10 +1787,9 @@ def discover_and_post(site, title, content):
             return False,'로그인 실패로 보입니다 — 아이디/비밀번호가 맞는지 확인하세요(캡차/보안문자 게시판일 수도)',None
         return False,'글쓰기 페이지 못찾음(학습 실패) — 게시판ID(bo_table) 확인',None
     rec['write_url']=wu
-    # 캡차/보안 인증 감지 → 학습·발행 대상에서 제외(우회하지 않음)
+    # 보안 차단은 즉시 중단. 캡차는 감지만 해두고 제출 직전에 2captcha로 해결한다.
     if _page_is_blocked(d): return False,'보안 차단 페이지(403 등) — 즉시 중단',None
     _cap=detect_captcha(d)
-    if _cap: return False,f'캡차 감지({_cap}) — 자동발행 부적합(수동 인증 필요)',None
     subj=discover_subject(d); cmode,csel=discover_content(d); sub=discover_submit(d)
     if not subj or not csel:
         return False,'제목/본문 입력란 못찾음(학습 실패)',None
@@ -1799,6 +1798,21 @@ def discover_and_post(site, title, content):
     if missing: return False,'필수항목 설정 필요: '+', '.join(missing[:6]),None
     try: _fill_recipe_fields(d, rec, title, content)
     except Exception as e: return False,f'입력 실패(학습): {str(e)[:80]}',None
+    # 캡차 감지 시 2captcha로 자동 해결 후 입력 (실패하면 발행 중단)
+    if _cap:
+        cfg=load_config()
+        success,msg,answer,info=solve_captcha_with_2captcha(d,site,_cap,cfg)
+        if success:
+            from selenium.webdriver.common.by import By
+            for sel in ["input[name='captcha_key']","#captcha_key","input[name='wr_key']","input[name*='captcha']","input[id*='captcha']"]:
+                try:
+                    inp=d.find_element(By.CSS_SELECTOR,sel)
+                    if inp and inp.is_displayed():
+                        inp.clear(); inp.send_keys(answer); add_log(f'[2captcha] {msg}'); time.sleep(1); break
+                except Exception: pass
+        else:
+            add_log(f'[2captcha] 자동 해결 실패: {msg} → 자동발행 불가')
+            return False,f'캡차 감지({_cap}) — 2captcha 자동 해결 실패: {msg}',None
     ok,msg=_confirm_posted(d)
     return ok,msg,(rec if ok else None)
 
@@ -1850,8 +1864,13 @@ def dryrun_post(site, title, content_html):
     st('보안 차단 확인',True,'차단 없음')
     cap=detect_captcha(d)
     if cap:
-        st('캡차 확인',False,f'{cap} 감지 — 자동발행 부적합(우회하지 않음)'); return False,steps
-    st('캡차 확인',True,'캡차 없음')
+        _cfg=load_config()
+        if _cfg.get('twocaptcha_enabled') and (_cfg.get('twocaptcha_api_key') or '').strip():
+            st('캡차 확인',True,f'{cap} 감지 — 발행 시 2captcha로 자동 해결 예정')
+        else:
+            st('캡차 확인',False,f'{cap} 감지 — 자동발행 부적합(2captcha 비활성화)'); return False,steps
+    else:
+        st('캡차 확인',True,'캡차 없음')
 
     # 4) 입력란 탐색
     subj=rec.get('subject_sel') or discover_subject(d)
@@ -4937,7 +4956,7 @@ const pltag='<span style="font-size:9px;color:'+plcolor+'" title="발행 방식"
 const ss=s.signup_status||'';const signup=ss==='complete'?'<span class="st st-ok">가입완료·로그인저장</span>':(ss==='rejected'?'<span class="st st-f" title="'+esc(s.signup_reject_reason||'')+'">가입 제외 · 이메일인증</span>':(ss==='prepared'?'<span class="st st-y">가입정보만 준비됨</span>':(ss?'<span class="st st-y">가입 '+esc(ss)+'</span>':'')));const pv=s.signup_profile_version?'<span class="st st-i" title="최근측정 '+esc(s.signup_profile_measured_at||'')+'">가입학습 v'+s.signup_profile_version+(s.signup_profile_changed?' 변경':'')+'</span>':'';
 const allLabel=ss==='rejected'?'가입 제외':(ss==='complete'?'✓ 로그인 저장됨':(['prepared','captcha_wait','email_wait'].includes(ss)?'실제 가입완료 확인':'올인원 가입'));const allClass=(ss==='rejected'||ss==='complete')?'btn-d':(['prepared','captcha_wait','email_wait'].includes(ss)?'btn-g':'btn-v');
 const menu=`<details style="display:inline-block;position:relative"><summary class="btn btn-d btn-xs" style="list-style:none;cursor:pointer">관리 ▾</summary><div style="position:absolute;right:0;z-index:20;background:#101a2c;border:1px solid #33425f;border-radius:8px;padding:7px;min-width:125px;display:grid;gap:5px;box-shadow:0 8px 24px #0008"><button class="btn btn-p btn-xs" onclick="editSite('${esc(s.id)}')">편집</button><button class="btn btn-d btn-xs" onclick="learnSignup('${esc(s.id)}')">가입폼 재학습</button><button class="btn btn-y btn-xs" onclick="dryRun('${esc(s.id)}')">발행 드라이런</button><button class="btn btn-d btn-xs" onclick="detectSite('${esc(s.id)}')">플랫폼 감지</button><button class="btn btn-v btn-xs" onclick="learnSite('${esc(s.id)}')">글쓰기 학습</button><button class="btn btn-d btn-xs" onclick="healthSite('${esc(s.id)}')">상태 점검</button><button class="btn btn-g btn-xs" onclick="testSite('${esc(s.id)}')">발행 테스트</button><button class="btn btn-r btn-xs" onclick="delSite('${esc(s.id)}')">삭제</button></div></details>`;
-return `<tr data-id="${esc(s.id)}" style="${lb}"><td><input type="checkbox" class="cb" data-id="${esc(s.id)}"></td><td>${hdot}<b>${nm}</b><br>${signup} ${pv}</td><td>${perm}</td><td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(s.site_url)}">${esc((s.site_url||'').slice(0,34))}</td><td style="color:var(--p)">${esc(s.bo_table||'')}<br>${pltag}</td><td style="color:var(--d);white-space:nowrap"><div>${today}/<input id="limD_${esc(s.id)}" type="number" min="0" max="10000" value="${s.daily_limit==null?3:s.daily_limit}" style="width:58px;padding:3px 5px">건</div><div style="margin-top:3px"><input id="limM_${esc(s.id)}" type="number" min="0" max="10080" value="${s.min_interval_minutes==null?60:s.min_interval_minutes}" style="width:58px;padding:3px 5px">분 <button class="btn btn-p btn-xs" onclick="saveSiteLimits('${esc(s.id)}')">저장</button></div></td><td><span class="st st-${st}" title="${esc(s.technical_block_reason||s.verification_fail_reason||'')}">${esc(s.status||'idle')}</span>${s.technical_block_reason?'<br><span style="color:var(--r);font-size:9px">'+esc(s.technical_block_reason)+'</span>':''}</td><td style="white-space:nowrap"><button class="btn ${allClass} btn-xs" onclick="signupAll('${esc(s.id)}','${esc(ss)}')">${allLabel}</button> ${menu}</td></tr>`}
+return `<tr data-id="${esc(s.id)}" style="${lb}"><td><input type="checkbox" class="cb" data-id="${esc(s.id)}"></td><td>${hdot}<b>${nm}</b><br>${signup} ${pv}</td><td>${perm}</td><td style="min-width:240px;max-width:340px"><a href="${esc(s.site_url||'#')}" target="_blank" rel="noopener" title="${esc(s.site_url||'')}" style="display:block;color:var(--p);word-break:break-all;line-height:1.45">${esc(s.site_url||'-')}</a><a href="${esc(s.site_url||'#')}" target="_blank" rel="noopener" class="btn btn-p btn-xs" style="display:inline-block;margin-top:5px">🔗 링크 열기</a></td><td style="color:var(--p)">${esc(s.bo_table||'')}<br>${pltag}</td><td style="color:var(--d);white-space:nowrap"><div>${today}/<input id="limD_${esc(s.id)}" type="number" min="0" max="10000" value="${s.daily_limit==null?3:s.daily_limit}" style="width:58px;padding:3px 5px">건</div><div style="margin-top:3px"><input id="limM_${esc(s.id)}" type="number" min="0" max="10080" value="${s.min_interval_minutes==null?60:s.min_interval_minutes}" style="width:58px;padding:3px 5px">분 <button class="btn btn-p btn-xs" onclick="saveSiteLimits('${esc(s.id)}')">저장</button></div></td><td><span class="st st-${st}" title="${esc(s.technical_block_reason||s.verification_fail_reason||'')}">${esc(s.status||'idle')}</span>${s.technical_block_reason?'<br><span style="color:var(--r);font-size:9px">'+esc(s.technical_block_reason)+'</span>':''}</td><td style="white-space:nowrap"><button class="btn ${allClass} btn-xs" onclick="signupAll('${esc(s.id)}','${esc(ss)}')">${allLabel}</button> ${menu}</td></tr>`}
 async function healthSite(id){toast('점검중...');const r=await api('/sites/health/'+id,'POST');if(r&&r.ok){const h=r.health;const pn=h.platform==='cafe24'?'Cafe24':'그누보드';toast((h.ok?'✅ 정상':'⚠️ 확인필요')+` [${pn}] 접속:${h.reachable?'O':'X'} 로그인폼:${h.login_form?'O':'X'} 글쓰기:${h.write_page?'O':'X'}`,h.ok?'ok':'er');renderSites()}else toast('실패','er')}
 async function dryRun(id){toast('🧪 드라이런 실행중... (글은 올리지 않습니다, 최대 60초)');const r=await api('/sites/dryrun/'+id,'POST');if(!r){toast('실패','er');return}
 const rows=(r.steps||[]).map(s=>`<tr><td>${s.ok?'<span style="color:var(--g)">✅</span>':'<span style="color:var(--r)">❌</span>'}</td><td><b>${esc(s.name)}</b></td><td style="color:var(--d)">${esc(s.detail)}</td></tr>`).join('');
