@@ -1,6 +1,9 @@
 name = "chirashi-master"
-type = "javascript"
 compatibility_date = "2026-08-31"
+main = "src/index.js"
+
+[build]
+command = "npm run build"
 
 [env.production]
 name = "chirashi-master-prod"
