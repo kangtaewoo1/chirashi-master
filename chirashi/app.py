@@ -1409,7 +1409,26 @@ def gnuboard_post(site, title, content_html):
         d.get(f'{bbs}/login.php'); time.sleep(2)
         d.find_element(By.CSS_SELECTOR,"input[name='mb_id']").send_keys(mid)
         d.find_element(By.CSS_SELECTOR,"input[name='mb_password']").send_keys(mpw)
-        d.find_element(By.CSS_SELECTOR,"input[type='submit'],button[type='submit'],.btn_submit").click()
+        # 제출 버튼은 로그인 폼(#login_fs/flogin/action*=login_check) 안의 것만. write.php와 동일하게
+        # 헤더 검색폼(fsearchbox)의 검색 버튼이 문서상 먼저라 그냥 submit 셀렉터를 쓰면 잘못 잡힌다.
+        login_btn=None
+        for sel in ("form[name='flogin'] input[type='submit']","form[name='flogin'] button[type='submit']",
+                    "form[action*='login_check'] input[type='submit']","form[action*='login_check'] button[type='submit']",
+                    "#login_fs .btn_submit","form[name='flogin'] .btn_submit"):
+            try:
+                for el in d.find_elements(By.CSS_SELECTOR,sel):
+                    if el.is_displayed(): login_btn=el; break
+            except Exception: pass
+            if login_btn: break
+        if login_btn:
+            try: login_btn.click()
+            except Exception:
+                try: d.execute_script("var f=document.forms['flogin']||document.querySelector(\"form[action*='login_check']\");if(f){if(f.requestSubmit)f.requestSubmit();else f.submit();}")
+                except Exception: pass
+        else:
+            # 버튼을 못 찾으면 로그인 폼을 직접 제출(onsubmit 경유)
+            try: d.execute_script("var f=document.forms['flogin']||document.querySelector(\"form[action*='login_check']\");if(f){if(f.requestSubmit)f.requestSubmit();else f.submit();}")
+            except Exception: pass
         time.sleep(2); dismiss_alerts(d)
 
     # 글쓰기 페이지
