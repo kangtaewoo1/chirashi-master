@@ -780,14 +780,259 @@ CAPTCHA_TASKS={}
 def _captcha_public(task):
     return {k:v for k,v in task.items() if k not in ('event','value','cancelled')}
 
-def _captcha_image_data(d):
-    from selenium.webdriver.common.by import By
-    for sel in ["#captcha_img","img[src*='kcaptcha']","img[src*='captcha']","img[id*='captcha']",".captcha img","#captcha img"]:
-        try:
-            for el in d.find_elements(By.CSS_SELECTOR,sel):
-                if el.is_displayed(): return 'data:image/png;base64,'+el.screenshot_as_base64
+def _kcaptcha_force_load(d):
+    """그누보드 kcaptcha 특화: 초기 #captcha_img는 dot.gif 플레이스홀더라서
+       JS가 새로고침 전엔 실이미지가 없다. g5_captcha_url을 읽어 세션을 새로 만들고
+       실제 kcaptcha_image.php 를 src에 강제 로드한 뒤 디코딩까지 기다린다.
+       실이미지가 뜨면 True, 아니면 False(다른 플랫폼이면 조용히 False).
+       세션 정합성: kcaptcha_session.php가 세션에 정답을 심고 kcaptcha_image.php는
+       그 정답을 그릴 뿐이므로, 심기 실패 시 stale 이미지를 풀지 않도록 abort한다."""
+    import time
+    try:
+        # 이미 진짜 이미지가 떠 있으면(dot.gif 아니고 naturalWidth>0) 세션 재생성 불필요
+        already=d.execute_script("""
+            var i=document.getElementById('captcha_img');
+            if(!i) return false;
+            var s=i.getAttribute('src')||'';
+            return (s.indexOf('dot.gif')===-1 && (i.naturalWidth||0)>5);
+        """)
+        if already:
+            return True
+        cap_url=d.execute_script("return (typeof g5_captcha_url!=='undefined')?g5_captcha_url:'';") or ''
+        if not cap_url:
+            return False
+        # 동기 XHR이 서버 지연 시 JS 스레드를 오래 막을 수 있어 스크립트 타임아웃 상한을 건다
+        try: d.set_script_timeout(8)
         except Exception: pass
-    return ''
+        # 세션에 캡차 정답 심기 → 성공(2xx)해야만 그 정답의 이미지 로드. 실패 시 False 반환.
+        ok=d.execute_script("""
+            var base=arguments[0], done=false;
+            try{
+              var xhr=new XMLHttpRequest();
+              xhr.open('POST', base+'/kcaptcha_session.php', false); xhr.send();
+              done=(xhr.status>=200 && xhr.status<300);
+            }catch(e){ done=false; }
+            if(done){
+              var img=document.getElementById('captcha_img');
+              if(img){ img.src = base+'/kcaptcha_image.php?t='+(new Date()).getTime(); }
+            }
+            return done;
+        """, cap_url)
+        if not ok:
+            return False   # 세션 재생성 실패 → stale 이미지를 풀지 않는다
+        # 이미지 디코딩 완료까지 대기(naturalWidth>0)
+        for _ in range(20):
+            try:
+                natw=d.execute_script("var i=document.getElementById('captcha_img');return i?(i.naturalWidth||0):0;") or 0
+                if natw>5: return True
+            except Exception: pass
+            time.sleep(0.3)
+        return False
+    except Exception:
+        return False
+
+def _captcha_image_data(d):
+    """그누보드(kcaptcha)/XE·Rhymix/Cafe24 캡차 이미지를 base64로 반환. 못 찾으면 ''."""
+    from selenium.webdriver.common.by import By
+    import time
+
+    # 0) 그누보드 kcaptcha면 실이미지를 먼저 강제 로드(dot.gif 플레이스홀더 문제 해결)
+    _kcaptcha_force_load(d)
+
+    # 넓은 폴백(크기추정/data-URI)은 캡차 INPUT이 실제 있을 때만 → 로고·아이콘 오탐 방지
+    has_captcha_input=False
+    try:
+        has_captcha_input=bool(d.find_elements(By.CSS_SELECTOR,
+            "input[name*='captcha'],input[id*='captcha'],#captcha_key,input[name='wr_key'],#secret_text"))
+    except Exception:
+        pass
+
+    def _is_recaptcha(el):
+        # reCAPTCHA/hCaptcha 요소는 이미지캡차 솔버(normal)로 보내면 안 됨 → 제외
+        try:
+            src=(el.get_attribute('src') or '').lower()
+            if any(k in src for k in ('recaptcha','hcaptcha','gstatic.com/recaptcha','google.com/recaptcha')):
+                return True
+        except Exception: pass
+        return False
+
+    def _shot(el):
+        # 어떤 엘리먼트든(img/canvas/svg/div/bg-image) 렌더된 픽셀을 그대로 캡처
+        try:
+            if not el or _is_recaptcha(el):
+                return ''
+            try:
+                sz = el.size
+                w, h = sz.get('width', 0), sz.get('height', 0)
+            except Exception:
+                w = h = 0
+            # naturalWidth로 실제 디코딩 여부 확인(레이아웃상 크기 0이어도 이미지 픽셀 존재 가능)
+            try:
+                natw = d.execute_script("return arguments[0].naturalWidth||0;", el) or 0
+            except Exception:
+                natw = 0
+            if w <= 0 and h <= 0 and natw <= 5:
+                return ''
+            try:
+                d.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
+                time.sleep(0.25)  # 스샷 전 픽셀 페인트 대기(kcaptcha src 교체 직후 방지)
+            except Exception:
+                pass
+            b64 = el.screenshot_as_base64
+            return 'data:image/png;base64,' + b64 if b64 else ''
+        except Exception:
+            return ''
+
+    # 1) 명시적 CSS 셀렉터: 가장 구체적 → 가장 일반적 (gnuboard/XE/Rhymix/Cafe24/일반)
+    SELECTORS = [
+        # kcaptcha src가 교체된 진짜 이미지 (dot.gif 플레이스홀더 배제)
+        "img#captcha_img[src*='kcaptcha_image.php']",
+        "img#captcha_img[src*='captcha.php']",
+        "img#captcha_img:not([src*='dot.gif'])",
+        "img#captcha_img",                          # gnuboard5 kcaptcha 정식 id
+        "img#captcha_image",                        # XE/Rhymix 인라인
+        "#captcha img#captcha_img", "fieldset#captcha img", "#captcha img",
+        ".captcha img", "fieldset.captcha img",
+        # src 특징 기반
+        "img[src*='kcaptcha_image.php']", "img[src*='captcha_action=captchaImage']",
+        "img[src*='captchaImage']", "img[src*='captcha.php']", "img[src*='kcaptcha']",
+        "img[src*='/kcaptcha/']", "img[src*='seccode']", "img[src*='securimage']",
+        "img[src*='authimg']", "img[src*='boan']", "img[src*='=captcha']",
+        "img[src*='image.php']", "img[src*='vcode']", "img[src*='chkcaptcha']",
+        # id/class/alt/title 기반
+        "img[id*='captcha']:not([src*='dot.gif'])", "img[class*='captcha']",
+        "img[alt='CAPTCHA']", "img[alt*='captcha']", "img[alt*='보안']",
+        "img[title*='자동등록방지']",
+        # 래퍼 스코프
+        "#captchaArea img", ".captcha-box img", "td.captcha img", ".kcaptcha img",
+        ".captcha_wrap img", ".captcha_box img", "#captchaWrap img", ".captchaImage img",
+        # 인라인 base64 data-URI (일부 커스텀 스킨)
+        "img[src^='data:image']",
+        # src에 잡히는 캡차성 이미지(최후 일반)
+        "img[src*='captcha']",
+    ]
+
+    # 1-pass: is_displayed()가 True인 것 우선
+    for sel in SELECTORS:
+        try:
+            for el in d.find_elements(By.CSS_SELECTOR, sel):
+                try:
+                    if el.is_displayed():
+                        r = _shot(el)
+                        if r:
+                            return r
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    # 2-pass: is_displayed()가 False로 잘못 잡혀도 크기(width>0,height>0)만 있으면 수용
+    for sel in SELECTORS:
+        try:
+            for el in d.find_elements(By.CSS_SELECTOR, sel):
+                try:
+                    sz = el.size
+                    if sz.get('width', 0) > 0 and sz.get('height', 0) > 0:
+                        r = _shot(el)
+                        if r:
+                            return r
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    # 3) canvas / svg 캡차 (screenshot_as_base64는 img 아닌 엘리먼트도 캡처됨)
+    for sel in ["canvas[id*='captcha']", "canvas[class*='captcha']", "#captcha canvas",
+                ".captcha canvas", "svg[id*='captcha']", "svg[class*='captcha']",
+                "#captcha svg", ".captcha svg"]:
+        try:
+            for el in d.find_elements(By.CSS_SELECTOR, sel):
+                r = _shot(el)
+                if r:
+                    return r
+        except Exception:
+            pass
+
+    # 4) background-image div/span 캡차: 계산된 스타일에서 captcha 토큰 탐지 후 그 박스를 스샷
+    try:
+        els = d.execute_script("""
+            const out=[];
+            for (const el of document.querySelectorAll("div,span,a,i,button,td,[class*='captcha'],[id*='captcha']")) {
+                const bg = getComputedStyle(el).backgroundImage || '';
+                if (bg && bg !== 'none' && /captcha|kcaptcha|securimage|seccode|boan|vcode/i.test(bg)) {
+                    const r = el.getBoundingClientRect();
+                    if (r.width > 0 && r.height > 0) out.push(el);
+                }
+            }
+            return out;
+        """) or []
+        for el in els:
+            r = _shot(el)
+            if r:
+                return r
+    except Exception:
+        pass
+
+    # 5) 폴백: 캡차 INPUT을 찾고, 공통 조상을 4단계까지 거슬러 올라가 가까운 <img>를 캡처
+    #    (input#captcha_key, name=captcha_key, name=wr_key, id/name*=captcha)
+    for isel in ["#captcha_key", "input[name='captcha_key']", "input[name='wr_key']",
+                 "input[name*='captcha']", "input[id*='captcha']", "#secret_text"]:
+        try:
+            for inp in d.find_elements(By.CSS_SELECTOR, isel):
+                node = inp
+                for _ in range(4):  # 조상 최대 4단계 상승
+                    try:
+                        node = node.find_element(By.XPATH, "./..")
+                    except Exception:
+                        break
+                    try:
+                        cands = []
+                        for im in node.find_elements(By.TAG_NAME, "img"):
+                            try:
+                                sz = im.size
+                                w, h = sz.get('width', 0), sz.get('height', 0)
+                            except Exception:
+                                w = h = 0
+                            try:
+                                natw = d.execute_script("return arguments[0].naturalWidth||0;", im) or 0
+                            except Exception:
+                                natw = 0
+                            if (w > 0 and h > 0) or natw > 5:
+                                cands.append((w * h if w and h else natw, im))
+                        if cands:
+                            # 캡차는 작은 이미지 → 가장 작은 후보 우선(스페이서/배너 회피)
+                            cands.sort(key=lambda t: t[0])
+                            r = _shot(cands[0][1])
+                            if r:
+                                return r
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    # 6) 최종 폴백: 글쓰기 <form> 내부에서 캡차 크기(폭 40~260, 높이 20~120)의 보이는 <img> 첫 매치
+    #    캡차 INPUT이 있을 때만 실행(없으면 로고/버튼 이미지 오탐 위험이라 스킵)
+    try:
+        forms = d.find_elements(By.CSS_SELECTOR,
+            "form[name='fwrite'], form#fwrite, form[action*='write_update'], form") if has_captcha_input else []
+        for form in forms:
+            try:
+                for im in form.find_elements(By.TAG_NAME, "img"):
+                    try:
+                        sz = im.size
+                        w, h = sz.get('width', 0), sz.get('height', 0)
+                    except Exception:
+                        continue
+                    if 40 <= w <= 260 and 20 <= h <= 120:  # 캡차 전형 크기(아이콘·배너 배제)
+                        r = _shot(im)
+                        if r:
+                            return r
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    return ''  # 로그: 여기 도달 시 캡차 미필요(로그인/관리자·비활성)이거나 iframe 내부일 수 있음
 
 def solve_captcha_with_2captcha(d,site,cap_type,cfg,timeout=300):
     """2captcha API를 사용해 CAPTCHA를 자동으로 해결한다."""
