@@ -11,6 +11,13 @@
 """
 
 import sys, os, re, json, time, random, threading, queue, urllib.parse, secrets, hashlib, base64, copy, uuid, html as html_lib
+# 콘솔 코드페이지가 cp949 등일 때 이모지 print가 UnicodeEncodeError로 죽는 것 방지.
+# (Windows에서 PYTHONIOENCODING 미설정 시 startup print의 ⏰/🔁 등이 크래시 유발)
+for _stream in ('stdout', 'stderr'):
+    try:
+        getattr(sys, _stream).reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
 from datetime import datetime, timedelta
 from pathlib import Path
 from collections import defaultdict
@@ -351,7 +358,8 @@ def load_config():
        'google_api_key':'','google_cx':'','brave_api_key':'','search_provider':'brave','discover_enabled':False,
        'discover_daily_target':100,'discover_query_limit':100,'discover_keywords':'',
        'discover_direct_queries':'','video_url':'','landing_url':'','post_email':'','guest_post_password':'',
-       'twocaptcha_api_key':'','twocaptcha_enabled':False}
+       'twocaptcha_api_key':'','twocaptcha_enabled':False,
+       'auto_pipeline_enabled':False,'auto_pipeline_batch':3}
     c=load_json(CONFIG_FILE,None)
     if c is None or not isinstance(c,dict): save_json(CONFIG_FILE,d); return d.copy()
     for k,v in d.items():
@@ -1047,15 +1055,39 @@ def solve_captcha_with_2captcha(d,site,cap_type,cfg,timeout=300):
         
         # recaptcha 처리
         if cap_type=='recaptcha':
-            try:
-                sitekey_elem=d.find_element(By.CSS_SELECTOR,'[data-sitekey]')
-                sitekey=sitekey_elem.get_attribute('data-sitekey')
-            except Exception:
+            # sitekey는 여러 위치에 있을 수 있다: data-sitekey 속성 / g-recaptcha 클래스 /
+            # reCAPTCHA iframe src의 ?k= 파라미터 / 페이지 소스 정규식.
+            sitekey=None
+            for sel in ('[data-sitekey]','.g-recaptcha[data-sitekey]','div.g-recaptcha'):
+                try:
+                    el=d.find_element(By.CSS_SELECTOR,sel)
+                    v=el.get_attribute('data-sitekey')
+                    if v: sitekey=v; break
+                except Exception: pass
+            if not sitekey:
+                try:
+                    for fr in d.find_elements(By.CSS_SELECTOR,"iframe[src*='recaptcha']"):
+                        src=fr.get_attribute('src') or ''
+                        mk=re.search(r'[?&]k=([A-Za-z0-9_-]{20,})',src)
+                        if mk: sitekey=mk.group(1); break
+                except Exception: pass
+            if not sitekey:
+                try:
+                    mk=re.search(r'data-sitekey=["\']([A-Za-z0-9_-]{20,})["\']',d.page_source or '')
+                    if mk: sitekey=mk.group(1)
+                except Exception: pass
+            if not sitekey:
                 return False,'sitekey를 찾을 수 없음','',{}
-            
             try:
                 result=solver.recaptcha(sitekey=sitekey,url=d.current_url)
                 token=result.get('code') or result.get('token') or str(result)
+                # reCAPTCHA는 g-recaptcha-response 텍스트영역에 토큰을 넣어야 검증된다.
+                try:
+                    d.execute_script(
+                        "var t=document.getElementById('g-recaptcha-response');"
+                        "if(!t){t=document.querySelector('textarea[name=\"g-recaptcha-response\"]');}"
+                        "if(t){t.style.display='block';t.value=arguments[0];}", token)
+                except Exception: pass
                 return True,'recaptcha 해결 완료',token,{'type':'recaptcha','token':token}
             except Exception as e:
                 return False,f'recaptcha 해결 실패: {str(e)[:80]}','',{}
@@ -1368,15 +1400,35 @@ def fill_required_post_fields(d,site):
         try: parent=(el.find_element(By.XPATH,'..').text or '').lower()
         except Exception: parent=''
         blob=(name+' '+_sel_attr(el,'id')+' '+_sel_attr(el,'placeholder')+' '+parent).lower()
+        tag=el.tag_name.lower()
+        # select 필수항목: 값 있는 첫 옵션을 고른다
+        if tag=='select':
+            try:
+                from selenium.webdriver.support.ui import Select
+                sel_obj=Select(el); chosen=False
+                for opt in sel_obj.options:
+                    ov=(opt.get_attribute('value') or '').strip()
+                    if ov and ov not in ('0','-1'):
+                        sel_obj.select_by_value(ov); filled.append(name); chosen=True; break
+                if not chosen and len(sel_obj.options)>1:
+                    sel_obj.select_by_index(1); filled.append(name); chosen=True
+                if not chosen: missing.append(name)
+            except Exception: missing.append(name)
+            continue
         value=''
         if re.search(r'(wr_name|이름)',blob): value=brand
         elif typ=='password' or re.search(r'(password|passwd|비밀번호)',blob): value=guest_pw
         elif re.search(r'(email|e-mail|이메일)',blob): value=(cfg.get('post_email') or '')
+        elif re.search(r'(tel|phone|연락처|전화|휴대)',blob): value=(cfg.get('phone') or brand)
         elif re.search(r'(youtube|youtu\.be|vimeo|동영상|영상)',blob) or (name in ('wr_link1','link1') and re.search(r'(youtube|유투브|유튜브|vimeo|비메오|동영상)',page_text)): value=video_url or landing or site.get('site_url','')
         elif re.search(r'(link|url|homepage|홈페이지|링크)',blob): value=landing or site.get('site_url','')
+        else:
+            # 의미를 특정 못한 필수 텍스트/텍스트영역(그누보드 wr_2/wr_5 등 커스텀 확장필드)은
+            # 발행을 막지 말고 안전한 일반값으로 채운다(브랜드명). 이메일 형태면 이메일값.
+            value=(cfg.get('post_email') or f'{brand}@gmail.com') if 'mail' in blob else brand
         if value:
-            try: el.clear(); el.send_keys(value); filled.append(name)
-            except Exception: missing.append(name)
+            if _robust_fill(d,el,value): filled.append(name)
+            else: missing.append(name)
         else: missing.append(name)
     return filled,list(dict.fromkeys(missing))
 
@@ -1390,6 +1442,76 @@ def reset_driver():
         except: pass
 
 # ==================== Selenium 그누보드 글쓰기 ====================
+def _robust_fill(d, el, value):
+    """입력 요소에 값을 넣는다. send_keys가 실패(hidden/readonly 등 invalid element state)하면
+       JS로 .value를 설정하고 input·change 이벤트를 발생시켜 에디터 연동 스크립트가 반영하게 한다.
+       hidden 필드도 확실히 채워진다(많은 그누보드 커스텀 스킨 대응)."""
+    try:
+        if el.is_displayed() and el.is_enabled():
+            el.clear(); el.send_keys(value); return True
+    except Exception:
+        pass
+    try:
+        d.execute_script(
+            "var e=arguments[0],v=arguments[1];e.value=v;"
+            "e.dispatchEvent(new Event('input',{bubbles:true}));"
+            "e.dispatchEvent(new Event('change',{bubbles:true}));", el, value)
+        return True
+    except Exception:
+        return False
+
+def _verify_post_by_title(d, bbs, bo, title):
+    """제출 후 확인 불가일 때 최후 검증: 게시판 목록을 다시 읽어 방금 올린 제목이
+       실제로 등록됐는지 확인한다(느린 서버의 리다이렉트 지연으로 인한 오탐 방지).
+       성공하면 해당 글의 뷰 URL을, 실패하면 None을 반환한다. 우회가 아니라 '읽기' 검증."""
+    from selenium.webdriver.common.by import By
+    def norm(s):
+        # 제목 변형(010→OIO, 공백·구분기호 차이)에 견디도록 한글·영숫자만 남겨 비교
+        return re.sub(r'[^0-9A-Za-z가-힣]', '', str(s or '')).lower()
+    key=norm(title)
+    if len(key) < 8:
+        return None
+    # 목록은 긴 제목을 잘라 보여주므로(행 텍스트가 제목의 접두어) 행⊆제목으로 매칭한다.
+    # 또한 브랜드/전화 등 '이 글에만 있는' 특징 조각으로도 본문 전체를 대조한다.
+    frag=key[-12:] if len(key)>=12 else key   # 제목 뒤쪽(브랜드/전화)이 가장 변별적
+    list_url=f'{bbs}/board.php?bo_table={bo}'
+    for _ in range(3):
+        try:
+            d.set_page_load_timeout(25)
+            d.get(list_url); time.sleep(2)
+        except Exception:
+            pass
+        # 1) wr_id 링크를 훑어 '행 텍스트가 제목의 부분(접두어)'인 것을 찾는다
+        try:
+            anchors=d.find_elements(By.CSS_SELECTOR, "a[href*='wr_id=']")
+        except Exception:
+            anchors=[]
+        for a in anchors:
+            try:
+                txt=norm(a.text)
+                if len(txt) >= 8 and (txt in key or key in txt):
+                    href=a.get_attribute('href') or ''
+                    if 'wr_id=' in href:
+                        return href
+            except Exception:
+                continue
+        # 2) 목록 전체 텍스트에서 변별적 조각으로 확인(스킨이 제목을 잘라 a.text가 짧을 때)
+        try:
+            page=norm(d.find_element(By.TAG_NAME,'body').text)
+            if frag and frag in page:
+                # 가능하면 가장 최근(가장 큰) wr_id 를 붙여 뷰 URL을 만든다
+                try:
+                    ids=[int(x) for x in re.findall(r'wr_id=(\d+)', d.page_source or '')]
+                    if ids:
+                        return f'{list_url}&wr_id={max(ids)}'
+                except Exception:
+                    pass
+                return list_url
+        except Exception:
+            pass
+        time.sleep(1.5)
+    return None
+
 def gnuboard_post(site, title, content_html):
     from selenium.webdriver.common.by import By
     from selenium.webdriver.support.ui import WebDriverWait
@@ -1434,15 +1556,25 @@ def gnuboard_post(site, title, content_html):
     # 글쓰기 페이지
     d.get(f'{bbs}/write.php?bo_table={bo}'); time.sleep(2)
 
+    # 글쓰기가 로그인으로 튕기는 게시판: wr_subject를 찾다가 드라이버가 꼬이기 전에
+    # 여기서 깔끔히 중단하고 '로그인 필요'로 반환한다(파이프라인이 자동가입으로 재시도).
+    try:
+        cur=(d.current_url or '').lower()
+    except Exception:
+        cur=''
+    if ('login.php' in cur or 'login_check' in cur) or (not mid and _page_login_state(d)):
+        return False,'로그인이 필요한 게시판입니다 — 비회원 글쓰기 불가'
+
     # 보안 차단은 즉시 중단한다. CAPTCHA는 내용을 채운 뒤 사람이 입력한다.
     if _page_is_blocked(d):
         return False,'보안 차단 페이지(403 등) — 즉시 중단'
     _cap=detect_captcha(d)
 
-    # 제목
+    # 제목 — 일부 스킨은 wr_subject가 hidden 입력(JS 에디터 연동)이라 send_keys가
+    # 'invalid element state'로 실패한다. 실패 시 JS로 value를 넣고 input/change 이벤트 발생.
     wait=WebDriverWait(d,8)
     el=wait.until(EC.presence_of_element_located((By.CSS_SELECTOR,"input[name='wr_subject'],input#wr_subject")))
-    el.clear(); el.send_keys(title)
+    _robust_fill(d,el,title)
     editor_content,html_mode=editor_content_for_page(d,content_html)
 
     # 본문 (smarteditor2/iframe/textarea 대응)
@@ -1461,7 +1593,7 @@ def gnuboard_post(site, title, content_html):
             d.execute_script("arguments[0].innerHTML=arguments[1]",ed,editor_content)
         except:
             ta=d.find_element(By.CSS_SELECTOR,"textarea[name='wr_content']")
-            ta.clear(); ta.send_keys(editor_content)
+            _robust_fill(d,ta,editor_content)   # hidden textarea면 JS value로 폴백
 
     # 본문 HTML에 이미지가 이미 있으면 중복 파일 첨부하지 않는다.
     if '<img' not in (content_html or '').lower(): attach_saved_images(d,1)
@@ -1482,12 +1614,9 @@ def gnuboard_post(site, title, content_html):
                         inp.clear(); inp.send_keys(answer); add_log(f'[2captcha] {msg}'); time.sleep(1); break
                 except: pass
         else:
-            # 2captcha 자동 해결 실패 시 수동 입력으로 폴백
-            add_log(f'[2captcha] 자동 해결 실패: {msg} → 수동 입력 대기')
-            cap_ok,cap_msg,captcha_tid=wait_for_manual_captcha(d,site,_cap)
-            if not cap_ok:
-                finish_captcha_task(captcha_tid,False,cap_msg)
-                return False,cap_msg
+            # 2captcha 자동 해결 실패: 무인 자동화라 수동 대기 없이 이 게시판은 건너뛴다.
+            add_log(f'[2captcha] 자동 해결 실패: {msg} → 이 게시판 건너뜀(무인)')
+            return False,f'캡차 자동 해결 실패({_cap}): {msg}'
 
     # 등록: native click으로 정상 제출(referer/token 자연스러움) + 짧은 page_load_timeout으로
     #       렌더러 25초 블록 회피 + 상태 접근은 _safe 폴링(제출 후 current_url이 25초 멈추던 문제 해결)
@@ -1565,6 +1694,13 @@ def gnuboard_post(site, title, content_html):
         return False,'캡차 불일치 — 재시도 필요'
     if any(k in body for k in ['권한이 없','권한 없','로그인이 필요','게시가 금지','차단']):
         return False,'게시 권한 없음/로그인 필요 — 계정·게시판 권한 확인'
+    # 4) 최후 검증: 느린 서버가 제출 후 뷰로 리다이렉트하는 데 시간이 걸려 위 URL/본문
+    #    판정을 놓쳤을 수 있다. 게시판 목록을 다시 읽어 방금 올린 제목이 실제로
+    #    등록됐는지 확인한다(오탐으로 인한 재시도→중복발행 방지).
+    landed=_safe(lambda: _verify_post_by_title(d, bbs, bo, title))
+    if landed:
+        finish_captcha_task(captcha_tid,True,landed)
+        return True,landed
     msg='등록 확인 불가 — 게시판 규칙/에디터 셀렉터/승인대기 확인'
     finish_captcha_task(captcha_tid,False,msg)
     return False,msg
@@ -2434,8 +2570,11 @@ def under_min_interval(site):
         return remain<=0,max(0,remain)
     except Exception: return True,0
 
-def finalize_post(site,ok):
-    """상태 갱신 + 성공 시 오늘 발행 카운트 증가 (한 번의 락으로 처리)."""
+FAIL_STREAK_DROP=3   # 연속 실패 이 횟수 이상이면 자동 탈락(도배·헛발행 방지)
+
+def finalize_post(site,ok,fail_reason=''):
+    """상태 갱신 + 성공 시 오늘 발행 카운트 증가 + 연속 실패 카운트(fail_streak) 추적.
+       (한 번의 락으로 처리)"""
     today=datetime.now().strftime('%Y-%m-%d')
     with POST_LOCK:
         sites=load_sites()
@@ -2446,8 +2585,52 @@ def finalize_post(site,ok):
                     if s.get('posted_date')!=today: s['posted_date']=today; s['posted_today']=0
                     s['posted_today']=s.get('posted_today',0)+1
                     s['last_post_at']=datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    s['fail_streak']=0; s.pop('last_fail_reason',None)
+                else:
+                    s['fail_streak']=int(s.get('fail_streak',0) or 0)+1
+                    if fail_reason: s['last_fail_reason']=str(fail_reason)[:120]
                 break
         save_sites(sites)
+    if not ok:
+        reconcile_sites()   # 실패 직후 자동 탈락 조건 재평가(목록 최신화)
+
+def _site_permanent_block(s):
+    """이 사이트가 '영구히 발행 불가'인지 판정. 사유 문자열 반환(아니면 '')."""
+    if s.get('signup_email_verification'): return '이메일 인증 필요(자동가입 불가)'
+    tbr=str(s.get('technical_block_reason') or '')
+    if any(k in tbr for k in ('폼을 찾지 못','글쓰기 폼','게시판ID')): return '글쓰기 폼 없음: '+tbr[:60]
+    lfr=str(s.get('last_fail_reason') or '')
+    if any(k in lfr for k in ('보안 차단','403','게시가 금지','권한이 없','권한 없','차단')): return '차단/권한없음: '+lfr[:50]
+    if any(k in lfr for k in ('제출 거부','referer','token')): return '제출 거부(referer/token)'
+    if int(s.get('fail_streak',0) or 0)>=FAIL_STREAK_DROP:
+        return f'연속 실패 {s.get("fail_streak")}회'
+    return ''
+
+def reconcile_sites():
+    """사이트 목록 상시 최신화: 발행이 막힌 사이트를 자동 탈락(permission 해제)시킨다.
+       - 실제게시 검증 완료(verified_post_url 있음) 사이트는 보호(오탈락 방지).
+       - 영구 불가 조건에 해당하면 rejected + permission=False + 사유 저장."""
+    changed=0; now=_kst_now().strftime('%Y-%m-%d %H:%M')
+    with POST_LOCK:
+        sites=load_sites()
+        for s in sites:
+            if s.get('status')=='rejected': continue
+            # 실게시 검증된 사이트는 일시 실패로 함부로 탈락시키지 않는다
+            if str(s.get('verified_post_url') or '').startswith(('http://','https://')):
+                # 단, 검증됐어도 연속 실패가 크게 쌓이면(서버 사망 등) 발행만 잠근다
+                if int(s.get('fail_streak',0) or 0)>=FAIL_STREAK_DROP+2:
+                    if s.get('permission'):
+                        s['permission']=False; s['auto_drop_reason']=f'검증됨이나 연속 실패 {s.get("fail_streak")}회 — 발행 잠금'
+                        s['auto_dropped_at']=now; changed+=1
+                continue
+            reason=_site_permanent_block(s)
+            if reason:
+                s.update({'status':'rejected','permission':False,
+                          'auto_drop_reason':reason,'auto_dropped_at':now})
+                changed+=1
+        if changed: save_sites(sites)
+    if changed: add_log(f'[자동정리] {changed}개 사이트 자동 탈락(발행 불가)')
+    return changed
 
 def start_workers(n=2):
     global wk_active,wk_paused
@@ -2543,7 +2726,7 @@ def worker_loop():
             if ok: wk_stats['success']+=1
             else: wk_stats['fail']+=1
             wk_stats['done']+=1; wk_stats['queued']=post_queue.qsize()
-        finalize_post(site,ok)
+        finalize_post(site,ok,fail_reason=('' if ok else str(msg)))
         # CAPTCHA 값은 관리자 수동 입력만 허용하며 자동 판독/우회하지 않는다.
         if hid: history_update(hid,status='done' if ok else 'failed',
                                result_url=(msg if ok and str(msg).startswith('http') else ''),
@@ -2714,28 +2897,69 @@ def _is_blacklisted(url):
     u=(url or '').lower()
     return any(b in u for b in BLACK_DOMAINS)
 
+# 그누보드 홍보/자유 게시판에서 흔한 bo_table 값 (URL 조각으로 직접 검색)
+GNU_BO_TABLES=['promotion','promotion1','hongbo','hongbo1','ad','link','partner','banner',
+               'free','free1','guest','company','pr','event','notice_pr']
+# Brave에 잘 먹히는 '평문 URL조각' — inurl: 대신 실제 경로 문자열을 그대로 검색
+BRAVE_URL_FRAGMENTS=['bbs/board.php bo_table=promotion','bbs/board.php bo_table=hongbo',
+                     'bbs/board.php bo_table=link','bbs/board.php bo_table=partner',
+                     'bbs/write.php bo_table=promotion','bbs/board.php bo_table=free 홍보']
+
+def _board_finder_queries(provider):
+    """플랫폼(그누보드/카페24) 홍보·자유 게시판을 '찾기 위한' 검색어.
+       사용자의 지역×업종 목록(=경쟁사 검색)과 무관하게 항상 앞에 실행한다."""
+    qs=[]
+    if provider=='brave':
+        # 그누보드: 평문 URL조각 + 홍보의도 (라이브 검증: 실제 홍보게시판 10/10 적중)
+        for frag in BRAVE_URL_FRAGMENTS:
+            qs.append(frag)
+            for i in INTENT[:3]:
+                qs.append(f'{frag} {i}')
+        for bo in GNU_BO_TABLES:
+            qs.append(f'bbs/board.php bo_table={bo} 홍보')
+        for i in INTENT:
+            qs.append(f'{i} bbs board.php 글쓰기')
+            qs.append(f'{i} 그누보드 게시판')
+        # 카페24: 평문 게시판 경로 조각(그누보드보다 약하지만 커버)
+        for frag in ['board/free list.html 홍보','board_no 자유게시판 cafe24',
+                     'board 홍보게시판 write.html','cafe24 게시판 홍보 환영']:
+            qs.append(frag)
+    else:
+        # Google: inurl: 연산자가 강력
+        for p in GNU_PATTERNS+CAFE_PATTERNS:
+            qs.append(p)
+            for i in INTENT[:4]:
+                qs.append(f'{p} {i}')
+        for i in INTENT:
+            qs.append(f'{i} inurl:bbs')
+            qs.append(f'{i} inurl:board')
+    return qs
+
 def build_queries(cfg):
-    """플랫폼 흔적 × 홍보 의도 × (선택)업종 키워드 조합 생성."""
+    """플랫폼 흔적 × 홍보 의도 × (선택)업종 키워드 조합 생성.
+       provider가 brave면 inurl: 연산자가 안 먹으므로 '평문 URL조각' 쿼리를 쓴다.
+       그누보드/카페24 홍보게시판 '찾기' 검색어를 항상 먼저 실행하고, 그 뒤에
+       사용자가 저장한 목록(지역×업종 등)을 붙인다."""
+    provider=(cfg.get('search_provider') or 'brave').lower()
     extra=[x.strip() for x in (cfg.get('discover_keywords','') or '').splitlines() if x.strip()]
-    # 사용자가 입력한 완성 검색문은 변형하지 않고 가장 먼저 실행한다.
     direct=[x.strip() for x in (cfg.get('discover_direct_queries','') or '').splitlines()
             if x.strip() and not x.lstrip().startswith('#')]
-    # 사용자가 목록을 저장한 경우 임의 검색어를 섞지 않고 그 목록만 순서대로 사용한다.
-    if direct:
-        return list(dict.fromkeys(direct))
-    qs=[]
-    for p in GNU_PATTERNS+CAFE_PATTERNS:
-        qs.append(p)
-        for i in INTENT[:4]:
-            qs.append(f'{p} {i}')
-    for i in INTENT:
-        qs.append(f'{i} inurl:bbs')
-        qs.append(f'{i} inurl:board')
-    for e in extra:                       # 업종·지역 키워드가 있으면 곱하기
-        for i in INTENT[:5]:
-            qs.append(f'{e} {i}')
-        qs.append(f'{e} inurl:bbs/board.php')
-    return list(dict.fromkeys(qs))
+    # 1) 항상 먼저: 플랫폼 홍보게시판 찾기 검색어
+    finder=_board_finder_queries(provider)
+    # 2) 업종/지역 키워드가 있으면 게시판 조각과 곱해 보강
+    if provider=='brave':
+        for e in extra:
+            for i in INTENT[:3]:
+                finder.append(f'{e} {i}')
+            finder.append(f'{e} bbs/board.php bo_table=promotion')
+            finder.append(f'{e} 홍보게시판 글쓰기')
+    else:
+        for e in extra:
+            for i in INTENT[:5]:
+                finder.append(f'{e} {i}')
+            finder.append(f'{e} inurl:bbs/board.php')
+    # 3) 사용자가 저장한 목록은 뒤에 이어붙인다(보존). finder가 앞이라 쿼리한도 안에서 우선 실행됨.
+    return list(dict.fromkeys(finder+direct))
 
 def google_search(cfg, query, start=1, num=10):
     """Google Custom Search JSON API. (공식 API — 결과 직접 스크래핑 안 함)"""
@@ -2818,10 +3042,15 @@ def screen_candidate(url, cfg=None):
                        if 1<=int(mo)<=12 and 1<=int(d)<=31)
             res['last_post_days']=max(0,(_kst_now().date()-latest).days)
     except Exception: pass
-    # 글쓰기 페이지: 현재 문서의 실제 쓰기 링크를 우선 수집하고 기본 후보를 보조로 사용
+    # 글쓰기 페이지: 실제 쓰기 링크(write.php)만 신뢰한다.
+    # ※ board.php?wr_id= (글 조회) 페이지에도 wr_content가 있지만 그건 '댓글 폼'이라
+    #    글쓰기 폼으로 오인하면 안 된다(오판 시 write.php에서 게시판 못찾음으로 실패).
     from urllib.parse import urljoin
     wurls=[]
-    if ('wr_subject' in low or 'name="subject"' in low) and ('wr_content' in low or 'name="content"' in low):
+    url_low=(url or '').lower()
+    is_view = 'wr_id=' in url_low  # 글 조회 URL이면 그 페이지의 폼은 댓글일 가능성 → 신뢰 안 함
+    if (not is_view) and 'write.php' in url_low and \
+       ('wr_subject' in low or 'name="subject"' in low) and ('wr_content' in low or 'name="content"' in low):
         wurls.append(url)
     for href in re.findall(r'href=["\']([^"\']+)["\']',html,re.I):
         hl=href.lower()
@@ -2897,10 +3126,13 @@ def add_candidates_from(items, cfg, source='search'):
             if _is_blacklisted(url): continue
             dom=_domain_of(url)
             if not dom or dom in known_dom or dom in site_dom: continue
+            # URL 자체가 게시판 경로(그누보드/카페24)면 '제목 숫자 8개' 규칙을 면제한다.
+            # (홍보게시판은 제목이 '홍보게시판'처럼 숫자가 없을 때가 많아 오탈락하던 문제)
+            url_is_board=bool(re.search(r'(bbs/board\.php|bo_table=|/board/.*list\.html|board_no=)',url.lower()))
             check=precheck_search_result(url) if source!='manual' else {'reachable':True,'title':'','digits':8}
             if not check.get('reachable'):
                 blocked_unreachable+=1; continue
-            if int(check.get('digits',0))<8:
+            if int(check.get('digits',0))<8 and not url_is_board:
                 blocked_title+=1; continue
             form_check=screen_candidate(url,cfg) if source!='manual' else {}
             if source!='manual' and not form_check.get('write_form'):
@@ -2947,8 +3179,14 @@ def screen_pending(limit=30):
         elif r.get('parked'): r['status']='rejected'; r['reject_reason']='주차/만료 도메인 (실제 게시판 아님)'
         elif r.get('illegal'): r['status']='rejected'; r['reject_reason']='도박·불법 사이트 (제휴 부적합)'
         elif r.get('ad_banned'): r['status']='rejected'; r['reject_reason']='광고 금지 명시'
-        elif r.get('captcha'): r['status']='rejected'; r['reject_reason']='캡차 있음(자동발행 부적합)'
-        elif not r.get('write_form'): r['status']='ready'; r['reject_reason']='글쓰기 폼 미확인 — 로그인 필요할 수 있음'
+        elif r.get('captcha'): r['status']='ready'; r['reject_reason']='캡차 있음 — 2captcha 자동해결 시도 예정'
+        elif not r.get('write_form'):
+            # 글쓰기 폼이 없다: 그누보드/카페24면 로그인 후 쓰기 가능성 있어 ready 유지(자동가입 대상).
+            # 그 외(디렉토리·전화번호검색·경쟁업체 랜딩 등 게시판 아님)는 자동 탈락시켜 목록을 깨끗이.
+            if r.get('platform') in ('gnuboard','cafe24') or r.get('login_required'):
+                r['status']='ready'; r['reject_reason']='글쓰기 폼 미확인 — 로그인 필요할 수 있음(자동가입 시도)'
+            else:
+                r['status']='rejected'; r['reject_reason']='게시판 글쓰기 폼 없음(디렉토리/랜딩 페이지 — 홍보 대상 아님)'
         else: r['status']='ready'
         results[c['id']]=r
         time.sleep(1)   # 요청 속도 관리
@@ -2992,6 +3230,375 @@ def discover_once(cfg=None, max_queries=10):
     return {'ok':True,'queries':used,'added':added,'screened':screened,
             'today_queries':st['queries'],'today_found':st['found'],'errors':errs}
 
+# ==================== 임시메일(mail.tm) — 이메일 인증 자동 처리 ====================
+TEMPMAIL_API='https://api.mail.tm'
+
+def _tempmail_req(path, method='GET', data=None, token=None):
+    hdr={'Content-Type':'application/json'}
+    if token: hdr['Authorization']='Bearer '+token
+    body=json.dumps(data).encode() if data else None
+    r=urllib.request.Request(TEMPMAIL_API+path, data=body, headers=hdr, method=method)
+    try:
+        with urllib.request.urlopen(r, timeout=15) as resp:
+            return resp.status, json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        try: return e.code, json.loads(e.read().decode())
+        except Exception: return e.code, {}
+    except Exception as e:
+        return 0, {'error': str(e)[:80]}
+
+def tempmail_create():
+    """임시메일 주소를 발급하고 (address, password, token)을 반환. 실패 시 (None,...)."""
+    st, doms = _tempmail_req('/domains')
+    if st != 200 or not isinstance(doms, dict): return None, None, None
+    members = doms.get('hydra:member') or []
+    if not members: return None, None, None
+    domain = members[0].get('domain')
+    addr = f'twseo{secrets.token_hex(5)}@{domain}'; pw = secrets.token_hex(10)
+    st, _ = _tempmail_req('/accounts', 'POST', {'address': addr, 'password': pw})
+    if st not in (200, 201): return None, None, None
+    st, tok = _tempmail_req('/token', 'POST', {'address': addr, 'password': pw})
+    token = tok.get('token') if (st == 200 and isinstance(tok, dict)) else None
+    return (addr, pw, token) if token else (None, None, None)
+
+def tempmail_wait_verify_link(token, timeout=120):
+    """받은편지함을 폴링해 인증 메일의 인증 링크(또는 6자리 코드)를 찾아 반환.
+       반환: {'link':url} 또는 {'code':'123456'} 또는 None."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        st, msgs = _tempmail_req('/messages', token=token)
+        items = (msgs.get('hydra:member') or []) if isinstance(msgs, dict) else []
+        for m in items:
+            mid = m.get('id')
+            st2, full = _tempmail_req(f'/messages/{mid}', token=token)
+            if st2 != 200 or not isinstance(full, dict): continue
+            text = (full.get('text') or '') + ' '
+            html = ''
+            h = full.get('html')
+            if isinstance(h, list): html = ' '.join(h)
+            elif isinstance(h, str): html = h
+            blob = text + ' ' + html
+            # 1) 인증 링크(그누보드: register_email_check / auth / confirm / verify)
+            for murl in re.findall(r'https?://[^\s"\'<>]+', blob):
+                if re.search(r'(email_check|auth|confirm|verify|activate|register|certify|인증)', murl, re.I):
+                    return {'link': murl}
+            # 2) 6자리 인증 코드
+            mcode = re.search(r'\b(\d{6})\b', text)
+            if mcode:
+                return {'code': mcode.group(1)}
+        time.sleep(4)
+    return None
+
+def auto_signup(site, submit=True):
+    """로그인 필요 사이트에 앱이 스스로 회원가입한다(2captcha로 캡차 해결).
+       submit=False면 제출 직전까지만(폼 입력·캡차해결) 수행하고 실제 가입은 안 함(검증용).
+       반환: (ok, msg). 성공 시 site에 mb_id/mb_pass가 저장돼 있다.
+       이메일 인증 필요·지원불가 캡차는 실패로 반환(가입 대상 제외)."""
+    from selenium.webdriver.common.by import By
+    cfg=load_config()
+    # 1) 가입폼 측정(캐시 30분) — 이메일 인증 필요하면 즉시 제외
+    try:
+        profile=learn_signup_profile(site,force=False)
+    except Exception as e:
+        return False,f'가입폼 측정 실패: {str(e)[:100]}'
+    if not profile:
+        return False,'가입폼을 찾지 못함'
+    fields=profile.get('fields') or []
+    form_url=profile.get('form_url') or profile.get('signup_url') or site.get('signup_url','')
+    if not form_url:
+        return False,'가입 폼 URL 불명'
+    # 2) 자격증명 생성 (사이트 규칙 반영)
+    mid,pw=_signup_credentials(site,profile.get('rules'))
+    # 이메일 인증이 필요한 게시판이면 임시메일(mail.tm)로 실제 수신 가능한 주소를 쓴다.
+    need_email_verify=bool(profile.get('email_verification_required'))
+    tm_addr=tm_pw=tm_token=None
+    if need_email_verify:
+        tm_addr,tm_pw,tm_token=tempmail_create()
+        if not tm_token:
+            return False,'이메일 인증 필요 — 임시메일 발급 실패'
+        email=tm_addr
+        add_log(f'[자동가입] {site.get("name") or site.get("site_url","")} 이메일 인증 → 임시메일 {tm_addr}')
+    else:
+        email_local=re.sub(r'[^a-z0-9]','',mid.lower())[:20] or ('u'+secrets.token_hex(4))
+        email=f'{email_local}@gmail.com'
+    nick=(cfg.get('brand') or 'user')+secrets.token_hex(2)
+    name=cfg.get('brand') or '홍길동'
+    vals_by_role={'id':mid,'password':pw,'password_confirm':pw,'email':email,
+                  'nickname':nick,'name':name}
+    d=get_driver()
+    # 그누보드 가입은 register.php(약관) → 동의 → register_form.php(실제 폼) 2단계다.
+    # register_form.php를 GET으로 직접 열면 약관 화면이라 필드가 없다 → 약관부터 진행.
+    signup_url=profile.get('signup_url') or site.get('signup_url') or form_url
+    def _has_pw_field():
+        return bool(_safe_find(d,"input[name='mb_password'],#reg_mb_password,input[type='password']"))
+    try:
+        d.set_page_load_timeout(25); d.get(signup_url); time.sleep(2); dismiss_alerts(d)
+    except Exception:
+        pass
+    # 약관 동의 체크(있으면 전부 체크) 후 '동의' 제출 버튼으로 실제 폼 진입
+    for cb in _safe_find(d,"input[type='checkbox']"):
+        try:
+            nm=(cb.get_attribute('name') or '').lower()
+            if any(k in nm for k in ('agree','약관','provision','privacy','all')) or not nm:
+                if not cb.is_selected(): d.execute_script('arguments[0].click()',cb)
+        except Exception: pass
+    if not _has_pw_field():
+        # 약관 폼(fregister_form / register.php)을 제출해 register_form.php로 이동
+        submitted_agree=False
+        for sel in ("form[name='fregister'] input[type='submit']","#fregister input[type='submit']",
+                    "form[action*='register_form'] input[type='submit']","form[action*='register_form'] button",
+                    "input[type='submit']","button[type='submit']"):
+            for el in _safe_find(d,sel):
+                try:
+                    if el.is_displayed(): d.execute_script('arguments[0].click()',el); submitted_agree=True; break
+                except Exception: pass
+            if submitted_agree: break
+        time.sleep(2); dismiss_alerts(d)
+    if not _has_pw_field():
+        # 그래도 없으면 register_form.php를 직접 열되 약관값을 붙여서 접근 시도
+        try:
+            base_o=_signup_origin(site)
+            d.get(base_o+'/bbs/register_form.php?agree=1&agree2=1'); time.sleep(2); dismiss_alerts(d)
+        except Exception: pass
+    if not _has_pw_field():
+        return False,'가입 폼(비밀번호 입력칸)에 도달 실패 — 약관/인증 단계 확인'
+    # 3) role별 필드 자동 입력
+    filled=[]
+    for f in fields:
+        role=f.get('role') or ''; sel=f.get('selector') or ''
+        if not sel or role in ('','captcha'): continue
+        val=vals_by_role.get(role)
+        if not val: continue
+        for el in _safe_find(d,sel):
+            try:
+                if el.is_displayed(): el.clear(); el.send_keys(val); filled.append(role); break
+            except Exception: pass
+    if 'id' not in filled or 'password' not in filled:
+        return False,f'가입 필수필드 입력 실패(입력됨: {",".join(filled) or "없음"})'
+    # 4) 캡차 있으면 2captcha로 해결 후 입력
+    cap=detect_captcha(d)
+    if cap:
+        ok,cmsg,answer,info=solve_captcha_with_2captcha(d,site,cap,cfg)
+        if not ok:
+            return False,f'가입 캡차({cap}) 해결 실패: {cmsg}'
+        if cap in ('kcaptcha',) and answer:
+            done=False
+            for csel in ["input[name='captcha_key']","#captcha_key","input[name*='captcha']","input[id*='captcha']"]:
+                for el in _safe_find(d,csel):
+                    try:
+                        if el.is_displayed(): el.clear(); el.send_keys(answer); done=True; break
+                    except Exception: pass
+                if done: break
+        add_log(f'[자동가입 캡차] {site.get("name") or site.get("site_url","")} — {cmsg}')
+    if not submit:
+        return True,f'가입 직전까지 성공(입력: {",".join(filled)}{" +캡차" if cap else ""}) — 실제 가입 안 함'
+    # 5) 제출
+    submitted=False
+    for sel in ("form#fregister input[type='submit']","form[name='fregister'] input[type='submit']",
+                "form#fregister button[type='submit']","#register_form input[type='submit']",
+                "form[action*='register_form_update'] input[type='submit']",
+                "form[action*='register_form_update'] button[type='submit']"):
+        for el in _safe_find(d,sel):
+            try:
+                if el.is_displayed(): d.execute_script('arguments[0].click()',el); submitted=True; break
+            except Exception: pass
+        if submitted: break
+    if not submitted:
+        _safe_js(d,"var f=document.getElementById('fregister')||document.forms['fregister']||document.querySelector(\"form[action*='register_form_update']\");if(f){if(f.requestSubmit)f.requestSubmit();else f.submit();}")
+    time.sleep(3); dismiss_alerts(d)
+    # 5.5) 이메일 인증: 임시메일 받은편지함을 폴링해 인증 링크/코드를 처리
+    if need_email_verify and tm_token:
+        add_log(f'[자동가입] {site.get("name") or site.get("site_url","")} 인증메일 대기 중...')
+        verify=tempmail_wait_verify_link(tm_token, timeout=120)
+        if not verify:
+            return False,'이메일 인증 실패 — 인증메일이 오지 않음(임시메일 차단 가능)'
+        if verify.get('link'):
+            try: d.get(verify['link']); time.sleep(2); dismiss_alerts(d)
+            except Exception: pass
+            add_log(f'[자동가입] 인증링크 방문 완료')
+        elif verify.get('code'):
+            # 코드 입력형: 인증코드 입력칸을 찾아 넣고 제출
+            for csel in ("input[name*='auth']","input[name*='cert']","input[name*='code']","input[id*='auth']","input[id*='code']"):
+                done=False
+                for el in _safe_find(d,csel):
+                    try:
+                        if el.is_displayed(): el.clear(); el.send_keys(verify['code']); done=True; break
+                    except Exception: pass
+                if done:
+                    _safe_js(d,"var b=document.querySelector(\"input[type='submit'],button[type='submit']\");if(b)b.click();")
+                    time.sleep(2); break
+            add_log(f'[자동가입] 인증코드 입력 완료')
+    # 6) 가입 성공 검증 = 로그인 시도해서 로그아웃 링크 확인
+    raw=site.get('site_url',''); m=re.match(r'(https?://[^/]+)',raw); base=m.group(1) if m else raw
+    try:
+        d.get(f'{base}/bbs/login.php'); time.sleep(2)
+        for s2 in (("input[name='mb_id']",mid),("input[name='mb_password']",pw)):
+            for el in _safe_find(d,s2[0]):
+                try:
+                    if el.is_displayed(): el.clear(); el.send_keys(s2[1]); break
+                except Exception: pass
+        for lsel in ("form[name='flogin'] input[type='submit']","form[action*='login_check'] input[type='submit']","#login_fs .btn_submit"):
+            for el in _safe_find(d,lsel):
+                try:
+                    if el.is_displayed(): el.click(); break
+                except Exception: pass
+        time.sleep(2); dismiss_alerts(d)
+        body=''
+        try: body=d.find_element(By.TAG_NAME,'body').text[:1500]
+        except Exception: pass
+        logged=('로그아웃' in body) or ('logout' in (d.page_source or '').lower())
+    except Exception:
+        logged=False
+    if logged:
+        set_site_flag(site.get('id'),mb_id=mid,mb_pass=pw,signup_status='complete',
+                      login_saved=True,signup_updated_at=datetime.now().isoformat(timespec='seconds'))
+        add_log(f'[자동가입 성공] {site.get("name") or site.get("site_url","")} — {mid}')
+        return True,f'자동가입 성공 — {mid}'
+    return False,'가입 제출했으나 로그인 확인 실패(가입 규칙·중복ID·승인제 가능)'
+
+def _safe_find(d, sel):
+    try: return d.find_elements(__import__('selenium.webdriver.common.by',fromlist=['By']).By.CSS_SELECTOR, sel) or []
+    except Exception: return []
+
+def _safe_js(d, js):
+    try: return d.execute_script(js)
+    except Exception: return None
+
+def _promote_candidate_to_site(cand, result_url, write_url='', bo='', permission=True):
+    """실제 발행 성공한 후보를 사이트 목록으로 승격(api_cand_verified 로직 재사용).
+       permission=True면 즉시 발행 허용 ON(완전 자동)."""
+    domain=(cand.get('domain') or _domain_of(cand.get('url',''))).lower()
+    m=re.match(r'(https?://[^/]+)',cand.get('url','')); base=m.group(1) if m else cand.get('url','')
+    bo=bo or cand.get('bo_table') or 'free'
+    now=_kst_now().strftime('%Y-%m-%d %H:%M')
+    with POST_LOCK:
+        sites=load_sites(); site=next((s for s in sites if _domain_of(s.get('site_url',''))==domain),None)
+        created=site is None
+        if created:
+            site={'id':secrets.token_hex(6),'site_url':base,'platform':cand.get('platform','gnuboard'),
+                  'mb_id':'','mb_pass':'','bo_table':bo,'name':cand.get('board_name') or domain,
+                  'daily_limit':3,'min_interval_minutes':60,'status':'idle',
+                  'added':_kst_now().strftime('%m/%d %H:%M')}
+            sites.append(site)
+        site.update({'bo_table':bo,'write_url':write_url,'verified_post_url':result_url,
+                     'write_test_status':'passed','verified_at':now,'last_structure_check':now,
+                     'registration_source':'verified_test'})
+        if permission:
+            site.update({'permission':True,'permission_note':'자동 파이프라인: 실게시 검증 완료',
+                         'permission_date':_kst_now().strftime('%Y-%m-%d')})
+        else:
+            site.setdefault('permission',False)
+        save_sites(sites)
+    with _cand_lock:
+        cands=load_cands()
+        for c in cands:
+            if c.get('domain','').lower()==domain:
+                c.update({'status':'approved','verified_at':now,'verified_post_url':result_url,'site_id':site['id']})
+        save_cands(cands)
+    add_log(f'[자동등록] {domain} · {bo} · '+('발행허용 ON' if permission else '발행잠금'))
+    return site
+
+def auto_pipeline_once(limit=5):
+    """완전 자동 파이프라인: ready 후보 → (필요시)자동가입 → 실제 글1건 발행 → 성공시 자동등록.
+       배치당 limit개만 처리(부하·탐지 회피). 반환: 요약 dict."""
+    cfg=load_config()
+    if not cfg.get('auto_pipeline_enabled'):
+        return {'ok':False,'error':'auto_pipeline 비활성화'}
+    site_domains={_domain_of(s.get('site_url','')) for s in load_sites()}
+    with _cand_lock:
+        cands=load_cands()
+    # 대상: 검수완료(ready) + 아직 사이트 미등록 + 자동탈락 아님 + '실제 글쓰기 경로'가 있는 것만.
+    # (114/맵 등 전화번호·디렉토리 사이트는 write_form도 bo_table도 없어 가입/발행이 불가 → 제외)
+    def _has_write_path(c):
+        if c.get('write_form'): return True
+        return c.get('platform') in ('gnuboard','cafe24') and bool((c.get('bo_table') or '').strip())
+    pend=[c for c in cands
+          if c.get('screened') and c.get('status')=='ready'
+          and not c.get('parked') and not c.get('illegal') and not c.get('ad_banned')
+          and (c.get('domain') or '').lower() not in site_domains
+          and c.get('reachable') and _has_write_path(c)]
+    # 비회원 글쓰기 가능(로그인 불필요) 게시판을 먼저 처리한다. 로그인 필요 게시판은
+    # 이메일 인증 등으로 자동가입이 막히는 경우가 많아 배치 슬롯을 낭비하기 쉽다.
+    def _prio(c):
+        direct = c.get('write_form') and not c.get('login_required')  # 바로 발행 가능
+        no_cap = not c.get('captcha')                                  # 캡차 없으면 더 빠름
+        return (1 if direct else 0, 1 if no_cap else 0, c.get('score',0))
+    pend.sort(key=_prio, reverse=True)
+    pend=pend[:max(1,limit)]
+    done=0; registered=0; signed=0; results=[]
+    for c in pend:
+        name=c.get('board_name') or c.get('domain') or c.get('url','')[:30]
+        # 임시 site dict(발행 함수는 site 형태를 기대) — 후보 정보로 구성
+        m=re.match(r'(https?://[^/]+)',c.get('url','')); base=m.group(1) if m else c.get('url','')
+        tmp={'id':'cand_'+c.get('id',''),'site_url':base,'platform':c.get('platform','gnuboard'),
+             'bo_table':c.get('bo_table') or 'free','name':name,'mb_id':'','mb_pass':''}
+        try:
+            # 1) 로그인 필요(=write_form 미확인)면 자동가입 먼저
+            if c.get('login_required') or not c.get('write_form'):
+                ok_su,msg_su=auto_signup(tmp,submit=True)
+                if ok_su: signed+=1
+                else:
+                    _cand_set(c['id'],status='rejected',reject_reason=f'자동가입 실패: {msg_su[:80]}')
+                    results.append({'name':name,'stage':'signup','ok':False,'msg':msg_su})
+                    continue  # done 증가·드라이버 리셋은 finally에서 처리
+            # 2) 실제 글 1건 발행 (기존 do_post; false-negative 수정 반영됨)
+            kw={'지역':'인천','서비스':'셔츠룸','브랜드':cfg.get('brand','') or '테스트'}
+            html,title=generate_article(kw,cfg,unique=True)
+            ok,msg=do_post(tmp,title,html)
+            # 검수는 비회원 글쓰기로 봤지만 실제 write.php가 로그인으로 튕기는 게시판이 있다.
+            # 이 경우 자동가입 후 1회 재시도(gjsec처럼 login_required 오판된 케이스 구제).
+            if (not ok) and (not tmp.get('mb_id')) and re.search(r'(로그인이 필요|로그인 실패|로그인 화면|권한이 없|권한 없)',str(msg)):
+                reset_driver(); time.sleep(1)
+                add_log(f'[파이프라인] {name} 로그인필요 → 자동가입 시도')
+                ok_su,msg_su=auto_signup(tmp,submit=True)
+                if ok_su:
+                    signed+=1; add_log(f'[파이프라인] {name} 자동가입 성공 → 재발행')
+                    reset_driver(); time.sleep(1)
+                    ok,msg=do_post(tmp,title,html)
+                else:
+                    add_log(f'[파이프라인] {name} 자동가입 실패: {str(msg_su)[:80]}')
+                    msg=f'{msg} · 자동가입 실패: {str(msg_su)[:60]}'
+            result_url=msg if (ok and str(msg).startswith(('http://','https://'))) else ''
+            if ok and result_url:
+                _promote_candidate_to_site(c,result_url,write_url=tmp.get('learned',{}).get('write_url','') if isinstance(tmp.get('learned'),dict) else '',
+                                           bo=tmp.get('bo_table'),permission=True)
+                # 가입정보가 생겼으면 등록 사이트에 반영
+                if tmp.get('mb_id'):
+                    set_site_flag(_promoted_site_id(c),mb_id=tmp.get('mb_id'),mb_pass=tmp.get('mb_pass'))
+                registered+=1
+                results.append({'name':name,'stage':'post','ok':True,'url':result_url})
+            elif ok:
+                _cand_set(c['id'],status='rejected',reject_reason='발행됨(결과 URL 확인 불가)')
+                results.append({'name':name,'stage':'post','ok':False,'msg':'결과 URL 없음'})
+            else:
+                reason,_,is_temp=classify_fail(msg)
+                if is_temp:
+                    _cand_set(c['id'],status='ready',reject_reason=f'일시적 실패: {str(msg)[:70]}')
+                else:
+                    _cand_set(c['id'],status='rejected',reject_reason=str(msg)[:90])
+                results.append({'name':name,'stage':'post','ok':False,'msg':str(msg)[:90]})
+        except Exception as e:
+            results.append({'name':name,'stage':'error','ok':False,'msg':str(e)[:100]})
+        finally:
+            done+=1
+            reset_driver(); time.sleep(3)
+    dropped=reconcile_sites()   # 파이프라인 후 사이트 목록 최신화(막힌 곳 자동 탈락)
+    add_log(f'[자동파이프라인] 처리 {done} · 가입 {signed} · 등록 {registered}'+(f' · 자동탈락 {dropped}' if dropped else ''))
+    return {'ok':True,'processed':done,'signed_up':signed,'registered':registered,'dropped':dropped,'results':results}
+
+def _cand_set(cid, **fields):
+    with _cand_lock:
+        cands=load_cands()
+        for c in cands:
+            if c.get('id')==cid: c.update(fields)
+        save_cands(cands)
+
+def _promoted_site_id(cand):
+    dom=(cand.get('domain') or _domain_of(cand.get('url',''))).lower()
+    for s in load_sites():
+        if _domain_of(s.get('site_url',''))==dom: return s.get('id')
+    return None
+
 def discover_loop():
     """24시간 자동 발굴 — 목표치까지 천천히 채우고 남는 시간엔 검수."""
     while True:
@@ -3004,6 +3611,17 @@ def discover_loop():
             else:
                 # 발굴 꺼져 있어도 미검수 후보는 계속 처리
                 if any(not c.get('screened') for c in load_cands()): screen_pending(10)
+            # 완전 자동 파이프라인: 검수완료 후보를 자동가입→실발행→자동등록까지 처리
+            if cfg.get('auto_pipeline_enabled'):
+                try:
+                    limit=int(cfg.get('auto_pipeline_batch',3) or 3)
+                    auto_pipeline_once(limit=limit)
+                except Exception as e:
+                    add_log(f'[자동파이프라인 오류] {str(e)[:100]}')
+            else:
+                # 파이프라인 꺼져 있어도 사이트 목록은 상시 최신화(막힌 곳 자동 탈락)
+                try: reconcile_sites()
+                except Exception as e: add_log(f'[자동정리 오류] {str(e)[:80]}')
         except Exception as e:
             add_log(f'[발굴 루프 오류] {str(e)[:100]}')
         time.sleep(900)   # 15분마다
@@ -4302,6 +4920,59 @@ def api_wk_reset():
         wk_stats['queued']=post_queue.qsize()
     return jsonify({'ok':True})
 
+# ---- 완전 자동 파이프라인 (발굴→자동가입→실발행→자동등록) ----
+PIPELINE_STATE={'running':False,'last_result':None,'started_at':'','finished_at':''}
+_pipeline_lock=threading.Lock()
+
+@app.route('/api/pipeline/run',methods=['POST'])
+def api_pipeline_run():
+    """검수완료 후보를 자동가입→실발행→자동등록까지 즉시 1배치 실행(백그라운드)."""
+    d=request.get_json(silent=True) or {}
+    limit=int(d.get('limit', load_config().get('auto_pipeline_batch',3)) or 3)
+    with _pipeline_lock:
+        if PIPELINE_STATE['running']:
+            return jsonify({'ok':False,'error':'파이프라인이 이미 실행 중입니다'}),409
+        PIPELINE_STATE.update({'running':True,'started_at':_kst_now().strftime('%Y-%m-%d %H:%M:%S'),
+                               'finished_at':'','last_result':None})
+    def _run():
+        try:
+            # 수동 실행 시에는 설정 토글과 무관하게 이번 1회는 강제로 돌린다
+            cfg=load_config()
+            if not cfg.get('auto_pipeline_enabled'):
+                cfg2=dict(cfg); cfg2['auto_pipeline_enabled']=True; save_config(cfg2)
+                res=auto_pipeline_once(limit=limit); save_config(cfg)  # 원래 설정 복구
+            else:
+                res=auto_pipeline_once(limit=limit)
+        except Exception as e:
+            res={'ok':False,'error':str(e)[:200]}
+        with _pipeline_lock:
+            PIPELINE_STATE.update({'running':False,'last_result':res,
+                                   'finished_at':_kst_now().strftime('%Y-%m-%d %H:%M:%S')})
+    threading.Thread(target=_run,name='PIPELINE',daemon=True).start()
+    return jsonify({'ok':True,'started':True,'limit':limit})
+
+@app.route('/api/pipeline/status',methods=['GET'])
+def api_pipeline_status():
+    with _pipeline_lock:
+        return jsonify(dict(PIPELINE_STATE))
+
+@app.route('/api/sites/reconcile',methods=['POST'])
+def api_sites_reconcile():
+    """사이트 목록 즉시 최신화: 발행이 막힌 사이트를 자동 탈락시킨다."""
+    try:
+        n=reconcile_sites()
+        return jsonify({'ok':True,'dropped':n})
+    except Exception as e:
+        return jsonify({'ok':False,'error':str(e)[:150]}),500
+
+@app.route('/api/logs',methods=['GET'])
+def api_logs():
+    """최근 실행 로그(add_log)를 최신순으로 반환. 파이프라인 진행 표시용."""
+    try: n=max(1,min(200,int(request.args.get('n',60))))
+    except Exception: n=60
+    logs=load_json(LOG_FILE,[])
+    return jsonify({'ok':True,'logs':list(reversed(logs))[:n]})
+
 # ---- 발행 이력 (결과 탭) ----
 @app.route('/api/history',methods=['GET'])
 def api_history():
@@ -4354,7 +5025,8 @@ def api_cfg():
                   'google_api_key','google_cx','brave_api_key','search_provider','discover_enabled','discover_daily_target',
                   'discover_query_limit','discover_keywords','discover_direct_queries',
                   'video_url','landing_url','post_email','guest_post_password',
-                  'twocaptcha_api_key','twocaptcha_enabled']:
+                  'twocaptcha_api_key','twocaptcha_enabled',
+                  'auto_pipeline_enabled','auto_pipeline_batch']:
             if k in d:
                 if k in ('openai_key','openai_admin_key','telegram_token','google_api_key','brave_api_key','guest_post_password','twocaptcha_api_key') and d[k]=='***설정됨***': continue  # 마스크 값은 무시(기존 유지)
                 cfg[k]=d[k]
@@ -4412,7 +5084,7 @@ def api_test(sid):
             return jsonify({'ok':False,'error':f'사이트 최소 발행 간격 미충족 ({max(1,(remain+59)//60)}분 남음)'})
         html,title=generate_article({'지역':'테스트','서비스':'테스트'},cfg)
         ok,msg=do_post(site,title,html)
-        finalize_post(site,ok)
+        finalize_post(site,ok,fail_reason=('' if ok else str(msg)))
         result_url=msg if ok and str(msg).startswith(('http://','https://')) else ''
         if ok and result_url:
             set_site_flag(sid,write_test_status='passed',verified_at=_kst_now().strftime('%Y-%m-%d %H:%M'),
@@ -4889,6 +5561,12 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 <button class="btn btn-g" onclick="location='/api/candidates/export'">엑셀 내보내기</button>
 <span style="flex:1"></span>
 <button class="btn btn-r btn-xs" onclick="if(confirm('탈락 후보만 삭제할까요?'))clearRejected()">탈락 정리</button></div>
+<div class="row" style="margin-top:8px;padding-top:8px;border-top:1px solid var(--bd)">
+<button class="btn btn-v" id="pipeRunBtn" onclick="pipelineRun()">🤖 완전 자동 파이프라인 실행 (가입→실발행→등록)</button>
+<label style="display:flex;align-items:center;gap:4px;font-size:11px">개수 <input type="number" id="pipeBatch" value="1" min="1" max="20" style="width:52px"></label>
+<span style="flex:1"></span><span id="pipeStatus" style="font-size:11px;color:var(--d)"></span></div>
+<div style="font-size:10px;color:var(--y);margin:4px 0">⚠️ 실제 게시판에 글 1건을 올려 검증합니다(되돌리기 어려움). 로그인 필요 사이트는 자동 회원가입(2captcha)까지 시도합니다.</div>
+<div id="pipeLog" style="display:none;max-height:220px;overflow-y:auto;background:#0a0a12;border:1px solid var(--bd);border-radius:6px;padding:8px;font-size:11px;line-height:1.5;font-family:monospace;margin-bottom:6px"></div>
 <div style="font-size:10px;color:var(--d);margin-bottom:6px">API 키가 없어도 아래에 URL을 직접 붙여넣으면 접속·글쓰기 가능 여부와 점수가 자동 검수됩니다.</div>
 <textarea id="dcUrls" rows="3" placeholder="URL 직접 추가 (한 줄에 하나)&#10;https://example.kr/bbs/board.php?bo_table=promotion"></textarea>
 <div class="row" style="margin-top:6px"><button class="btn btn-v" onclick="addManual()">URL 추가 + 검수</button></div></div>
@@ -5107,6 +5785,66 @@ async function makeRegionalKeywords(){const data=await loadRegionTool();if(!data
 async function previewRegionalKeywords(){const rows=await makeRegionalKeywords();$('rgCount').textContent=rows.length.toLocaleString()+'개 생성 예정'}
 async function applyRegionalKeywords(replace){const rows=await makeRegionalKeywords();if(!rows.length)return;if(rows.length>50000){toast('5만 개를 초과합니다. 지역 또는 단계를 줄여주세요','er');return}const current=replace?[]:$('cDDirect').value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);const merged=[...new Set(current.concat(rows))];$('cDDirect').value=merged.join('\n');$('rgCount').textContent=rows.length.toLocaleString()+'개 생성 · 전체 '+merged.length.toLocaleString()+'개';toast('목록에 반영됨 · 설정 저장을 눌러주세요','ok')}
 async function screenNow(){toast('검수 중...(최대 1분)');const r=await api('/candidates/screen','POST',{limit:20});if(r&&r.ok){toast(r.screened+'건 검수 완료');renderCands()}}
+async function pipelineRun(){
+  // 이 브라우저는 네이티브 confirm/prompt가 막혀 있으므로 사용하지 않는다.
+  // 배치 개수는 입력칸(pipeBatch)에서 읽고, 실행 확인은 버튼 클릭 자체로 갈음.
+  const el=document.getElementById('pipeBatch');
+  const n=Math.max(1,parseInt((el&&el.value)||'1',10)||1);
+  const btn=document.getElementById('pipeRunBtn');
+  if(btn){btn.disabled=true;btn.textContent='🤖 실행 중...';}
+  const restore=()=>{if(btn){btn.disabled=false;btn.textContent='🤖 완전 자동 파이프라인 실행 (가입→실발행→등록)';}};
+  // 실행 로그 영역 준비
+  const logBox=document.getElementById('pipeLog');
+  const startTs=Date.now();
+  function pLog(line,cls){ if(!logBox)return; logBox.style.display='block';
+    const color=cls==='ok'?'var(--g)':cls==='er'?'var(--r)':cls==='hi'?'var(--p)':'var(--d)';
+    logBox.innerHTML+=`<div style="color:${color}">${line}</div>`; logBox.scrollTop=logBox.scrollHeight; }
+  if(logBox){logBox.innerHTML='';logBox.style.display='block';}
+  pLog('▶ 파이프라인 시작 — 후보 '+n+'건 처리','hi');
+  $('pipeStatus').textContent='시작 — 후보 '+n+'건 처리 중...';
+  toast('🤖 파이프라인 시작 ('+n+'건)');
+  let seen=0;  // 이미 표시한 로그 개수(중복 방지)
+  async function pumpLogs(){
+    try{
+      const lr=await api('/logs?n=40','GET');
+      if(lr&&lr.ok&&Array.isArray(lr.logs)){
+        // 오래된→최신 순으로 뒤집고, 파이프라인/발행 관련만
+        const rel=lr.logs.slice().reverse().filter(e=>/자동|파이프라인|발행|가입|등록|캡차|2captcha|탈락|스킵|성공|실패|재시도/.test(e.msg||''));
+        for(let k=seen;k<rel.length;k++){ const e=rel[k];
+          const cls=/성공|완료|등록|해결/.test(e.msg)?'ok':/실패|오류|탈락|거부|불가/.test(e.msg)?'er':'';
+          pLog('· '+(e.time||'')+' '+(e.msg||''),cls); }
+        seen=Math.max(seen,rel.length);
+      }
+    }catch(_){}
+  }
+  try{
+    const r=await api('/pipeline/run','POST',{limit:n});
+    if(!r||!r.ok){pLog('✖ 실행 실패: '+((r&&r.error)||''),'er');toast((r&&r.error)||'실행 실패','er');$('pipeStatus').textContent=(r&&r.error)||'실행 실패';return}
+    $('pipeStatus').textContent='실행 중...';
+    for(let i=0;i<120;i++){
+      await new Promise(s=>setTimeout(s,2500));
+      await pumpLogs();
+      const st=await api('/pipeline/status','GET');
+      if(st&&!st.running&&st.finished_at&&(new Date(st.finished_at.replace(' ','T')).getTime()>=startTs-3000||st.last_result)){
+        await pumpLogs();
+        const R=st.last_result||{};
+        // 사이트별 결과 상세
+        pLog('──────────','');
+        (R.results||[]).forEach(x=>{
+          if(x.ok) pLog('✅ 등록: '+(x.name||'').slice(0,40)+' → '+(x.url||''),'ok');
+          else pLog('❌ '+(x.stage||'')+' 실패: '+(x.name||'').slice(0,30)+' — '+(x.msg||''),'er');
+        });
+        pLog('■ 완료 — 처리 '+(R.processed||0)+' · 자동가입 '+(R.signed_up||0)+' · 등록 '+(R.registered||0)+(R.dropped?' · 자동탈락 '+R.dropped:''),'hi');
+        $('pipeStatus').textContent='완료: 처리 '+(R.processed||0)+' · 가입 '+(R.signed_up||0)+' · 등록 '+(R.registered||0);
+        toast('파이프라인 완료 — 등록 '+(R.registered||0)+'개 / 처리 '+(R.processed||0)+'개', (R.registered>0?'ok':''));
+        renderCands(); if(typeof renderSites==='function')renderSites();
+        return;
+      }
+    }
+    pLog('⏱ 시간 초과 — 백그라운드에서 계속됩니다','er');
+    $('pipeStatus').textContent='시간 초과(백그라운드 계속)';
+  }finally{ restore(); }
+}
 async function rescreenAll(){toast('전체 재검수 중...(최대 2분)');const r=await api('/candidates/screen','POST',{rescreen:true,limit:40});if(r&&r.ok){toast(r.screened+'건 재검수 완료');renderCands()}}
 async function addManual(){const u=$('dcUrls').value;if(!u.trim()){toast('URL 입력','er');return}const r=await api('/candidates/manual','POST',{urls:u});if(r&&r.ok){toast(r.added+'개 추가 · 검수 시작(잠시 후 새로고침)');$('dcUrls').value='';setTimeout(renderCands,3000);renderCands()}else toast((r&&r.error)||'실패','er')}
 async function setCand(id,st){await api('/candidates/status','POST',{id:id,status:st});renderCands()}
@@ -5332,6 +6070,11 @@ def main():
         n=recover_queue()
         if n: print(f'↻ 미완료 작업 {n}건 복구됨 (워커 시작 시 이어서 발행)')
     except Exception as e: print('복구 건너뜀:',e)
+    # 시작 시 사이트 목록 최신화: 발행 막힌 사이트 자동 탈락
+    try:
+        dn=reconcile_sites()
+        if dn: print(f'🧹 사이트 자동정리 {dn}건 (발행 불가 → 탈락)')
+    except Exception as e: print('자동정리 건너뜀:',e)
     # 예약 발행 스케줄러 상시 가동
     try:
         threading.Thread(target=scheduler_loop,name='SCHED',daemon=True).start()

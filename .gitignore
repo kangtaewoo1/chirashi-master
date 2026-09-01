@@ -30,3 +30,13 @@ chirashi/**/*.tmp
 **/.env
 **/.env.local
 **/secret.key
+
+# Claude / 작업 산출물
+.claude/
+chirashi/_app_*.log
+chirashi/_app_*.err
+chirashi/_*.py
+chirashi/claudedocs/
+chirashi/app.py.bak*
+chirashi/data/*.pre-*.bak
+chirashi/backups/
