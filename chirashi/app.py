@@ -1372,7 +1372,7 @@ def fill_required_post_fields(d,site):
         if re.search(r'(wr_name|이름)',blob): value=brand
         elif typ=='password' or re.search(r'(password|passwd|비밀번호)',blob): value=guest_pw
         elif re.search(r'(email|e-mail|이메일)',blob): value=(cfg.get('post_email') or '')
-        elif re.search(r'(youtube|youtu\.be|vimeo|동영상|영상)',blob) or (name in ('wr_link1','link1') and re.search(r'(youtube|유투브|유튜브|vimeo|비메오|동영상)',page_text)): value=video_url
+        elif re.search(r'(youtube|youtu\.be|vimeo|동영상|영상)',blob) or (name in ('wr_link1','link1') and re.search(r'(youtube|유투브|유튜브|vimeo|비메오|동영상)',page_text)): value=video_url or landing or site.get('site_url','')
         elif re.search(r'(link|url|homepage|홈페이지|링크)',blob): value=landing or site.get('site_url','')
         if value:
             try: el.clear(); el.send_keys(value); filled.append(name)
@@ -1470,26 +1470,80 @@ def gnuboard_post(site, title, content_html):
                 finish_captcha_task(captcha_tid,False,cap_msg)
                 return False,cap_msg
 
-    # 등록
-    d.execute_script("""
-        if(typeof oEditors!=='undefined')try{oEditors.getById['wr_content'].exec('UPDATE_CONTENTS_FIELD',[])}catch(e){}
-        var btn=document.getElementById('btn_submit');
-        if(!btn)btn=document.querySelector("input[type='submit'],button[type='submit']");
-        if(btn)btn.click();
-    """)
-    time.sleep(3); dismiss_alerts(d)
-    curl=d.current_url
-    # 1) URL 이 뷰/목록으로 이동 → 등록 성공 (헤더의 '로그인' 링크 등으로 인한 오탐 방지 위해 URL 우선)
-    if 'wr_id=' in curl or 'board.php' in curl:
-        finish_captcha_task(captcha_tid,True,curl or '등록 완료')
-        return True,(curl or '등록 완료')
-    # 2) URL 로 판정 불가 시에만 본문 텍스트로 분류
-    try: body=d.find_element(By.TAG_NAME,'body').text[:1500]
-    except: body=''
+    # 등록: native click으로 정상 제출(referer/token 자연스러움) + 짧은 page_load_timeout으로
+    #       렌더러 25초 블록 회피 + 상태 접근은 _safe 폴링(제출 후 current_url이 25초 멈추던 문제 해결)
+    def _safe(fn,dv=None):
+        try: return fn()
+        except Exception: return dv
+    _safe(lambda: d.execute_script("if(typeof oEditors!=='undefined')try{oEditors.getById['wr_content'].exec('UPDATE_CONTENTS_FIELD',[])}catch(e){}"))
+    # 제출 버튼은 반드시 '글쓰기 폼' 안의 것을 골라야 한다. CSS 셀렉터 그룹은 문서 순서로
+    # 첫 매치를 주므로 "input[type=submit]"만 쓰면 헤더 검색폼(fsearchbox)의 검색 버튼이
+    # 먼저 잡혀 not-interactable → 제출 실패한다(그누보드 기본 스킨의 대표적 함정).
+    def _find_submit_btn():
+        # 1) 표준 그누보드5: 글쓰기 폼(#fwrite) 안의 #btn_submit / submit
+        for sel in ("#fwrite #btn_submit",
+                    "form[name='fwrite'] #btn_submit",
+                    "#fwrite input[type='submit']",
+                    "#fwrite button[type='submit']",
+                    "form[action*='write_update'] input[type='submit']",
+                    "form[action*='write_update'] button[type='submit']",
+                    "#btn_submit"):
+            for el in _safe(lambda: d.find_elements(By.CSS_SELECTOR,sel),[]) or []:
+                if _safe(lambda: el.is_displayed(),False):
+                    return el
+        # 2) 폴백: 검색폼(fsearchbox/search.php)에 속하지 않은 표시된 submit
+        for el in _safe(lambda: d.find_elements(By.CSS_SELECTOR,"input[type='submit'],button[type='submit']"),[]) or []:
+            if not _safe(lambda: el.is_displayed(),False):
+                continue
+            in_search=_safe(lambda: d.execute_script(
+                "var f=arguments[0].form;return !!(f&&((f.name||'').indexOf('search')>=0||(f.action||'').indexOf('search.php')>=0));",el),False)
+            if not in_search:
+                return el
+        return None
+    _safe(lambda: d.set_page_load_timeout(6))
+    try:
+        btn=_find_submit_btn()
+        submitted=False
+        if btn:
+            submitted=_safe(lambda: (btn.click(),True)[1],False)  # navigation 트리거(6초 상한이라 무한블록 안 됨)
+        if not submitted:
+            # 클릭이 막히면(not interactable 등) 폼을 직접 제출 — onsubmit(fwrite_submit) 경유로
+            # 캡차/금지어 검증까지 정상 수행. requestSubmit이 있으면 그것을(핸들러 실행 보장), 없으면 submit().
+            _safe(lambda: d.execute_script("""
+                var f=document.getElementById('fwrite')||document.forms['fwrite']
+                     ||document.querySelector("form[action*='write_update']");
+                if(f){ if(f.requestSubmit){f.requestSubmit();} else { if(typeof fwrite_submit==='function'){if(fwrite_submit(f)===false)return;} f.submit(); } }
+            """))
+        curl=''; body=''
+        deadline=time.time()+14
+        while time.time()<deadline:
+            _safe(lambda: dismiss_alerts(d))
+            curl=_safe(lambda: d.current_url,'') or ''
+            # 1) 등록 성공 = 뷰/목록으로 이동
+            if 'wr_id=' in curl or 'board.php' in curl:
+                finish_captcha_task(captcha_tid,True,curl)
+                return True,curl
+            # 2) write_update.php에 머물면 에러페이지(캡차불일치·금지단어 등) → 본문 확인
+            if 'write_update' in curl:
+                body=_safe(lambda: d.find_element(By.TAG_NAME,'body').text[:1500],'') or ''
+                if body: break
+            time.sleep(0.5)
+    finally:
+        _safe(lambda: d.set_page_load_timeout(25))
+    # 3) URL 로 판정 불가 시 본문 텍스트로 분류
+    if not body:
+        body=_safe(lambda: d.find_element(By.TAG_NAME,'body').text[:1500],'') or ''
     # 승인제 게시판: 이미 1회 등록되었을 수 있으므로 재시도로 중복 발행되지 않게 성공 처리
     if any(k in body for k in ['승인 대기','승인대기','관리자 확인','등록되었습니다']):
         finish_captcha_task(captcha_tid,True,'등록됨(승인 대기)')
         return True,'등록됨(승인 대기) — 게시판 승인제'
+    if any(k in body for k in ['올바른 방법','잘못된 접근','비정상']):
+        finish_captcha_task(captcha_tid,False,'제출 거부(referer/token) — 폼 재로드 필요')
+        return False,'제출 거부(referer/token 검증 실패)'
+    # 캡차 불일치는 명확한 에러문구만으로 판정('자동등록방지'는 write 폼의 캡차 라벨이라 오탐 유발)
+    if any(k in body for k in ['입력 글자가 틀','횟수가 넘었','자동등록방지 숫자를 다시','보안문자가 일치']):
+        finish_captcha_task(captcha_tid,False,'캡차 불일치')
+        return False,'캡차 불일치 — 재시도 필요'
     if any(k in body for k in ['권한이 없','권한 없','로그인이 필요','게시가 금지','차단']):
         return False,'게시 권한 없음/로그인 필요 — 계정·게시판 권한 확인'
     msg='등록 확인 불가 — 게시판 규칙/에디터 셀렉터/승인대기 확인'
