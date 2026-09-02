@@ -19,6 +19,7 @@ chirashi/data/candidates.json
 chirashi/data/discover.json
 chirashi/data/uniq.json
 chirashi/data/signup_profiles.json
+chirashi/data/rejected_domains.json
 chirashi/data/openai_usage.json
 chirashi/data/workrooms.json
 chirashi/data/logs.json

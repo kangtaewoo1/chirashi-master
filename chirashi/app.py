@@ -45,6 +45,7 @@ CAND_FILE = DATA_DIR / 'candidates.json'    # 발굴 후보(승인 대기함)
 REGIONS_FILE = BASE_DIR / 'regions_full.json'  # 전국 시도·시군구·읍면동
 DISCO_FILE = DATA_DIR / 'discover.json'     # 발굴 상태(쿼리 커서·일일 카운트)
 SIGNUP_PROFILES_FILE = DATA_DIR / 'signup_profiles.json'  # 가입 폼 측정·학습 이력
+REJECTED_DOMAINS_FILE = DATA_DIR / 'rejected_domains.json'  # 영구 탈락 도메인(다음 발굴에서 제외)
 AI_USAGE_FILE = DATA_DIR / 'openai_usage.json'  # 글 생성별 토큰·예상 비용 원장
 WORKROOMS_FILE = DATA_DIR / 'workrooms.json'    # 키워드별 독립 작업실
 
@@ -2610,7 +2611,7 @@ def reconcile_sites():
     """사이트 목록 상시 최신화: 발행이 막힌 사이트를 자동 탈락(permission 해제)시킨다.
        - 실제게시 검증 완료(verified_post_url 있음) 사이트는 보호(오탈락 방지).
        - 영구 불가 조건에 해당하면 rejected + permission=False + 사유 저장."""
-    changed=0; now=_kst_now().strftime('%Y-%m-%d %H:%M')
+    changed=0; dropped_doms=[]; now=_kst_now().strftime('%Y-%m-%d %H:%M')
     with POST_LOCK:
         sites=load_sites()
         for s in sites:
@@ -2627,8 +2628,10 @@ def reconcile_sites():
             if reason:
                 s.update({'status':'rejected','permission':False,
                           'auto_drop_reason':reason,'auto_dropped_at':now})
-                changed+=1
+                changed+=1; dropped_doms.append(_domain_of(s.get('site_url','')))
         if changed: save_sites(sites)
+    if dropped_doms:   # 자동 탈락 사이트 도메인도 영구 목록에 기록(재발굴 방지)
+        add_rejected_domains(dropped_doms,'사이트 자동탈락')
     if changed: add_log(f'[자동정리] {changed}개 사이트 자동 탈락(발행 불가)')
     return changed
 
@@ -2863,6 +2866,33 @@ def load_cands():
     return cands
 def save_cands(c): save_json(CAND_FILE,c)
 _cand_lock=threading.Lock()
+
+# ---- 영구 탈락 도메인(다음 발굴에서 제외) ----
+def load_rejected_domains():
+    """영구 탈락 도메인 집합. 탈락 후보를 삭제해도 재수집되지 않게 한다."""
+    d=load_json(REJECTED_DOMAINS_FILE,{})
+    if isinstance(d,list): d={'domains':d}
+    return set(x.lower() for x in (d.get('domains') or []))
+
+def add_rejected_domains(domains, reason=''):
+    """도메인들을 영구 탈락 목록에 추가(사유·시각 기록)."""
+    if isinstance(domains,str): domains=[domains]
+    doms=[(_domain_of(x) if x.startswith('http') else x).lower().replace('www.','') for x in domains if x]
+    doms=[d for d in doms if d]
+    if not doms: return 0
+    with _cand_lock:
+        raw=load_json(REJECTED_DOMAINS_FILE,{})
+        if isinstance(raw,list): raw={'domains':raw,'log':[]}
+        cur=set(x.lower() for x in (raw.get('domains') or []))
+        log=raw.get('log') or []
+        now=_kst_now().strftime('%Y-%m-%d %H:%M')
+        added=0
+        for d in doms:
+            if d not in cur:
+                cur.add(d); log.append({'domain':d,'reason':str(reason)[:80],'at':now}); added+=1
+        raw['domains']=sorted(cur); raw['log']=log[-2000:]
+        save_json(REJECTED_DOMAINS_FILE,raw)
+    return added
 
 # 쿼리 조합 — 플랫폼 흔적 × 홍보 의도
 GNU_PATTERNS=['inurl:bbs/board.php bo_table=promotion','inurl:bbs/board.php bo_table=hongbo',
@@ -3119,13 +3149,16 @@ def add_candidates_from(items, cfg, source='search'):
         cands=load_cands()
         known_dom={c.get('domain') for c in cands}
         site_dom={_domain_of(s.get('site_url','')) for s in load_sites()}
-        added=0; blocked_unreachable=0; blocked_title=0; blocked_write=0
+        rejected_dom=load_rejected_domains()   # 영구 탈락: 재수집 안 함
+        added=0; blocked_unreachable=0; blocked_title=0; blocked_write=0; blocked_rejected=0
         for it in items:
             url=it.get('url') if isinstance(it,dict) else str(it)
             if not url or not url.startswith('http'): continue
             if _is_blacklisted(url): continue
             dom=_domain_of(url)
             if not dom or dom in known_dom or dom in site_dom: continue
+            if dom.replace('www.','') in rejected_dom:   # 이전에 탈락한 도메인은 건너뜀
+                blocked_rejected+=1; continue
             # URL 자체가 게시판 경로(그누보드/카페24)면 '제목 숫자 8개' 규칙을 면제한다.
             # (홍보게시판은 제목이 '홍보게시판'처럼 숫자가 없을 때가 많아 오탈락하던 문제)
             url_is_board=bool(re.search(r'(bbs/board\.php|bo_table=|/board/.*list\.html|board_no=)',url.lower()))
@@ -3155,8 +3188,8 @@ def add_candidates_from(items, cfg, source='search'):
             cands.append(rec)
             added+=1
         save_cands(cands)
-    if source!='manual' and (blocked_unreachable or blocked_title or blocked_write):
-        add_log(f'[후보 사전필터] 접속불가 {blocked_unreachable}개 · 제목 숫자 8개 미만 {blocked_title}개 · 글쓰기 폼 없음 {blocked_write}개 제외')
+    if source!='manual' and (blocked_unreachable or blocked_title or blocked_write or blocked_rejected):
+        add_log(f'[후보 사전필터] 접속불가 {blocked_unreachable} · 제목숫자<8 {blocked_title} · 글쓰기폼없음 {blocked_write} · 영구탈락 {blocked_rejected} 제외')
     return added
 
 def screen_pending(limit=30):
@@ -3190,12 +3223,17 @@ def screen_pending(limit=30):
         else: r['status']='ready'
         results[c['id']]=r
         time.sleep(1)   # 요청 속도 관리
+    rejected_now=[]
     with _cand_lock:
         cands=load_cands()
         for c in cands:
             if c['id'] in results:
                 c.update(results[c['id']])
+                if results[c['id']].get('status')=='rejected':
+                    rejected_now.append(c.get('domain') or _domain_of(c.get('url','')))
         save_cands(cands)
+    if rejected_now:   # 검수에서 탈락한 도메인은 영구 목록에 기록(재수집 방지)
+        add_rejected_domains(rejected_now,'검수 탈락')
     return len(results)
 
 def discover_once(cfg=None, max_queries=10):
@@ -3572,10 +3610,12 @@ def auto_pipeline_once(limit=5):
                 results.append({'name':name,'stage':'post','ok':False,'msg':'결과 URL 없음'})
             else:
                 reason,_,is_temp=classify_fail(msg)
-                if is_temp:
-                    _cand_set(c['id'],status='ready',reject_reason=f'일시적 실패: {str(msg)[:70]}')
+                # 일시적 실패라도 무한 재시도로 배치 슬롯을 소모하지 않게 상한(5회)을 둔다.
+                attempts=int(c.get('pipeline_attempts',0) or 0)+1
+                if is_temp and attempts<5:
+                    _cand_set(c['id'],status='ready',reject_reason=f'일시적 실패({attempts}/5): {str(msg)[:60]}',pipeline_attempts=attempts)
                 else:
-                    _cand_set(c['id'],status='rejected',reject_reason=str(msg)[:90])
+                    _cand_set(c['id'],status='rejected',reject_reason=(str(msg)[:90] if not is_temp else f'재시도 {attempts}회 초과: {str(msg)[:60]}'),pipeline_attempts=attempts)
                 results.append({'name':name,'stage':'post','ok':False,'msg':str(msg)[:90]})
         except Exception as e:
             results.append({'name':name,'stage':'error','ok':False,'msg':str(e)[:100]})
@@ -3587,11 +3627,18 @@ def auto_pipeline_once(limit=5):
     return {'ok':True,'processed':done,'signed_up':signed,'registered':registered,'dropped':dropped,'results':results}
 
 def _cand_set(cid, **fields):
+    rejected_dom=None
     with _cand_lock:
         cands=load_cands()
         for c in cands:
-            if c.get('id')==cid: c.update(fields)
+            if c.get('id')==cid:
+                c.update(fields)
+                # 탈락 처리되면 도메인을 영구 탈락 목록에 기록(다음 발굴에서 제외)
+                if fields.get('status')=='rejected':
+                    rejected_dom=(c.get('domain') or _domain_of(c.get('url','')))
         save_cands(cands)
+    if rejected_dom:
+        add_rejected_domains(rejected_dom, fields.get('reject_reason',''))
 
 def _promoted_site_id(cand):
     dom=(cand.get('domain') or _domain_of(cand.get('url',''))).lower()
@@ -5031,6 +5078,12 @@ def api_cfg():
                 if k in ('openai_key','openai_admin_key','telegram_token','google_api_key','brave_api_key','guest_post_password','twocaptcha_api_key') and d[k]=='***설정됨***': continue  # 마스크 값은 무시(기존 유지)
                 cfg[k]=d[k]
         if d.get('password'): cfg['password']=generate_password_hash(d['password'])  # 해시 저장
+        # 완전 자동화: 필수 키(Brave 발굴 + 2captcha)가 채워지면 발굴·파이프라인을 자동 ON.
+        # (키를 넣는 행위 = 자동 운영 동의로 간주. 원치 않으면 아래 토글을 수동 OFF 가능)
+        if (cfg.get('brave_api_key') or '').strip():
+            cfg['discover_enabled']=True
+        if (cfg.get('brave_api_key') or '').strip() and (cfg.get('twocaptcha_api_key') or '').strip() and cfg.get('twocaptcha_enabled'):
+            cfg['auto_pipeline_enabled']=True
         save_config(cfg)
         # 검색 조건을 바꾸면 다음 검색부터 새 조건의 첫 줄이 즉시 실행되도록 커서를 초기화한다.
         new_search=(cfg.get('discover_keywords',''),cfg.get('discover_direct_queries',''))
@@ -5705,13 +5758,11 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 
 <script>
 const $=id=>document.getElementById(id);
-function T(n){document.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));document.querySelectorAll('.panel').forEach(p=>p.classList.remove('on'));document.querySelector(`[onclick="T('${n}')"]`).classList.add('on');$('p-'+n).classList.add('on');if(n==='res')renderHistory();if(n==='wlog'){renderWorkerLog();renderCaptchaTasks()}if(n==='sched')renderScheds();if(n==='stats')renderStats();if(n==='set'){loadCfgUI();loadRegionTool()}if(n==='gen'){loadPool();loadImages();loadWorkrooms();loadRegionTool()}if(n==='mem'){renderMembers();if(!document.querySelector('.mSite'))fillSiteBox([])}if(n==='disco')renderCands()}
+function T(n){document.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));document.querySelectorAll('.panel').forEach(p=>p.classList.remove('on'));document.querySelector(`[onclick="T('${n}')"]`).classList.add('on');$('p-'+n).classList.add('on');if(n==='res')renderHistory();if(n==='wlog'){renderWorkerLog();renderCaptchaTasks()}if(n==='stats')renderStats();if(n==='set'){loadCfgUI();loadRegionTool()}if(n==='gen'){loadPool();loadImages();loadWorkrooms();loadRegionTool()}if(n==='mem'){renderMembers();if(!document.querySelector('.mSite'))fillSiteBox([])}if(n==='disco')renderCands()}
 function toast(m,c='ok'){const d=$('toasts');const e=document.createElement('div');e.className='toast toast-'+c;e.textContent=m;d.appendChild(e);setTimeout(()=>e.remove(),2500)}
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
 async function api(p,m,b){try{const o={method:m,headers:{'Content-Type':'application/json'}};if(b)o.body=JSON.stringify(b);const r=await fetch('/api'+p,o);if(r.status===401){location='/login';return null}return await r.json()}catch(e){toast(e.message,'er');return null}}
-function kv(){return{지역:$('k1').value.trim(),서비스:$('k2').value.trim(),브랜드:$('k3').value.trim()}}
-async function gen(){const ks=kv();if(!ks.지역||!ks.서비스){toast('키워드1,2 입력','er');return}const r=await api('/generate','POST',{keywords:ks});if(r&&r.ok){$('gTitle').value=r.title;$('gContent').value=r.content;$('gLen').textContent=(r.content||'').length.toLocaleString()+'자';toast('생성 완료');loadOpenAIUsage()}}
-async function genBulk(){const ks=kv();if(!ks.지역||!ks.서비스){toast('키워드 입력','er');return}const sid=$('kwSiteFilter').value;const r=await api('/bulk','POST',{keyword_sets:[ks],site_ids:sid?[sid]:[]});if(r&&r.ok)toast(r.generated+'건 큐 등록'+(r.blocked?` · 미허용 ${r.blocked}개 제외`:''));else if(r)toast(r.error||'실패','er')}
+// (kv/gen/genBulk 죽은 JS 제거됨 — k1/k2/k3 입력칸이 없어 호출 불가였음)
 function parseList(){return $('kwlist').value.split('\n').map(l=>l.trim()).filter(Boolean).map(l=>{const p=l.split(',');return{지역:(p[0]||'').trim(),서비스:(p[1]||'').trim(),브랜드:(p[2]||'').trim()}}).filter(k=>k.지역&&k.서비스&&k.브랜드)}
 let _bulkPolling=false;
 async function genFromList(){const sets=parseList();if(!sets.length){toast('키워드 없음','er');return}const sid=$('kwSiteFilter').value;const wid=$('kwlist').dataset.workroomId||'',wn=$('kwlist').dataset.workroomName||'직접 입력';if(!confirm('['+wn+'] '+sets.length+'개 키워드 조합의 생성 작업을 시작할까요?\n사이트 한도와 최소 간격에 따라 지금 가능한 수만 실행됩니다.'))return;const b=$('bulkRunBtn');b.disabled=true;b.textContent='작업 준비 중...';$('bulkState').textContent='서버에 작업을 전달하는 중';toast('['+wn+'] 목록 작업 준비를 시작했습니다');const r=await api('/bulk','POST',{keyword_sets:sets,site_ids:sid?[sid]:[],workroom_id:wid,workroom_name:wn});if(!r||!r.ok){b.disabled=false;b.textContent='목록 생성 작업 시작';$('bulkState').textContent='';if(r)toast(r.error||'실패','er');return}const rem=r.remaining?(' · 나머지 '+r.remaining+'개는 한도/간격상 미실행'):'';$('bulkState').textContent='['+wn+'] 준비 '+r.accepted+'/'+r.requested+rem;toast('즉시 실행 가능 '+r.accepted+'개 준비 시작'+rem,'ok');pollBulkTask(r.task_id)}
@@ -5906,7 +5957,7 @@ window.open(r.signup_url,'_blank','noopener');renderSites();}
 async function learnSignup(id){toast('🧠 가입 폼을 제출 없이 측정·학습 중...');const r=await api('/sites/signup-learn/'+id,'POST',{});if(r&&r.ok){const x=r.rules||{};toast('🧠 학습 v'+r.version+' · 필드 '+r.field_count+'개 · ID '+x.id_min+'~'+x.id_max+' · PW '+x.password_min+'+'+(r.changed?' · 폼 변경 감지':''),'ok');renderSites()}else toast('가입 폼 학습 실패: '+(r&&r.error||''),'er')}
 async function signupDone(id){if(!confirm('CAPTCHA와 이메일 인증까지 끝나 실제 회원가입이 완료됐습니까?'))return;const r=await api('/sites/signup-status/'+id,'POST',{status:'complete'});if(r&&r.ok){toast('✅ 가입 완료 · 자동 로그인정보 저장됨');renderSites()}else toast((r&&r.error)||'처리 실패','er')}
 async function signupAll(id,status){if(status==='rejected'){toast('⛔ 이메일 인증 필요 사이트 — 가입 대상 제외','er');return}if(status==='complete'){toast('✅ 회원가입 및 로그인정보 저장 완료');return}if(['prepared','captcha_wait','email_wait'].includes(status)){await signupDone(id);return}await prepareSignup(id)}
-async function oneClick(){const n=parseInt($('ocN').value)||1;if(!confirm('키워드 풀에서 랜덤으로 뽑아 허용 사이트 전체에 '+n+'회 발행합니다.\n진행할까요?'))return;toast('⚡ 발행 준비중...');const r=await api('/oneclick','POST',{count:n});if(r&&r.ok)toast('⚡ '+r.generated+'건 큐 등록 (사이트 '+r.sites+'개 × '+r.picks+'회)');else toast((r&&r.error)||'실패','er')}
+// (oneClick 죽은 JS 제거됨 — ocN 입력칸이 없어 호출 불가였음)
 function previewPost(){const c=$('gContent').value.trim();if(!c){toast('먼저 글을 생성하세요','er');return}$('pvTitle').textContent=$('gTitle').value||'';const doc='<!DOCTYPE html><html lang=ko><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><style>body{font-family:-apple-system,sans-serif;max-width:760px;margin:0 auto;padding:16px;color:#222;line-height:1.7}img{max-width:100%}</style></head><body>'+c+'</body></html>';$('pvFrame').srcdoc=doc;$('pvOverlay').style.display='block'}
 function closePreview(){$('pvOverlay').style.display='none';$('pvFrame').srcdoc=''}
 async function delSite(id){if(!confirm('삭제?'))return;await api('/sites','DELETE',{id});renderSites()}
@@ -5980,15 +6031,7 @@ async function bulkPermSet(v){const ids=getSiteIds();if(!ids.length){toast('사�
 async function toggleSitePermission(id,on){let note='';if(on){note=(prompt('운영자에게 받은 자동 게시 허용 근거를 입력하세요.')||'').trim();if(note.length<5){toast('허용 근거를 5자 이상 입력해야 합니다','er');renderSites();return}}const r=await api('/sites/permission','POST',{ids:[id],permission:on,permission_note:note});if(r&&r.ok){toast(on?'✅ 허용 동의 기록됨':'자동발행 잠금됨');renderSites()}else{toast((r&&r.error)||'변경 실패','er');renderSites()}}
 async function saveSiteLimits(id){const daily=parseInt($('limD_'+id).value);const mins=parseInt($('limM_'+id).value);if(!Number.isFinite(daily)||daily<0||!Number.isFinite(mins)||mins<0){toast('건수와 간격은 0 이상의 숫자로 입력하세요','er');return}const r=await api('/sites/limits','POST',{id:id,daily_limit:daily,min_interval_minutes:mins});if(r&&r.ok){toast('✅ 하루 '+r.daily_limit+'건 · '+r.min_interval_minutes+'분 저장');renderSites()}else toast((r&&r.error)||'저장 실패','er')}
 async function healthAll(){const ids=getSiteIds();if(!ids.length){toast('사이트 선택','er');return}toast(ids.length+'개 점검중...');for(const id of ids){await api('/sites/health/'+id,'POST')}renderSites();toast('점검 완료')}
-// ---- 예약 스케줄 ----
-function scDays(){return Array.from(document.querySelectorAll('.scDay:checked')).map(c=>parseInt(c.value))}
-function scParseKw(){return $('scKw').value.split('\n').map(l=>l.trim()).filter(Boolean).map(l=>{const p=l.split(',');return{지역:(p[0]||'').trim(),서비스:(p[1]||'').trim()}}).filter(k=>k.지역&&k.서비스)}
-async function addSched(){const name=$('scName').value.trim()||'예약';const times=$('scTimes').value.split(',').map(x=>x.trim()).filter(x=>/^\d{1,2}:\d{2}$/.test(x));if(!times.length){toast('시간 형식 HH:MM','er');return}const ks=scParseKw();const sid=$('scSite').value;const r=await api('/schedules','POST',{name:name,times:times,days:scDays(),keyword_sets:ks,site_ids:sid?[sid]:[],enabled:true,count:1});if(r&&r.ok){toast(ks.length?'예약 추가됨':'공용 키워드 풀 전체 순차 예약 추가됨');$('scName').value='';$('scTimes').value='';$('scKw').value='';document.querySelectorAll('.scDay').forEach(c=>c.checked=false);renderScheds()}}
-async function delSched(id){if(!confirm('예약 삭제?'))return;await api('/schedules','DELETE',{id});renderScheds()}
-async function toggleSched(id){await api('/schedules/toggle','POST',{id});renderScheds()}
-const DOW=['월','화','수','목','금','토','일'];
-async function renderScheds(){const list=await api('/schedules','GET');if(!Array.isArray(list))return;if(!list.length){$('schedList').innerHTML='<p style="color:var(--d);padding:20px;text-align:center">예약이 없습니다</p>';return}
-$('schedList').innerHTML='<table><thead><tr><th>이름</th><th>시간</th><th>요일</th><th>키워드</th><th>진행</th><th>상태</th><th>최근실행</th><th>동작</th></tr></thead><tbody>'+list.map(s=>{const days=(s.days&&s.days.length)?s.days.map(d=>DOW[d]).join(''):'매일';const sets=s.keyword_sets||[];const kw=sets.length?sets.map(k=>k.지역+' '+k.서비스).join(', '):'공용 풀 전체';const done=(s.completed_keys||[]).length;const total=sets.length||'풀';return `<tr><td><b>${esc(s.name)}</b></td><td style="color:var(--p)">${esc((s.times||[]).join(', '))}</td><td>${days}</td><td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(kw)}">${esc(kw)}</td><td>${done}/${total}</td><td><span class="st st-${s.enabled?'ok':'i'}">${s.enabled?'ON':(s.completed_at?'완료':'OFF')}</span></td><td style="color:var(--d)">${esc(s.last_run||'-')}</td><td><button class="btn btn-y btn-xs" onclick="toggleSched('${esc(s.id)}')">토글</button> <button class="btn btn-r btn-xs" onclick="delSched('${esc(s.id)}')">삭제</button></td></tr>`}).join('')+'</tbody></table>'}
+// (예약 스케줄 UI 제거됨 — 회원별 스케줄러가 대체. 죽은 JS 정리)
 // ---- 통계 ----
 function tile(label,val,color){return `<div class="card" style="flex:1;min-width:110px;text-align:center;margin:0"><div style="font-size:22px;font-weight:700;color:${color}">${val}</div><div style="font-size:10px;color:var(--d)">${label}</div></div>`}
 async function renderStats(){const s=await api('/stats','GET');if(!s)return;
@@ -6011,8 +6054,8 @@ const cbadge=s.has_captcha?' <span title="캡차 감지 — 자동발행 제외(
 const pltag='<span style="font-size:9px;color:'+plcolor+'" title="발행 방식">'+plname+'</span>'+lbadge+cbadge;
 const ss=s.signup_status||'';const signup=ss==='complete'?'<span class="st st-ok">가입완료·로그인저장</span>':(ss==='rejected'?'<span class="st st-f" title="'+esc(s.signup_reject_reason||'')+'">가입 제외 · 이메일인증</span>':(ss==='prepared'?'<span class="st st-y">가입정보만 준비됨</span>':(ss?'<span class="st st-y">가입 '+esc(ss)+'</span>':'')));const pv=s.signup_profile_version?'<span class="st st-i" title="최근측정 '+esc(s.signup_profile_measured_at||'')+'">가입학습 v'+s.signup_profile_version+(s.signup_profile_changed?' 변경':'')+'</span>':'';
 const allLabel=ss==='rejected'?'가입 제외':(ss==='complete'?'✓ 로그인 저장됨':(['prepared','captcha_wait','email_wait'].includes(ss)?'실제 가입완료 확인':'올인원 가입'));const allClass=(ss==='rejected'||ss==='complete')?'btn-d':(['prepared','captcha_wait','email_wait'].includes(ss)?'btn-g':'btn-v');
-const menu=`<details style="display:inline-block;position:relative"><summary class="btn btn-d btn-xs" style="list-style:none;cursor:pointer">관리 ▾</summary><div style="position:absolute;right:0;z-index:20;background:#101a2c;border:1px solid #33425f;border-radius:8px;padding:7px;min-width:125px;display:grid;gap:5px;box-shadow:0 8px 24px #0008"><button class="btn btn-p btn-xs" onclick="editSite('${esc(s.id)}')">편집</button><button class="btn btn-d btn-xs" onclick="learnSignup('${esc(s.id)}')">가입폼 재학습</button><button class="btn btn-y btn-xs" onclick="dryRun('${esc(s.id)}')">발행 드라이런</button><button class="btn btn-d btn-xs" onclick="detectSite('${esc(s.id)}')">플랫폼 감지</button><button class="btn btn-v btn-xs" onclick="learnSite('${esc(s.id)}')">글쓰기 학습</button><button class="btn btn-d btn-xs" onclick="healthSite('${esc(s.id)}')">상태 점검</button><button class="btn btn-g btn-xs" onclick="testSite('${esc(s.id)}')">발행 테스트</button><button class="btn btn-r btn-xs" onclick="delSite('${esc(s.id)}')">삭제</button></div></details>`;
-return `<tr data-id="${esc(s.id)}" style="${lb}"><td><input type="checkbox" class="cb" data-id="${esc(s.id)}"></td><td>${hdot}<b>${nm}</b><br>${signup} ${pv}</td><td>${perm}</td><td style="min-width:240px;max-width:340px"><a href="${esc(s.site_url||'#')}" target="_blank" rel="noopener" title="${esc(s.site_url||'')}" style="display:block;color:var(--p);word-break:break-all;line-height:1.45">${esc(s.site_url||'-')}</a><a href="${esc(s.site_url||'#')}" target="_blank" rel="noopener" class="btn btn-p btn-xs" style="display:inline-block;margin-top:5px">🔗 링크 열기</a></td><td style="color:var(--p)">${esc(s.bo_table||'')}<br>${pltag}</td><td style="color:var(--d);white-space:nowrap"><div>${today}/<input id="limD_${esc(s.id)}" type="number" min="0" max="10000" value="${s.daily_limit==null?3:s.daily_limit}" style="width:58px;padding:3px 5px">건</div><div style="margin-top:3px"><input id="limM_${esc(s.id)}" type="number" min="0" max="10080" value="${s.min_interval_minutes==null?60:s.min_interval_minutes}" style="width:58px;padding:3px 5px">분 <button class="btn btn-p btn-xs" onclick="saveSiteLimits('${esc(s.id)}')">저장</button></div></td><td><span class="st st-${st}" title="${esc(s.technical_block_reason||s.verification_fail_reason||'')}">${esc(s.status||'idle')}</span>${s.technical_block_reason?'<br><span style="color:var(--r);font-size:9px">'+esc(s.technical_block_reason)+'</span>':''}</td><td style="white-space:nowrap"><button class="btn ${allClass} btn-xs" onclick="signupAll('${esc(s.id)}','${esc(ss)}')">${allLabel}</button> ${menu}</td></tr>`}
+const menu=`<details style="display:inline-block;position:relative"><summary class="btn btn-d btn-xs" style="list-style:none;cursor:pointer">관리 ▾</summary><div style="position:absolute;right:0;z-index:20;background:#101a2c;border:1px solid #33425f;border-radius:8px;padding:7px;min-width:125px;display:grid;gap:5px;box-shadow:0 8px 24px #0008"><button class="btn btn-p btn-xs" onclick="editSite('${esc(s.id)}')">편집</button><button class="btn ${allClass} btn-xs" onclick="signupAll('${esc(s.id)}','${esc(ss)}')">${allLabel}</button><button class="btn btn-d btn-xs" onclick="learnSignup('${esc(s.id)}')">가입폼 재학습</button><button class="btn btn-y btn-xs" onclick="dryRun('${esc(s.id)}')">발행 드라이런</button><button class="btn btn-d btn-xs" onclick="detectSite('${esc(s.id)}')">플랫폼 감지</button><button class="btn btn-v btn-xs" onclick="learnSite('${esc(s.id)}')">글쓰기 학습</button><button class="btn btn-d btn-xs" onclick="healthSite('${esc(s.id)}')">상태 점검</button><button class="btn btn-g btn-xs" onclick="testSite('${esc(s.id)}')">발행 테스트</button><button class="btn btn-r btn-xs" onclick="delSite('${esc(s.id)}')">삭제</button></div></details>`;
+return `<tr data-id="${esc(s.id)}" style="${lb}"><td><input type="checkbox" class="cb" data-id="${esc(s.id)}"></td><td>${hdot}<b>${nm}</b><br>${signup} ${pv}</td><td>${perm}</td><td style="min-width:240px;max-width:340px"><a href="${esc(s.site_url||'#')}" target="_blank" rel="noopener" title="${esc(s.site_url||'')}" style="display:block;color:var(--p);word-break:break-all;line-height:1.45">${esc(s.site_url||'-')}</a><a href="${esc(s.site_url||'#')}" target="_blank" rel="noopener" class="btn btn-p btn-xs" style="display:inline-block;margin-top:5px">🔗 링크 열기</a></td><td style="color:var(--p)">${esc(s.bo_table||'')}<br>${pltag}</td><td style="color:var(--d);white-space:nowrap"><div>${today}/<input id="limD_${esc(s.id)}" type="number" min="0" max="10000" value="${s.daily_limit==null?3:s.daily_limit}" style="width:58px;padding:3px 5px">건</div><div style="margin-top:3px"><input id="limM_${esc(s.id)}" type="number" min="0" max="10080" value="${s.min_interval_minutes==null?60:s.min_interval_minutes}" style="width:58px;padding:3px 5px">분 <button class="btn btn-p btn-xs" onclick="saveSiteLimits('${esc(s.id)}')">저장</button></div></td><td><span class="st st-${st}" title="${esc(s.technical_block_reason||s.verification_fail_reason||'')}">${esc(s.status||'idle')}</span>${s.technical_block_reason?'<br><span style="color:var(--r);font-size:9px">'+esc(s.technical_block_reason)+'</span>':''}</td><td style="white-space:nowrap">${menu}</td></tr>`}
 async function healthSite(id){toast('점검중...');const r=await api('/sites/health/'+id,'POST');if(r&&r.ok){const h=r.health;const pn=h.platform==='cafe24'?'Cafe24':'그누보드';toast((h.ok?'✅ 정상':'⚠️ 확인필요')+` [${pn}] 접속:${h.reachable?'O':'X'} 로그인폼:${h.login_form?'O':'X'} 글쓰기:${h.write_page?'O':'X'}`,h.ok?'ok':'er');renderSites()}else toast('실패','er')}
 async function dryRun(id){toast('🧪 드라이런 실행중... (글은 올리지 않습니다, 최대 60초)');const r=await api('/sites/dryrun/'+id,'POST');if(!r){toast('실패','er');return}
 const rows=(r.steps||[]).map(s=>`<tr><td>${s.ok?'<span style="color:var(--g)">✅</span>':'<span style="color:var(--r)">❌</span>'}</td><td><b>${esc(s.name)}</b></td><td style="color:var(--d)">${esc(s.detail)}</td></tr>`).join('');
