@@ -376,6 +376,7 @@ def _twocaptcha_usage_summary(cfg):
     if not cfg.get('twocaptcha_enabled',False):
         return {'ok':False,'disabled':True,'error':'2captcha 비활성화','currency':'USD','balance':0.0,'remaining_usd':0.0,'charged_since_last_check_usd':0.0,'updated_at':None}
     try:
+        import requests   # 모듈 전역에 없음 — 지역 import(이게 없어 'requests is not defined'로 잔액조회 크래시→미연결 표시됨)
         r=requests.get('https://2captcha.com/res.php',params={'key':key,'action':'getbalance','json':'1'},timeout=20)
         raw=(r.text or '').strip()
         payload=None
