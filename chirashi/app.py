@@ -5880,7 +5880,7 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 <div id="statSites"></div></div></div>
 
 <div id="p-cost" class="panel">
-<div class="card"><div class="row" style="align-items:center"><h3 style="margin:0">API 실시간 비용 · 사용량</h3><span style="flex:1"></span><button class="btn btn-d btn-xs" onclick="loadUsageDashboard()">새로고침</button></div>
+<div class="card"><div class="row" style="align-items:center"><h3 style="margin:0">API 실시간 비용 · 사용량</h3><span style="flex:1"></span><span id="costAutoInfo" style="font-size:10px;color:var(--d);margin-right:8px">30초마다 자동 새로고침</span><button class="btn btn-d btn-xs" onclick="loadUsageDashboard()">새로고침</button></div>
 <div style="font-size:11px;color:var(--d);margin-top:6px">이번 달 합계 <b id="costTotalMonth" style="color:var(--p)">-</b> · 오늘 <b id="costTotalToday" style="color:var(--g)">-</b> <span style="color:var(--y)">· 금액은 OpenAI 관리자키 실측을 제외하면 설정 단가 기준 <b>추정치</b>입니다(횟수는 정확).</span></div>
 </div>
 <div id="costCards" style="display:grid;grid-template-columns:1fr;gap:12px;margin-top:10px"></div>
@@ -5978,7 +5978,7 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 
 <script>
 const $=id=>document.getElementById(id);
-function T(n){document.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));document.querySelectorAll('.panel').forEach(p=>p.classList.remove('on'));document.querySelector(`[onclick="T('${n}')"]`).classList.add('on');$('p-'+n).classList.add('on');if(n==='res')renderHistory();if(n==='wlog'){renderWorkerLog();renderCaptchaTasks()}if(n==='stats')renderStats();if(n==='cost')loadUsageDashboard();if(n==='set'){loadCfgUI();loadRegionTool()}if(n==='gen'){loadPool();loadImages();loadWorkrooms();loadRegionTool()}if(n==='mem'){renderMembers();if(!document.querySelector('.mSite'))fillSiteBox([])}if(n==='disco')renderCands()}
+function T(n){document.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));document.querySelectorAll('.panel').forEach(p=>p.classList.remove('on'));document.querySelector(`[onclick="T('${n}')"]`).classList.add('on');$('p-'+n).classList.add('on');if(n==='res')renderHistory();if(n==='wlog'){renderWorkerLog();renderCaptchaTasks()}if(n==='stats')renderStats();if(n==='cost'){loadUsageDashboard();startUsageAuto()}else{stopUsageAuto()}if(n==='set'){loadCfgUI();loadRegionTool()}if(n==='gen'){loadPool();loadImages();loadWorkrooms();loadRegionTool()}if(n==='mem'){renderMembers();if(!document.querySelector('.mSite'))fillSiteBox([])}if(n==='disco')renderCands()}
 function toast(m,c='ok'){const d=$('toasts');const e=document.createElement('div');e.className='toast toast-'+c;e.textContent=m;d.appendChild(e);setTimeout(()=>e.remove(),2500)}
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
 async function api(p,m,b){try{const o={method:m,headers:{'Content-Type':'application/json'}};if(b)o.body=JSON.stringify(b);const r=await fetch('/api'+p,o);if(r.status===401){location='/login';return null}return await r.json()}catch(e){toast(e.message,'er');return null}}
@@ -6263,12 +6263,24 @@ function _costCard(b,extraNote){
     </div>
     ${extraNote?`<div class="twocap-footer"><span>${extraNote}</span></div>`:''}
   </div>`}
-async function loadUsageDashboard(){
-  const box=$('costCards'); if(box)box.innerHTML='<div style="color:var(--d);font-size:11px">불러오는 중…</div>';
+let _usageTimer=null;
+function startUsageAuto(){
+  stopUsageAuto();
+  _usageTimer=setInterval(()=>{
+    // 비용 탭이 실제 표시 중이고, 브라우저 탭이 활성일 때만 갱신(불필요한 서버 호출 방지)
+    if(document.hidden)return;
+    const p=$('p-cost'); if(!p||!p.classList.contains('on')){stopUsageAuto();return}
+    loadUsageDashboard(true);
+  },30000);
+}
+function stopUsageAuto(){ if(_usageTimer){clearInterval(_usageTimer);_usageTimer=null} }
+async function loadUsageDashboard(silent){
+  const box=$('costCards'); if(box&&!silent)box.innerHTML='<div style="color:var(--d);font-size:11px">불러오는 중…</div>';
   const u=await api('/usage','GET');
-  if(!u||!u.ok){if(box)box.innerHTML='<div style="color:var(--y);font-size:11px">비용 정보를 불러오지 못했습니다.</div>';return}
+  if(!u||!u.ok){if(box&&!silent)box.innerHTML='<div style="color:var(--y);font-size:11px">비용 정보를 불러오지 못했습니다.</div>';return}
   $('costTotalMonth').textContent=_usd(u.total_month_usd);
   $('costTotalToday').textContent=_usd(u.total_today_usd);
+  const ai=$('costAutoInfo'); if(ai){const t=new Date();ai.textContent='30초마다 자동 새로고침 · 갱신 '+String(t.getHours()).padStart(2,'0')+':'+String(t.getMinutes()).padStart(2,'0')+':'+String(t.getSeconds()).padStart(2,'0')}
   const o=u.openai||{},c=u.twocaptcha||{},b=u.brave||{};
   const oNote=o.admin_error?('관리자 조회 실패: '+esc(o.admin_error)):(o.remaining_budget_usd!=null?('남은 예산 '+_usd(o.remaining_budget_usd)):'');
   let cNote='';
