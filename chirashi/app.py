@@ -47,6 +47,8 @@ DISCO_FILE = DATA_DIR / 'discover.json'     # 발굴 상태(쿼리 커서·일�
 SIGNUP_PROFILES_FILE = DATA_DIR / 'signup_profiles.json'  # 가입 폼 측정·학습 이력
 REJECTED_DOMAINS_FILE = DATA_DIR / 'rejected_domains.json'  # 영구 탈락 도메인(다음 발굴에서 제외)
 AI_USAGE_FILE = DATA_DIR / 'openai_usage.json'  # 글 생성별 토큰·예상 비용 원장
+CAPTCHA_USAGE_FILE = DATA_DIR / 'captcha_usage.json'  # 2captcha 해결(solve) 1건당 원장(횟수 정확·금액은 설정단가 기준 추정)
+BRAVE_USAGE_FILE = DATA_DIR / 'brave_usage.json'      # Brave 검색 호출 1건당 원장(횟수 정확·금액은 설정단가 기준 추정)
 WORKROOMS_FILE = DATA_DIR / 'workrooms.json'    # 키워드별 독립 작업실
 
 IMAGES = [f'https://picsum.photos/id/{i}/800/400' for i in [1,20,26,48,60,64,76,91,96,104,152,160,175,180,185,201]]
@@ -112,6 +114,32 @@ def _record_openai_usage(model, usage, cfg):
         rows.append(rec); save_json(AI_USAGE_FILE,rows[-20000:])
     return rec
 
+def _time_series(rows, cost_key='estimated_cost_usd', days=14):
+    """원장 rows(각 항목에 'time' ISO8601)를 일별·시간별로 집계한다.
+    - daily: 최근 `days`일 [{date,cost,count}] (오늘 포함, 과거→현재 순)
+    - hourly: 오늘 24시간 [{hour(0~23),cost,count}]
+    금액은 각 원장이 기록해 둔 cost_key 합계다(원장 성격상 추정치일 수 있음)."""
+    now=datetime.now().astimezone()
+    def _num(x,k):
+        try: return float(x.get(k,0) or 0)
+        except Exception: return 0.0
+    def _cnt(x):
+        try: return int(x.get('requests',1) or 1)
+        except Exception: return 1
+    daily=[]
+    for i in range(days-1,-1,-1):
+        d=(now-timedelta(days=i)).strftime('%Y-%m-%d')
+        sel=[x for x in rows if str(x.get('time','')).startswith(d)]
+        daily.append({'date':d,'cost':round(sum(_num(x,cost_key) for x in sel),6),
+                      'count':sum(_cnt(x) for x in sel)})
+    today=now.strftime('%Y-%m-%d'); hourly=[]
+    for h in range(24):
+        pref=f'{today}T{h:02d}'
+        sel=[x for x in rows if str(x.get('time','')).startswith(pref)]
+        hourly.append({'hour':h,'cost':round(sum(_num(x,cost_key) for x in sel),6),
+                       'count':sum(_cnt(x) for x in sel)})
+    return {'daily':daily,'hourly':hourly}
+
 def _local_openai_usage_summary(cfg):
     rows=load_json(AI_USAGE_FILE,[]); now=datetime.now().astimezone()
     month=now.strftime('%Y-%m'); today=now.strftime('%Y-%m-%d')
@@ -125,24 +153,110 @@ def _local_openai_usage_summary(cfg):
     tr=[x for x in rows if str(x.get('time','')).startswith(today)]
     budget=float(cfg.get('openai_monthly_budget_usd') or 0)
     m=agg(mr); t=agg(tr)
+    per_call=round(m['estimated_cost_usd']/m['requests'],6) if m['requests'] else 0.0  # 이번 달 평균 1건당 예상비용
+    series=_time_series(rows,'estimated_cost_usd')
     return {'source':'local_estimate','month':m,'today':t,'monthly_budget_usd':budget,
             'remaining_budget_usd':round(max(0,budget-m['estimated_cost_usd']),6) if budget>0 else None,
+            'per_call_usd':per_call,'daily':series['daily'],'hourly':series['hourly'],
+            'unit_price':{'input_per_million':float(cfg.get('openai_input_price_per_million') or 0.15),
+                          'output_per_million':float(cfg.get('openai_output_price_per_million') or 0.60),
+                          'cached_input_per_million':float(cfg.get('openai_cached_input_price_per_million') or 0.075)},
             'note':'프로젝트 키 응답의 토큰 기준 예상치'}
 
+def _record_captcha_usage(cap_type, success, cfg):
+    """2captcha 해결 1건을 원장에 기록한다. 성공 건만 과금되므로 성공 시에만 비용을 계산한다.
+    2captcha는 solve당 실제 과금액을 응답하지 않으므로, 금액은 설정 단가 × 성공횟수의 추정치다."""
+    try:
+        if success:
+            if cap_type=='recaptcha':
+                price=float(cfg.get('twocaptcha_price_recaptcha_usd') or 0.003)
+            else:
+                price=float(cfg.get('twocaptcha_price_image_usd') or 0.0005)
+        else:
+            price=0.0
+        rec={'time':datetime.now().astimezone().isoformat(timespec='seconds'),
+             'type':cap_type or 'unknown','success':bool(success),
+             'requests':1,'estimated_cost_usd':round(price,6)}
+        with _json_lock(CAPTCHA_USAGE_FILE):
+            rows=load_json(CAPTCHA_USAGE_FILE,[])
+            if not isinstance(rows,list): rows=[]
+            rows.append(rec); save_json(CAPTCHA_USAGE_FILE,rows[-20000:])
+    except Exception:
+        pass  # 기록 실패가 본 작업(캡차 해결)을 막지 않도록 조용히 무시
+
+def _record_brave_usage(cfg):
+    """Brave 검색 호출 1건을 원장에 기록한다. Brave는 사용량 조회 API가 없어 횟수만 정확하고,
+    금액은 설정한 쿼리당 단가 × 호출횟수의 추정치다."""
+    try:
+        price=float(cfg.get('brave_price_per_query_usd') or 0.0)
+        rec={'time':datetime.now().astimezone().isoformat(timespec='seconds'),
+             'requests':1,'estimated_cost_usd':round(price,6)}
+        with _json_lock(BRAVE_USAGE_FILE):
+            rows=load_json(BRAVE_USAGE_FILE,[])
+            if not isinstance(rows,list): rows=[]
+            rows.append(rec); save_json(BRAVE_USAGE_FILE,rows[-20000:])
+    except Exception:
+        pass
+
+def _captcha_usage_summary(cfg):
+    """2captcha 원장 기반 요약(월/오늘/횟수당/일별/시간별). 금액은 추정치."""
+    rows=load_json(CAPTCHA_USAGE_FILE,[]); now=datetime.now().astimezone()
+    month=now.strftime('%Y-%m'); today=now.strftime('%Y-%m-%d')
+    def agg(items):
+        ok=[x for x in items if x.get('success')]
+        return {'requests':sum(int(x.get('requests',1) or 0) for x in items),
+                'success':len(ok),'fail':len(items)-len(ok),
+                'estimated_cost_usd':round(sum(float(x.get('estimated_cost_usd',0) or 0) for x in items),6)}
+    m=agg([x for x in rows if str(x.get('time','')).startswith(month)])
+    t=agg([x for x in rows if str(x.get('time','')).startswith(today)])
+    per_call=round(m['estimated_cost_usd']/m['success'],6) if m['success'] else 0.0
+    series=_time_series(rows,'estimated_cost_usd')
+    return {'source':'local_estimate','month':m,'today':t,'per_call_usd':per_call,
+            'daily':series['daily'],'hourly':series['hourly'],
+            'unit_price':{'recaptcha_usd':float(cfg.get('twocaptcha_price_recaptcha_usd') or 0.003),
+                          'image_usd':float(cfg.get('twocaptcha_price_image_usd') or 0.0005)},
+            'note':'해결 성공 횟수 × 설정 단가 기준 추정치(2captcha는 건당 실제 과금액 미제공)'}
+
+def _brave_usage_summary(cfg):
+    """Brave 원장 기반 요약(월/오늘/횟수당/일별/시간별). 금액은 추정치."""
+    rows=load_json(BRAVE_USAGE_FILE,[]); now=datetime.now().astimezone()
+    month=now.strftime('%Y-%m'); today=now.strftime('%Y-%m-%d')
+    def agg(items):
+        return {'requests':sum(int(x.get('requests',1) or 0) for x in items),
+                'estimated_cost_usd':round(sum(float(x.get('estimated_cost_usd',0) or 0) for x in items),6)}
+    m=agg([x for x in rows if str(x.get('time','')).startswith(month)])
+    t=agg([x for x in rows if str(x.get('time','')).startswith(today)])
+    per_call=round(m['estimated_cost_usd']/m['requests'],6) if m['requests'] else 0.0
+    price=float(cfg.get('brave_price_per_query_usd') or 0.0)
+    series=_time_series(rows,'estimated_cost_usd')
+    return {'source':'local_estimate','month':m,'today':t,'per_call_usd':per_call,
+            'daily':series['daily'],'hourly':series['hourly'],
+            'unit_price':{'per_query_usd':price},
+            'note':'검색 호출 횟수 × 설정 단가 기준 추정치(Brave는 사용량 조회 API 미제공)'
+                    if price>0 else '단가 미설정 — 설정 탭에서 쿼리당 단가를 입력하면 추정비용이 계산됩니다'}
+
 def _openai_admin_costs(cfg):
-    """관리자 키가 있을 때만 공식 조직 Costs API로 이번 달 실제 비용을 조회한다."""
+    """관리자 키가 있을 때만 공식 조직 Costs API로 이번 달 실제 비용을 조회한다.
+    반환: {'total_usd':float, 'daily':[{date,cost}]} — 일별 버킷을 살려 실측 일별 그래프에 쓴다.
+    관리자 키가 없으면 None(호출부에서 토큰 기반 추정치로 폴백)."""
     key=(cfg.get('openai_admin_key') or '').strip()
     if not key: return None
     import requests as _rq
     now=datetime.now().astimezone(); start=int(now.replace(day=1,hour=0,minute=0,second=0,microsecond=0).timestamp())
     r=_rq.get('https://api.openai.com/v1/organization/costs',params={'start_time':start,'limit':31},
               headers={'Authorization':f'Bearer {key}','Content-Type':'application/json'},timeout=20)
-    r.raise_for_status(); data=r.json(); total=0.0
+    r.raise_for_status(); data=r.json(); total=0.0; daily=[]
     for bucket in data.get('data',[]):
+        bstart=bucket.get('start_time')
+        try: bdate=datetime.fromtimestamp(int(bstart)).astimezone().strftime('%Y-%m-%d') if bstart else None
+        except Exception: bdate=None
+        bsum=0.0
         for result in bucket.get('results',[]):
             amount=result.get('amount') or {}
-            if str(amount.get('currency','usd')).lower()=='usd': total+=float(amount.get('value') or 0)
-    return round(total,6)
+            if str(amount.get('currency','usd')).lower()=='usd':
+                v=float(amount.get('value') or 0); bsum+=v; total+=v
+        if bdate is not None: daily.append({'date':bdate,'cost':round(bsum,6)})
+    return {'total_usd':round(total,6),'daily':daily}
 
 def uploaded_images():
     out=[]
@@ -360,6 +474,8 @@ def load_config():
        'discover_daily_target':100,'discover_query_limit':100,'discover_keywords':'',
        'discover_direct_queries':'','video_url':'','landing_url':'','post_email':'','guest_post_password':'',
        'twocaptcha_api_key':'','twocaptcha_enabled':False,
+       'twocaptcha_price_recaptcha_usd':0.003,'twocaptcha_price_image_usd':0.0005,
+       'brave_price_per_query_usd':0.005,  # Pro 플랜 기준 쿼리당 $0.005(설정 탭에서 변경 가능)
        'auto_pipeline_enabled':False,'auto_pipeline_batch':3}
     c=load_json(CONFIG_FILE,None)
     if c is None or not isinstance(c,dict): save_json(CONFIG_FILE,d); return d.copy()
@@ -1090,6 +1206,7 @@ def solve_captcha_with_2captcha(d,site,cap_type,cfg,timeout=300):
                         "if(!t){t=document.querySelector('textarea[name=\"g-recaptcha-response\"]');}"
                         "if(t){t.style.display='block';t.value=arguments[0];}", token)
                 except Exception: pass
+                _record_captcha_usage('recaptcha',True,cfg)
                 return True,'recaptcha 해결 완료',token,{'type':'recaptcha','token':token}
             except Exception as e:
                 return False,f'recaptcha 해결 실패: {str(e)[:80]}','',{}
@@ -1110,6 +1227,7 @@ def solve_captcha_with_2captcha(d,site,cap_type,cfg,timeout=300):
             try:
                 result=solver.normal(temp_path)
                 answer=result.get('code') or str(result)
+                _record_captcha_usage('kcaptcha',True,cfg)
                 return True,'kcaptcha 해결 완료',answer,{'type':'kcaptcha','answer':answer}
             except Exception as e:
                 return False,f'kcaptcha 해결 실패: {str(e)[:80]}','',{}
@@ -3020,6 +3138,7 @@ def brave_search(cfg, query, start=1, num=10):
     if r.status_code in (401,403): raise RuntimeError('Brave Search API 키 또는 구독 상태 확인 필요')
     if r.status_code>=400: raise RuntimeError(f'Brave Search API 오류 {r.status_code}: {r.text[:120]}')
     rows=((r.json().get('web') or {}).get('results') or [])
+    _record_brave_usage(cfg)  # 성공 호출 1건 기록(횟수 정확·금액은 설정단가 기준 추정)
     return [{'url':it.get('url',''),'title':it.get('title',''),'snippet':it.get('description','')}
             for it in rows if it.get('url')]
 
@@ -5074,6 +5193,7 @@ def api_cfg():
                   'discover_query_limit','discover_keywords','discover_direct_queries',
                   'video_url','landing_url','post_email','guest_post_password',
                   'twocaptcha_api_key','twocaptcha_enabled',
+                  'twocaptcha_price_recaptcha_usd','twocaptcha_price_image_usd','brave_price_per_query_usd',
                   'auto_pipeline_enabled','auto_pipeline_batch']:
             if k in d:
                 if k in ('openai_key','openai_admin_key','telegram_token','google_api_key','brave_api_key','guest_post_password','twocaptcha_api_key') and d[k]=='***설정됨***': continue  # 마스크 값은 무시(기존 유지)
@@ -5108,9 +5228,11 @@ def api_openai_usage():
     try:
         actual=_openai_admin_costs(cfg)
         if actual is not None:
-            summary['source']='official_costs_api'; summary['actual_month_cost_usd']=actual
+            total=float(actual.get('total_usd') or 0)
+            summary['source']='official_costs_api'; summary['actual_month_cost_usd']=total
+            if actual.get('daily'): summary['actual_daily']=actual['daily']  # 공식 API 일별 실측
             budget=float(cfg.get('openai_monthly_budget_usd') or 0)
-            summary['remaining_budget_usd']=round(max(0,budget-actual),6) if budget>0 else None
+            summary['remaining_budget_usd']=round(max(0,budget-total),6) if budget>0 else None
             summary['note']='OpenAI 조직 Costs API 실제 비용'
     except Exception as e:
         summary['admin_error']=str(e)[:180]
@@ -5122,6 +5244,90 @@ def api_twocaptcha_usage():
     cfg=load_config();
     summary=_twocaptcha_usage_summary(cfg)
     return jsonify({'ok':True,**summary})
+
+@app.route('/api/usage',methods=['GET'])
+def api_usage():
+    """3개 API(OpenAI·2captcha·Brave) 통합 비용/사용량 — 대시보드 '비용' 탭이 한 번에 불러온다.
+    각 항목: month/today 합계, per_call_usd(횟수당), daily(일별)·hourly(시간별) 시계열, unit_price(단가).
+    실측 여부(measured)와 추정 여부(estimated)를 명시해 UI가 '추정' 뱃지를 붙일 수 있게 한다."""
+    cfg=load_config()
+
+    # --- OpenAI: 관리자 키 있으면 실측(월/일), 없으면 토큰 기반 추정 ---
+    oa=_local_openai_usage_summary(cfg)
+    oa_measured=False; oa_admin_error=None
+    try:
+        actual=_openai_admin_costs(cfg)
+        if actual is not None:
+            oa_measured=True
+            oa['month']['estimated_cost_usd']=float(actual.get('total_usd') or 0)  # 월 총액을 실측으로 대체
+            if actual.get('daily'): oa['actual_daily']=actual['daily']
+    except Exception as e:
+        oa_admin_error=str(e)[:180]
+    openai_block={
+        'label':'OpenAI (GPT)',
+        'month_cost_usd':round(float(oa['month'].get('estimated_cost_usd') or 0),6),
+        'today_cost_usd':round(float(oa['today'].get('estimated_cost_usd') or 0),6),
+        'month_requests':int(oa['month'].get('requests') or 0),
+        'today_requests':int(oa['today'].get('requests') or 0),
+        'per_call_usd':oa.get('per_call_usd',0.0),
+        'daily':oa.get('actual_daily') or oa.get('daily',[]),
+        'hourly':oa.get('hourly',[]),
+        'unit_price':oa.get('unit_price',{}),
+        'measured':oa_measured,          # True=관리자키 실측, False=토큰 추정
+        'estimated':not oa_measured,
+        'admin_error':oa_admin_error,
+        'note':('OpenAI 조직 Costs API 실제 청구액(월/일)' if oa_measured
+                else '관리자 키 미설정 — 토큰 기반 추정치(설정 탭에서 관리자 키 입력 시 실측 전환)'),
+        'monthly_budget_usd':oa.get('monthly_budget_usd'),
+        'remaining_budget_usd':oa.get('remaining_budget_usd'),
+    }
+
+    # --- 2captcha: 횟수는 정확, 금액은 설정단가×성공횟수 추정. 잔액은 참고용. ---
+    cap=_captcha_usage_summary(cfg)
+    bal=_twocaptcha_usage_summary(cfg)  # getbalance 스냅샷(잔액·잔액낙폭)
+    captcha_block={
+        'label':'2captcha',
+        'month_cost_usd':cap['month'].get('estimated_cost_usd',0.0),
+        'today_cost_usd':cap['today'].get('estimated_cost_usd',0.0),
+        'month_requests':cap['month'].get('requests',0),
+        'today_requests':cap['today'].get('requests',0),
+        'month_success':cap['month'].get('success',0),
+        'per_call_usd':cap.get('per_call_usd',0.0),
+        'daily':cap.get('daily',[]),
+        'hourly':cap.get('hourly',[]),
+        'unit_price':cap.get('unit_price',{}),
+        'measured':False, 'estimated':True,
+        'note':cap.get('note'),
+        'balance_usd':(bal.get('balance') if bal.get('ok') else None),         # 참고용 잔액
+        'balance_delta_usd':(bal.get('charged_since_last_check_usd') if bal.get('ok') else None),
+        'balance_ok':bool(bal.get('ok')),
+        'balance_error':(bal.get('error') if not bal.get('ok') else None),
+    }
+
+    # --- Brave: 사용량 API 없음 → 호출횟수×설정단가 추정. 단가 미설정이면 비용 0. ---
+    br=_brave_usage_summary(cfg)
+    brave_price=float(cfg.get('brave_price_per_query_usd') or 0.0)
+    brave_block={
+        'label':'Brave Search',
+        'month_cost_usd':br['month'].get('estimated_cost_usd',0.0),
+        'today_cost_usd':br['today'].get('estimated_cost_usd',0.0),
+        'month_requests':br['month'].get('requests',0),
+        'today_requests':br['today'].get('requests',0),
+        'per_call_usd':br.get('per_call_usd',0.0),
+        'daily':br.get('daily',[]),
+        'hourly':br.get('hourly',[]),
+        'unit_price':br.get('unit_price',{}),
+        'measured':False, 'estimated':True,
+        'price_configured':brave_price>0,
+        'note':br.get('note'),
+        'active':((cfg.get('search_provider') or 'brave').lower()=='brave'),
+    }
+
+    total_month=round(openai_block['month_cost_usd']+captcha_block['month_cost_usd']+brave_block['month_cost_usd'],6)
+    total_today=round(openai_block['today_cost_usd']+captcha_block['today_cost_usd']+brave_block['today_cost_usd'],6)
+    return jsonify({'ok':True,'openai':openai_block,'twocaptcha':captcha_block,'brave':brave_block,
+                    'total_month_usd':total_month,'total_today_usd':total_today,
+                    'note':'금액은 관리자키 실측(OpenAI)을 제외하면 설정 단가 기준 추정치입니다. 횟수는 정확합니다.'})
 
 @app.route('/api/test/<sid>',methods=['POST'])
 def api_test(sid):
@@ -5493,7 +5699,7 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 <div class="stats" id="live"><span>큐:<b id="q">0</b></span><span>성공:<b id="ok" style="color:var(--g)">0</b></span><span>실패:<b id="fl" style="color:var(--r)">0</b></span><span>스킵:<b id="sk" style="color:var(--y)">0</b></span><span>워커:<b id="ws" style="color:{{'var(--g)' if wk_on else 'var(--d)'}}">{{'ON' if wk_on else 'OFF'}}</b></span></div>
 <a href="/logout" class="btn-xs" style="background:var(--b);color:var(--d);text-decoration:none">로그아웃</a></header>
 
-<div class="tabs"><button class="tab on" onclick="T('gen')">글 생성</button><button class="tab" onclick="T('wlog')">워커 실행로그</button><button class="tab" onclick="T('images')">이미지 저장</button><button class="tab" onclick="T('sites')">사이트 (<span id="siteTabCount">{{sites|length}}</span>)</button><button class="tab" onclick="T('res')">결과</button><button class="tab" onclick="T('disco')">발굴</button><button class="tab" onclick="T('mem')">회원·정산</button><button class="tab" onclick="T('stats')">통계</button><button class="tab" onclick="T('set')">설정</button></div>
+<div class="tabs"><button class="tab on" onclick="T('gen')">글 생성</button><button class="tab" onclick="T('wlog')">워커 실행로그</button><button class="tab" onclick="T('images')">이미지 저장</button><button class="tab" onclick="T('sites')">사이트 (<span id="siteTabCount">{{sites|length}}</span>)</button><button class="tab" onclick="T('res')">결과</button><button class="tab" onclick="T('disco')">발굴</button><button class="tab" onclick="T('mem')">회원·정산</button><button class="tab" onclick="T('stats')">통계</button><button class="tab" onclick="T('cost')">API 비용</button><button class="tab" onclick="T('set')">설정</button></div>
 <div class="wrap"><div id="toasts"></div>
 <div id="pvOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:500;padding:20px" onclick="if(event.target===this)closePreview()">
 <div style="max-width:820px;margin:0 auto;background:#fff;color:#222;border-radius:10px;max-height:90vh;overflow:auto">
@@ -5673,6 +5879,13 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 <div style="font-size:11px;color:var(--d);margin:14px 0 6px">사이트별 (상위 12)</div>
 <div id="statSites"></div></div></div>
 
+<div id="p-cost" class="panel">
+<div class="card"><div class="row" style="align-items:center"><h3 style="margin:0">API 실시간 비용 · 사용량</h3><span style="flex:1"></span><button class="btn btn-d btn-xs" onclick="loadUsageDashboard()">새로고침</button></div>
+<div style="font-size:11px;color:var(--d);margin-top:6px">이번 달 합계 <b id="costTotalMonth" style="color:var(--p)">-</b> · 오늘 <b id="costTotalToday" style="color:var(--g)">-</b> <span style="color:var(--y)">· 금액은 OpenAI 관리자키 실측을 제외하면 설정 단가 기준 <b>추정치</b>입니다(횟수는 정확).</span></div>
+</div>
+<div id="costCards" style="display:grid;grid-template-columns:1fr;gap:12px;margin-top:10px"></div>
+</div>
+
 <div id="p-set" class="panel">
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
 <div class="card"><h3>브랜드/전화</h3>
@@ -5715,6 +5928,12 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 <div class="card"><h3>🔎 도메인 발굴 (Brave Search API)</h3>
 <div style="margin-bottom:6px"><small style="color:var(--d)">Brave Search API 키</small><input type="password" id="cBraveKey" placeholder="변경시에만 입력"></div>
 <div style="font-size:10px;color:var(--d);margin-bottom:6px"><a href="https://api-dashboard.search.brave.com/" target="_blank" rel="noopener" style="color:var(--p)">Brave API 키 관리</a> · 키는 화면과 API 응답에 노출되지 않습니다.</div>
+<details style="margin-bottom:6px"><summary style="cursor:pointer;color:var(--d);font-size:11px">API 단가 설정 (비용 대시보드 추정용)</summary>
+<div style="font-size:10px;color:var(--y);margin:5px 0">2captcha·Brave는 건당 실제 과금액을 알려주지 않아, 아래 단가 × 횟수로 <b>추정</b>합니다. 횟수는 정확합니다.</div>
+<div class="row" style="margin-bottom:5px"><div style="flex:1"><small style="color:var(--d)">Brave 쿼리당 $</small><input type="number" id="cBravePrice" min="0" step="0.001" value="0.005" title="Pro 플랜 기준 쿼리당 $0.005"></div>
+<div style="flex:1"><small style="color:var(--d)">2captcha reCAPTCHA $/건</small><input type="number" id="cCapRePrice" min="0" step="0.0001" value="0.003"></div>
+<div style="flex:1"><small style="color:var(--d)">2captcha 이미지 $/건</small><input type="number" id="cCapImgPrice" min="0" step="0.0001" value="0.0005"></div></div>
+</details>
 <div class="row" style="margin-bottom:6px"><span style="color:var(--d);font-size:11px">하루 후보 목표</span><input type="number" id="cDTarget" value="100" min="10" max="1000" style="width:90px">
 <span style="color:var(--d);font-size:11px">하루 쿼리 한도</span><input type="number" id="cDQuery" value="100" min="1" max="10000" style="width:90px" title="Brave API 플랜 한도 안에서 사용"></div>
 <label style="display:flex;align-items:center;gap:6px;color:var(--g);font-size:12px;margin-bottom:6px"><input type="checkbox" id="cDiscoOn" style="width:auto">24시간 자동 발굴 켜기 (15분마다 조금씩 수집·검수)</label>
@@ -5759,7 +5978,7 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 
 <script>
 const $=id=>document.getElementById(id);
-function T(n){document.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));document.querySelectorAll('.panel').forEach(p=>p.classList.remove('on'));document.querySelector(`[onclick="T('${n}')"]`).classList.add('on');$('p-'+n).classList.add('on');if(n==='res')renderHistory();if(n==='wlog'){renderWorkerLog();renderCaptchaTasks()}if(n==='stats')renderStats();if(n==='set'){loadCfgUI();loadRegionTool()}if(n==='gen'){loadPool();loadImages();loadWorkrooms();loadRegionTool()}if(n==='mem'){renderMembers();if(!document.querySelector('.mSite'))fillSiteBox([])}if(n==='disco')renderCands()}
+function T(n){document.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));document.querySelectorAll('.panel').forEach(p=>p.classList.remove('on'));document.querySelector(`[onclick="T('${n}')"]`).classList.add('on');$('p-'+n).classList.add('on');if(n==='res')renderHistory();if(n==='wlog'){renderWorkerLog();renderCaptchaTasks()}if(n==='stats')renderStats();if(n==='cost')loadUsageDashboard();if(n==='set'){loadCfgUI();loadRegionTool()}if(n==='gen'){loadPool();loadImages();loadWorkrooms();loadRegionTool()}if(n==='mem'){renderMembers();if(!document.querySelector('.mSite'))fillSiteBox([])}if(n==='disco')renderCands()}
 function toast(m,c='ok'){const d=$('toasts');const e=document.createElement('div');e.className='toast toast-'+c;e.textContent=m;d.appendChild(e);setTimeout(()=>e.remove(),2500)}
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
 async function api(p,m,b){try{const o={method:m,headers:{'Content-Type':'application/json'}};if(b)o.body=JSON.stringify(b);const r=await fetch('/api'+p,o);if(r.status===401){location='/login';return null}return await r.json()}catch(e){toast(e.message,'er');return null}}
@@ -5963,10 +6182,11 @@ function previewPost(){const c=$('gContent').value.trim();if(!c){toast('먼저 �
 function closePreview(){$('pvOverlay').style.display='none';$('pvFrame').srcdoc=''}
 async function delSite(id){if(!confirm('삭제?'))return;await api('/sites','DELETE',{id});renderSites()}
 async function testSite(id){toast('Selenium 테스트 중...');const r=await api('/test/'+id,'POST');if(r&&r.ok)toast('✅ 테스트 성공!'+(r.platform?' ['+(r.platform==='cafe24'?'Cafe24':'그누보드')+']':'')+' '+(r.message||''));else toast('실패: '+(r?.error||r?.message||''),'er')}
-async function saveCfg(){const d={brand:$('cBrand').value.trim(),phone:$('cPhone').value.trim(),phones:$('cPhones').value,video_url:$('cVideoUrl').value.trim(),landing_url:$('cLandingUrl').value.trim(),post_email:$('cPostEmail').value.trim(),workers:parseInt($('cWorkers').value)||2,post_delay:parseInt($('cDelay').value)||0,daily_limit:parseInt($('cDaily').value)||0,use_gpt:$('cUseGpt').checked,model:$('cModel').value.trim()||'gpt-4o-mini',openai_monthly_budget_usd:parseFloat($('cOpenaiBudget').value)||0,openai_input_price_per_million:parseFloat($('cOpenaiInPrice').value)||0,openai_output_price_per_million:parseFloat($('cOpenaiOutPrice').value)||0,telegram_chat_id:$('cTgChat').value.trim(),notify_done:$('cNotifyDone').checked,notify_fail:$('cNotifyFail').checked,backup_time:$('cBackupTime').value.trim(),telegram_control:$('cTgControl').checked,verify_enabled:$('cVerify').checked,mix_keywords:$('cMixKw').checked,block_unpaid:$('cBlockUnpaid').checked,search_provider:'brave',discover_enabled:$('cDiscoOn').checked,discover_daily_target:parseInt($('cDTarget').value)||100,discover_query_limit:parseInt($('cDQuery').value)||100,discover_keywords:'',discover_direct_queries:$('cDDirect').value,twocaptcha_enabled:$('cTwocaptchaEn').checked};
+async function saveCfg(){const d={brand:$('cBrand').value.trim(),phone:$('cPhone').value.trim(),phones:$('cPhones').value,video_url:$('cVideoUrl').value.trim(),landing_url:$('cLandingUrl').value.trim(),post_email:$('cPostEmail').value.trim(),workers:parseInt($('cWorkers').value)||2,post_delay:parseInt($('cDelay').value)||0,daily_limit:parseInt($('cDaily').value)||0,use_gpt:$('cUseGpt').checked,model:$('cModel').value.trim()||'gpt-4o-mini',openai_monthly_budget_usd:parseFloat($('cOpenaiBudget').value)||0,openai_input_price_per_million:parseFloat($('cOpenaiInPrice').value)||0,openai_output_price_per_million:parseFloat($('cOpenaiOutPrice').value)||0,telegram_chat_id:$('cTgChat').value.trim(),notify_done:$('cNotifyDone').checked,notify_fail:$('cNotifyFail').checked,backup_time:$('cBackupTime').value.trim(),telegram_control:$('cTgControl').checked,verify_enabled:$('cVerify').checked,mix_keywords:$('cMixKw').checked,block_unpaid:$('cBlockUnpaid').checked,search_provider:'brave',discover_enabled:$('cDiscoOn').checked,discover_daily_target:parseInt($('cDTarget').value)||100,discover_query_limit:parseInt($('cDQuery').value)||100,discover_keywords:'',discover_direct_queries:$('cDDirect').value,twocaptcha_enabled:$('cTwocaptchaEn').checked,brave_price_per_query_usd:parseFloat($('cBravePrice').value)||0,twocaptcha_price_recaptcha_usd:parseFloat($('cCapRePrice').value)||0,twocaptcha_price_image_usd:parseFloat($('cCapImgPrice').value)||0,openai_cached_input_price_per_million:parseFloat($('cOpenaiCachedPrice')?.value)||undefined};
+if(d.openai_cached_input_price_per_million===undefined)delete d.openai_cached_input_price_per_million;
 const bk=$('cBraveKey').value.trim();if(bk)d.brave_api_key=bk;
 const pw=$('cPw').value.trim();if(pw)d.password=pw;const gp=$('cGuestPw').value.trim();if(gp)d.guest_post_password=gp;const ok=$('cOpenai').value.trim();if(ok)d.openai_key=ok;const oa=$('cOpenaiAdmin').value.trim();if(oa)d.openai_admin_key=oa;const tg=$('cTgTok').value.trim();if(tg)d.telegram_token=tg;const tc=$('cTwocaptchaKey').value.trim();if(tc)d.twocaptcha_api_key=tc;const r=await api('/config','POST',d);if(r&&r.ok){toast('저장 완료');$('cPw').value='';$('cGuestPw').value='';$('cOpenai').value='';$('cOpenaiAdmin').value='';$('cTgTok').value='';$('cTwocaptchaKey').value='';loadOpenAIUsage()}}
-async function loadCfgUI(){const c=await api('/config','GET');if(!c)return;$('cVideoUrl').value=c.video_url||'';$('cLandingUrl').value=c.landing_url||'';$('cPostEmail').value=c.post_email||'';$('cGuestPw').placeholder=(c.guest_post_password==='***설정됨***')?'설정됨 · 변경시에만 입력':'변경시에만 입력';$('cUseGpt').checked=!!c.use_gpt;$('cNotifyDone').checked=!!c.notify_done;$('cNotifyFail').checked=!!c.notify_fail;$('cTgControl').checked=!!c.telegram_control;$('cVerify').checked=(c.verify_enabled!==false);$('cMixKw').checked=(c.mix_keywords!==false);$('cBlockUnpaid').checked=(c.block_unpaid!==false);$('cDiscoOn').checked=!!c.discover_enabled;if(c.discover_daily_target)$('cDTarget').value=c.discover_daily_target;if(c.discover_query_limit)$('cDQuery').value=c.discover_query_limit;if(typeof c.discover_direct_queries==='string')$('cDDirect').value=c.discover_direct_queries;$('cBraveKey').placeholder=(c.brave_api_key==='***설정됨***')?'설정됨 · 변경시에만 입력':'Brave API 키 입력';if(c.backup_time)$('cBackupTime').value=c.backup_time;if(c.model)$('cModel').value=c.model;if(c.telegram_chat_id)$('cTgChat').value=c.telegram_chat_id;if(typeof c.phones==='string')$('cPhones').value=c.phones;$('cOpenai').placeholder=(c.openai_key==='***설정됨***')?'설정됨 · 변경시만 입력':'sk-... (변경시만)';$('cOpenaiAdmin').placeholder=(c.openai_admin_key==='***설정됨***')?'관리자 키 설정됨 · 변경시만 입력':'관리자 키 없으면 로컬 예상비용 사용';$('cOpenaiBudget').value=c.openai_monthly_budget_usd==null?20:c.openai_monthly_budget_usd;$('cOpenaiInPrice').value=c.openai_input_price_per_million==null?0.15:c.openai_input_price_per_million;$('cOpenaiOutPrice').value=c.openai_output_price_per_million==null?0.60:c.openai_output_price_per_million;$('cTgTok').placeholder=(c.telegram_token==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';$('cTwocaptchaEn').checked=!!c.twocaptcha_enabled;$('cTwocaptchaKey').placeholder=(c.twocaptcha_api_key==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';loadOpenAIUsage()}
+async function loadCfgUI(){const c=await api('/config','GET');if(!c)return;$('cVideoUrl').value=c.video_url||'';$('cLandingUrl').value=c.landing_url||'';$('cPostEmail').value=c.post_email||'';$('cGuestPw').placeholder=(c.guest_post_password==='***설정됨***')?'설정됨 · 변경시에만 입력':'변경시에만 입력';$('cUseGpt').checked=!!c.use_gpt;$('cNotifyDone').checked=!!c.notify_done;$('cNotifyFail').checked=!!c.notify_fail;$('cTgControl').checked=!!c.telegram_control;$('cVerify').checked=(c.verify_enabled!==false);$('cMixKw').checked=(c.mix_keywords!==false);$('cBlockUnpaid').checked=(c.block_unpaid!==false);$('cDiscoOn').checked=!!c.discover_enabled;if(c.discover_daily_target)$('cDTarget').value=c.discover_daily_target;if(c.discover_query_limit)$('cDQuery').value=c.discover_query_limit;if(typeof c.discover_direct_queries==='string')$('cDDirect').value=c.discover_direct_queries;$('cBraveKey').placeholder=(c.brave_api_key==='***설정됨***')?'설정됨 · 변경시에만 입력':'Brave API 키 입력';if(c.backup_time)$('cBackupTime').value=c.backup_time;if(c.model)$('cModel').value=c.model;if(c.telegram_chat_id)$('cTgChat').value=c.telegram_chat_id;if(typeof c.phones==='string')$('cPhones').value=c.phones;$('cOpenai').placeholder=(c.openai_key==='***설정됨***')?'설정됨 · 변경시만 입력':'sk-... (변경시만)';$('cOpenaiAdmin').placeholder=(c.openai_admin_key==='***설정됨***')?'관리자 키 설정됨 · 변경시만 입력':'관리자 키 없으면 로컬 예상비용 사용';$('cOpenaiBudget').value=c.openai_monthly_budget_usd==null?20:c.openai_monthly_budget_usd;$('cOpenaiInPrice').value=c.openai_input_price_per_million==null?0.15:c.openai_input_price_per_million;$('cOpenaiOutPrice').value=c.openai_output_price_per_million==null?0.60:c.openai_output_price_per_million;$('cTgTok').placeholder=(c.telegram_token==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';$('cTwocaptchaEn').checked=!!c.twocaptcha_enabled;$('cTwocaptchaKey').placeholder=(c.twocaptcha_api_key==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';if(c.brave_price_per_query_usd!=null)$('cBravePrice').value=c.brave_price_per_query_usd;if(c.twocaptcha_price_recaptcha_usd!=null)$('cCapRePrice').value=c.twocaptcha_price_recaptcha_usd;if(c.twocaptcha_price_image_usd!=null)$('cCapImgPrice').value=c.twocaptcha_price_image_usd;loadOpenAIUsage()}
 async function loadOpenAIUsage(){
   const r=await api('/openai/usage','GET');
   const c=await api('/twocaptcha/usage','GET');
@@ -6014,6 +6234,49 @@ async function loadOpenAIUsage(){
       </div>
     `;
   }
+}
+// ---- API 비용 대시보드 (3개 API 통합) ----
+function _usd(v){const n=Number(v||0);return '$'+(n<0.01&&n>0?n.toFixed(5):n.toFixed(4))}
+function _bars(series,key){ // 미니 막대(일별/시간별). series=[{cost,count,...}]
+  if(!series||!series.length)return '<div style="font-size:9px;color:var(--d)">데이터 없음</div>';
+  const mx=Math.max(1,...series.map(x=>Number(x[key]||0)));
+  return '<div style="display:flex;align-items:flex-end;gap:2px;height:44px">'+series.map(x=>{
+    const v=Number(x[key]||0);const h=Math.max(1,Math.round(v/mx*40));
+    const lb=x.date?x.date.slice(5):(x.hour!=null?(x.hour+'시'):'');
+    return `<div style="flex:1;min-width:3px" title="${lb}: ${key==='cost'?_usd(v):v}"><div style="height:${h}px;background:var(--p);border-radius:2px;opacity:${v?0.85:0.25}"></div></div>`;
+  }).join('')+'</div>'}
+function _costCard(b,extraNote){
+  const est=b.estimated?'<span class="twocap-chip warn" style="margin-left:6px">추정</span>':'<span class="twocap-chip ok" style="margin-left:6px">실측</span>';
+  const up=b.unit_price||{};
+  const upStr=Object.keys(up).length?Object.entries(up).map(([k,v])=>`${esc(k)}: $${Number(v).toFixed(k.includes('million')?4:5)}`).join(' · '):'단가 정보 없음';
+  return `<div class="twocap-shell">
+    <div class="twocap-header"><span style="font-weight:700;color:var(--t)">${esc(b.label)}${est}</span><span style="font-size:9px;color:var(--d)">${esc(b.note||'')}</span></div>
+    <div class="twocap-metrics" style="grid-template-columns:repeat(4,1fr)">
+      <div class="twocap-metric"><div class="label">이번 달</div><div class="value green">${_usd(b.month_cost_usd)}</div><div style="font-size:8px;color:var(--d)">${b.month_requests||0}회</div></div>
+      <div class="twocap-metric"><div class="label">오늘</div><div class="value blue">${_usd(b.today_cost_usd)}</div><div style="font-size:8px;color:var(--d)">${b.today_requests||0}회</div></div>
+      <div class="twocap-metric"><div class="label">횟수당(평균)</div><div class="value amber">${_usd(b.per_call_usd)}</div></div>
+      <div class="twocap-metric"><div class="label">단가</div><div class="value" style="font-size:11px;line-height:1.35;color:var(--t)">${esc(upStr)}</div></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:9px">
+      <div><div style="font-size:9px;color:var(--d);margin-bottom:3px">최근 14일 (일별 비용)</div>${_bars(b.daily,'cost')}</div>
+      <div><div style="font-size:9px;color:var(--d);margin-bottom:3px">오늘 24시간 (시간별 비용)</div>${_bars(b.hourly,'cost')}</div>
+    </div>
+    ${extraNote?`<div class="twocap-footer"><span>${extraNote}</span></div>`:''}
+  </div>`}
+async function loadUsageDashboard(){
+  const box=$('costCards'); if(box)box.innerHTML='<div style="color:var(--d);font-size:11px">불러오는 중…</div>';
+  const u=await api('/usage','GET');
+  if(!u||!u.ok){if(box)box.innerHTML='<div style="color:var(--y);font-size:11px">비용 정보를 불러오지 못했습니다.</div>';return}
+  $('costTotalMonth').textContent=_usd(u.total_month_usd);
+  $('costTotalToday').textContent=_usd(u.total_today_usd);
+  const o=u.openai||{},c=u.twocaptcha||{},b=u.brave||{};
+  const oNote=o.admin_error?('관리자 조회 실패: '+esc(o.admin_error)):(o.remaining_budget_usd!=null?('남은 예산 '+_usd(o.remaining_budget_usd)):'');
+  let cNote='';
+  if(c.balance_ok&&c.balance_usd!=null)cNote='참고용 잔액 '+_usd(c.balance_usd)+(c.balance_delta_usd?(' · 최근 차감 '+_usd(c.balance_delta_usd)):'');
+  else if(c.balance_error)cNote='잔액조회: '+esc(c.balance_error);
+  let bNote=b.price_configured?'':'⚠ 쿼리당 단가 미설정 — 설정 탭에서 입력하면 추정비용이 계산됩니다';
+  if(!b.active)bNote=(bNote?bNote+' · ':'')+'현재 검색 공급자가 Brave가 아님';
+  box.innerHTML=_costCard(o,oNote)+_costCard(c,cNote)+_costCard(b,bNote);
 }
 async function loadPool(){const p=await api('/keywords','GET');if(!Array.isArray(p))return;$('poolCount').textContent=p.length+'개';$('poolCsv').value=p.map(k=>[k.지역||'',k.서비스||'',k.브랜드||''].join(',')).join('\n')}
 async function savePool(append){const csv=$('poolCsv').value;const r=await api('/keywords','POST',{csv:csv,append:!!append});if(r&&r.ok){toast('풀 저장: '+r.count+'개');loadPool()}else if(r)toast('실패','er')}

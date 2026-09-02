@@ -39,6 +39,9 @@ data/uniq.json
 data/signup_profiles.json
 data/rejected_domains.json
 data/openai_usage.json
+data/captcha_usage.json
+data/brave_usage.json
+data/twocaptcha_balance.json
 data/workrooms.json
 data/logs.json
 data/*.tmp
