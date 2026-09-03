@@ -3070,9 +3070,15 @@ def _is_blacklisted(url):
 GNU_BO_TABLES=['promotion','promotion1','hongbo','hongbo1','ad','link','partner','banner',
                'free','free1','guest','company','pr','event','notice_pr']
 # Brave에 잘 먹히는 '평문 URL조각' — inurl: 대신 실제 경로 문자열을 그대로 검색
+# (홍보·제휴·자유게시판 계열 bo_table을 넓게 커버 — 매일 우선 실행되므로 다양할수록 좋다)
 BRAVE_URL_FRAGMENTS=['bbs/board.php bo_table=promotion','bbs/board.php bo_table=hongbo',
                      'bbs/board.php bo_table=link','bbs/board.php bo_table=partner',
-                     'bbs/write.php bo_table=promotion','bbs/board.php bo_table=free 홍보']
+                     'bbs/board.php bo_table=ad','bbs/board.php bo_table=banner',
+                     'bbs/board.php bo_table=pr','bbs/board.php bo_table=company',
+                     'bbs/board.php bo_table=guest','bbs/board.php bo_table=event',
+                     'bbs/write.php bo_table=promotion','bbs/write.php bo_table=hongbo',
+                     'bbs/board.php bo_table=free 홍보','bbs/board.php 홍보게시판 글쓰기',
+                     'bbs/board.php 자유게시판 홍보 환영','그누보드 홍보게시판 비회원 글쓰기']
 
 def _board_finder_queries(provider):
     """플랫폼(그누보드/카페24) 홍보·자유 게시판을 '찾기 위한' 검색어.
@@ -3377,20 +3383,47 @@ def screen_pending(limit=30):
     return len(results)
 
 def discover_once(cfg=None, max_queries=10):
-    """구글 검색 1배치 실행 → 후보 등록 → 검수. (검색량 제어)"""
+    """구글 검색 1배치 실행 → 후보 등록 → 검수. (검색량 제어)
+       게시판찾기(finder) 검색어는 커서와 무관하게 매일 처음부터 우선 실행하고,
+       그 뒤에 지역×업종(direct) 목록을 커서로 순환한다. (finder가 첫날만 실행되고
+       마는 문제 방지 — 실제 글 올릴 게시판을 매일 새로 찾기 위함)"""
     cfg=cfg or load_config()
     st=load_json(DISCO_FILE,{})
     today=_kst_now().strftime('%Y-%m-%d')
-    if st.get('date')!=today: st={'date':today,'queries':0,'found':0,'cursor':0}
+    if st.get('date')!=today:
+        # 날짜가 바뀌면 하루 카운터는 리셋하되, 커서(cursor·fcursor)는 이어받아
+        # finder/direct를 여러 날에 걸쳐 골고루 순회한다(같은 앞부분만 반복 방지).
+        st={'date':today,'queries':0,'found':0,
+            'cursor':int(st.get('cursor',0) or 0),'fcursor':int(st.get('fcursor',0) or 0)}
+    st.setdefault('fcursor',0)  # 기존 상태 호환(finder 커서 없던 날)
     target=int(cfg.get('discover_daily_target',100) or 100)
     qlimit=int(cfg.get('discover_query_limit',100) or 100)   # 구글 무료 하루 100
-    queries=build_queries(cfg)
-    if not queries: return {'ok':False,'error':'쿼리 없음'}
+    provider=(cfg.get('search_provider') or 'brave').lower()
+    finder=_board_finder_queries(provider)          # 게시판 찾기(매일 우선)
+    direct=[x.strip() for x in (cfg.get('discover_direct_queries','') or '').splitlines()
+            if x.strip() and not x.lstrip().startswith('#')]  # 지역×업종(커서 순환)
+    finder=list(dict.fromkeys(finder))
+    # 하루 쿼리 예산의 앞 60%를 finder에 배정(매일 게시판찾기 우선), 나머지는 direct.
+    # finder가 예산보다 많으면 fcursor로 여러 날에 걸쳐 순회한다(날짜 바뀌어도 fcursor는 이어짐).
+    finder_budget=int(qlimit*0.6) if finder else 0
+    if not finder and not direct:
+        queries=build_queries(cfg)
+        if not queries: return {'ok':False,'error':'쿼리 없음'}
     added=0; used=0; errs=[]
+    def _next_query():
+        # finder를 fcursor로 순회하다(예산 소진 전) 그 뒤 direct를 cursor로 순환
+        if finder and st['queries']<finder_budget:
+            q=finder[st['fcursor']%len(finder)]; st['fcursor']+=1; return q
+        if direct:
+            q=direct[st['cursor']%len(direct)]; st['cursor']+=1; return q
+        if finder:  # direct가 없으면 finder 계속
+            q=finder[st['fcursor']%len(finder)]; st['fcursor']+=1; return q
+        return None
     for _ in range(max_queries):
         if st['queries']>=qlimit: errs.append('일일 쿼리 한도 도달'); break
         if st['found']>=target: errs.append('일일 후보 목표 달성'); break
-        q=queries[st['cursor']%len(queries)]; st['cursor']+=1
+        q=_next_query()
+        if q is None: errs.append('쿼리 없음'); break
         try:
             items=web_search(cfg,q)
             for it in items: it['query']=q
