@@ -379,15 +379,29 @@ def _signup_form_measure(site):
     else:
         url_candidates=[base+p for p in ('/bbs/register.php','/register.php',
                         '/gnu/bbs/register.php','/g5/bbs/register.php','/bbs/register_form.php')]
+    def _decode(r):
+        # 한국 그누보드는 EUC-KR(cp949)이 많은데 HTTP 헤더에 charset이 없으면 requests가
+        # ISO-8859-1로 오판독해 한글이 깨진다. <meta charset> 우선, 없으면 apparent_encoding.
+        try:
+            ctype=(r.headers.get('Content-Type') or '').lower()
+            if 'charset=' in ctype:
+                return r.text  # 헤더에 charset 명시 → requests가 이미 올바로 디코드
+            head=r.content[:2048].decode('ascii','ignore').lower()
+            m=re.search(r'charset=["\']?\s*([\w-]+)', head)
+            enc=(m.group(1) if m else None) or r.apparent_encoding or 'utf-8'
+            if enc.lower() in ('euc-kr','ks_c_5601-1987','ksc5601'): enc='cp949'
+            return r.content.decode(enc, errors='replace')
+        except Exception:
+            return r.text
     def _measure_url(url):
         r=sess.get(url,timeout=20,verify=False,headers=hdr,allow_redirects=True); r.raise_for_status()
-        html=r.text; measured_url=r.url
+        html=_decode(r); measured_url=r.url
         # 그누보드 약관 화면이면 동의값을 세션에 전달해 실제 가입 폼까지만 조회한다.
         if platform!='cafe24' and not re.search(r'name=["\']mb_password["\']',html,re.I):
             form_url=urllib.parse.urljoin(r.url,'register_form.php')
             try:
                 r2=sess.post(form_url,data={'agree':'1','agree2':'1'},timeout=20,verify=False,headers=hdr,allow_redirects=True)
-                r2.raise_for_status(); html=r2.text; measured_url=r2.url
+                r2.raise_for_status(); html=_decode(r2); measured_url=r2.url
             except Exception: pass
         return html, measured_url
     url=url_candidates[0]; html=''; measured_url=url; forms=[]
@@ -418,7 +432,10 @@ def _signup_form_measure(site):
             p=FormParser(); p.feed(html); forms=signup_forms(p)
         except Exception: forms=[]
     if not forms: raise RuntimeError('가입 입력 폼을 찾지 못했습니다')
-    form=max(forms,key=lambda f:len(f['fields'])); fields=[]
+    # 비밀번호 필드가 있는 폼(=실제 가입폼)을 우선 선택한다. 검색폼·설문폼이 필드 수만
+    # 많아 진짜 가입폼을 밀어내던 문제 방지(같은 조건이면 필드 많은 쪽).
+    def _pwc(f): return sum(1 for x in f['fields'] if (x.get('type') or '').lower()=='password')
+    form=max(forms,key=lambda f:(_pwc(f),len(f['fields']))); fields=[]
     for x in form['fields']:
         name=x.get('name') or ''; fid=x.get('id') or ''; typ=(x.get('type') or x.get('tag') or '').lower()
         role=''
