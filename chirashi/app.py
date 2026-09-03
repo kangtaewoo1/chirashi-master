@@ -1770,9 +1770,13 @@ def gnuboard_post(site, title, content_html):
         # 제출 버튼은 로그인 폼(#login_fs/flogin/action*=login_check) 안의 것만. write.php와 동일하게
         # 헤더 검색폼(fsearchbox)의 검색 버튼이 문서상 먼저라 그냥 submit 셀렉터를 쓰면 잘못 잡힌다.
         login_btn=None
-        for sel in ("form[name='flogin'] input[type='submit']","form[name='flogin'] button[type='submit']",
-                    "form[action*='login_check'] input[type='submit']","form[action*='login_check'] button[type='submit']",
-                    "#login_fs .btn_submit","form[name='flogin'] .btn_submit"):
+        # 로그인 폼 name이 flogin이 아닌 사이트(foutlogin 등 비표준)도 커버.
+        # 로그인 제출 버튼은 action에 login_check가 있는 폼 안의 것을 우선한다.
+        for sel in ("form[action*='login_check'] input[type='submit']","form[action*='login_check'] button[type='submit']",
+                    "form[action*='login'] input[type='submit']","form[action*='login'] button[type='submit']",
+                    "form[name='flogin'] input[type='submit']","form[name='flogin'] button[type='submit']",
+                    "form[name*='login'] input[type='submit']","form[name*='login'] button[type='submit']",
+                    "#login_fs .btn_submit","form[action*='login_check'] .btn_submit"):
             try:
                 for el in d.find_elements(By.CSS_SELECTOR,sel):
                     if el.is_displayed(): login_btn=el; break
@@ -1781,17 +1785,18 @@ def gnuboard_post(site, title, content_html):
         if login_btn:
             try: login_btn.click()
             except Exception:
-                try: d.execute_script("var f=document.forms['flogin']||document.querySelector(\"form[action*='login_check']\");if(f){if(f.requestSubmit)f.requestSubmit();else f.submit();}")
+                try: d.execute_script("var f=document.querySelector(\"form[action*='login_check']\")||document.forms['flogin']||document.querySelector(\"form[name*='login']\");if(f){if(f.requestSubmit)f.requestSubmit();else f.submit();}")
                 except Exception: pass
         else:
-            # 버튼을 못 찾으면 로그인 폼을 직접 제출(onsubmit 경유)
-            try: d.execute_script("var f=document.forms['flogin']||document.querySelector(\"form[action*='login_check']\");if(f){if(f.requestSubmit)f.requestSubmit();else f.submit();}")
+            # 버튼 아예 못 찾으면 login_check 폼을 직접 제출
+            try: d.execute_script("var f=document.querySelector(\"form[action*='login_check']\")||document.forms['flogin']||document.querySelector(\"form[name*='login']\");if(f){if(f.requestSubmit)f.requestSubmit();else f.submit();}")
             except Exception: pass
         time.sleep(2); dismiss_alerts(d)
         # 로그인 실제 성공 확인(로그아웃 링크 등). 실패면 조기 반환해 원인을 명확히.
         try: _b=d.find_element(By.TAG_NAME,'body').text[:2000]
         except Exception: _b=''
-        if not (('로그아웃' in _b) or ('logout' in (d.page_source or '').lower()) or ('mypage' in (d.page_source or '').lower())):
+        _bsrc=(d.page_source or '').lower()
+        if not (('로그아웃' in _b) or ('logout' in _bsrc) or ('mypage' in _bsrc) or ('회원정보' in _b) or ('마이페이지' in _b) or ('bo_table' in _bsrc and 'login' not in d.current_url.lower())):
             return False,'로그인 실패 — 아이디/비번 불일치 또는 승인대기(자동가입 계정 확인 필요)'
 
     # 글쓰기 페이지
@@ -3662,23 +3667,31 @@ def auto_signup(site, submit=True):
                 if not cb.is_selected(): d.execute_script('arguments[0].click()',cb)
         except Exception: pass
     if not _has_pw_field():
-        # 약관 폼(fregister_form / register.php)을 제출해 register_form.php로 이동
+        # 약관 폼(fregister/register.php)을 제출해 register_form.php로 이동.
+        # 제출 버튼이 input이 아니라 커스텀 <button class="fw_terms_btn">인 사이트(forwarder.kr 등)도 커버.
         submitted_agree=False
-        for sel in ("form[name='fregister'] input[type='submit']","#fregister input[type='submit']",
+        for sel in ("#fregister input[type='submit']","#fregister button[type='submit']","#fregister button",
+                    "form[name='fregister'] input[type='submit']","form[name='fregister'] button[type='submit']","form[name='fregister'] button",
                     "form[action*='register_form'] input[type='submit']","form[action*='register_form'] button",
+                    ".fw_terms_btn","button.fw_terms_btn","button[value*='회원가입']","button[value*='회 원 가 입']",
                     "input[type='submit']","button[type='submit']"):
             for el in _safe_find(d,sel):
                 try:
                     if el.is_displayed(): d.execute_script('arguments[0].click()',el); submitted_agree=True; break
                 except Exception: pass
             if submitted_agree: break
+        # 버튼 클릭이 안 먹으면 fregister 폼을 JS로 직접 제출(onsubmit 우회)
+        if not submitted_agree:
+            _safe_js(d,"var f=document.getElementById('fregister')||document.forms['fregister'];if(f){if(f.requestSubmit)f.requestSubmit();else f.submit();}")
         time.sleep(2); dismiss_alerts(d)
     if not _has_pw_field():
-        # 그래도 없으면 register_form.php를 직접 열되 약관값을 붙여서 접근 시도
-        try:
-            base_o=_signup_origin(site)
-            d.get(base_o+'/bbs/register_form.php?agree=1&agree2=1'); time.sleep(2); dismiss_alerts(d)
-        except Exception: pass
+        # 그래도 없으면 register_form.php를 직접 열되 약관값·기업회원 파라미터를 붙여 접근 시도
+        base_o=_signup_origin(site)
+        for q in ('?agree=1&agree2=1','?company=1&agree=1&agree2=1','?agree=on&agree2=on'):
+            try:
+                d.get(base_o+'/bbs/register_form.php'+q); time.sleep(2); dismiss_alerts(d)
+                if _has_pw_field(): break
+            except Exception: pass
     if not _has_pw_field():
         return False,'가입 폼(비밀번호 입력칸)에 도달 실패 — 약관/인증 단계 확인'
     # 2.5) 휴대폰 본인인증(SMS) 폼은 자동가입 불가 — 임시메일·캡차 비용 쓰기 전에 조기 제외.
@@ -3803,7 +3816,7 @@ def auto_signup(site, submit=True):
         try: body=d.find_element(By.TAG_NAME,'body').text[:2500]
         except Exception: body=''
         src=(d.page_source or '').lower()
-        return ('로그아웃' in body) or ('logout' in src) or ('mypage' in src) or ('회원정보수정' in body)
+        return ('로그아웃' in body) or ('logout' in src) or ('mypage' in src) or ('회원정보수정' in body) or ('회원정보' in body) or ('마이페이지' in body)
     def _mark_success(msg):
         # ★핵심: 가입한 계정을 넘겨받은 site dict에 직접 심는다. auto_pipeline은 임시 dict
         # (id='cand_...')를 넘기는데, set_site_flag는 저장된 사이트만 갱신하므로 이 대입이 없으면
