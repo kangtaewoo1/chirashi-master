@@ -2346,6 +2346,43 @@ def discover_write_page(d, base, site):
         except Exception: continue
         if discover_subject(d) and discover_content(d)[1]:
             return d.current_url or target
+    # 폴백: 설정된 bo_table이 유령(오류페이지)일 때 — 홈페이지에서 실제 존재하는 게시판
+    # (bo_table=xxx 링크)들을 수집해 write.php를 시도, 글쓰기 폼이 있는 게시판을 찾는다.
+    # (forwarder.kr처럼 등록된 게시판ID가 실제로 없어 발행이 막히던 문제 해결)
+    if plat!='cafe24':
+        try:
+            from selenium.webdriver.common.by import By
+            d.get((site.get('site_url') or base).strip()); time.sleep(2); dismiss_alerts(d)
+            found_bo=[]
+            for a in d.find_elements(By.CSS_SELECTOR,"a[href*='bo_table=']"):
+                href=_sel_attr(a,'href')
+                m=re.search(r'bo_table=([A-Za-z0-9_]+)',href)
+                if m and m.group(1) not in found_bo: found_bo.append(m.group(1))
+            # 홍보/자유 성격 게시판을 앞으로 (free, promotion, hongbo, community, qa 등 우선)
+            def _prio(b):
+                bl=b.lower()
+                for i,k in enumerate(['promotion','hongbo','pr','free','community','club','qa','notice']):
+                    if k in bl: return i
+                return 99
+            found_bo.sort(key=_prio)
+            for b in found_bo[:12]:
+                if b==bo: continue
+                t=base+f'/bbs/write.php?bo_table={b}'
+                if t in seen: continue
+                seen.add(t)
+                try: d.get(t); time.sleep(1.5); dismiss_alerts(d)
+                except Exception: continue
+                # 로그인/오류 페이지면 스킵
+                cu=(d.current_url or '').lower()
+                if 'login' in cu or 'err' in (d.title or '').lower() or '오류' in (d.title or ''): continue
+                if discover_subject(d) and discover_content(d)[1]:
+                    # 찾은 게시판ID를 사이트에 반영(다음부터 이 게시판 사용)
+                    try: set_site_flag(site.get('id'), bo_table=b)
+                    except Exception: pass
+                    if isinstance(site,dict): site['bo_table']=b
+                    add_log(f'[게시판 자동교정] {site.get("name") or base} — 유령 게시판({bo}) → 실제 게시판({b})')
+                    return d.current_url or t
+        except Exception: pass
     return None
 
 def _save_site_analysis(site_id, analysis, rec=None):
