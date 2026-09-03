@@ -3782,33 +3782,66 @@ def auto_signup(site, submit=True):
                     _safe_js(d,"var b=document.querySelector(\"input[type='submit'],button[type='submit']\");if(b)b.click();")
                     time.sleep(2); break
             add_log(f'[자동가입] 인증코드 입력 완료')
-    # 6) 가입 성공 검증 = 로그인 시도해서 로그아웃 링크 확인
+    # 6) 가입 성공 검증 (다단계) — ① 제출 직후 신호 ② 가입 후 세션 ③ 로그인 재시도 순.
     raw=site.get('site_url',''); m=re.match(r'(https?://[^/]+)',raw); base=m.group(1) if m else raw
-    try:
-        d.get(f'{base}/bbs/login.php'); time.sleep(2)
-        for s2 in (("input[name='mb_id']",mid),("input[name='mb_password']",pw)):
-            for el in _safe_find(d,s2[0]):
-                try:
-                    if el.is_displayed(): el.clear(); el.send_keys(s2[1]); break
-                except Exception: pass
-        for lsel in ("form[name='flogin'] input[type='submit']","form[action*='login_check'] input[type='submit']","#login_fs .btn_submit"):
-            for el in _safe_find(d,lsel):
-                try:
-                    if el.is_displayed(): el.click(); break
-                except Exception: pass
-        time.sleep(2); dismiss_alerts(d)
-        body=''
-        try: body=d.find_element(By.TAG_NAME,'body').text[:1500]
-        except Exception: pass
-        logged=('로그아웃' in body) or ('logout' in (d.page_source or '').lower())
-    except Exception:
-        logged=False
-    if logged:
+    def _logged_in():
+        try: body=d.find_element(By.TAG_NAME,'body').text[:2500]
+        except Exception: body=''
+        src=(d.page_source or '').lower()
+        return ('로그아웃' in body) or ('logout' in src) or ('mypage' in src) or ('회원정보수정' in body)
+    def _mark_success(msg):
         set_site_flag(site.get('id'),mb_id=mid,mb_pass=pw,signup_status='complete',
                       login_saved=True,signup_updated_at=datetime.now().isoformat(timespec='seconds'))
-        add_log(f'[자동가입 성공] {site.get("name") or site.get("site_url","")} — {mid}')
+        add_log(f'[자동가입 성공] {site.get("name") or site.get("site_url","")} — {mid} ({msg})')
         return True,f'자동가입 성공 — {mid}'
-    return False,'가입 제출했으나 로그인 확인 실패(가입 규칙·중복ID·승인제 가능)'
+
+    # ① 제출 직후 페이지의 명시적 신호 검사 (가입완료 or 중복/오류)
+    try:
+        pt=d.find_element(By.TAG_NAME,'body').text[:3000]
+    except Exception: pt=''
+    plow=(d.page_source or '').lower()+' '+pt
+    # 실패(반려) 신호 — 이게 있으면 가입이 안 된 것. 정확히 사유를 반환.
+    if any(k in pt for k in ('이미 등록된','이미 사용중','이미 사용 중','중복된 아이디','사용중인 아이디','이미 가입')):
+        return False,'가입 실패 — 아이디/이메일 중복(다음 시도 시 다른 값 사용)'
+    if any(k in pt for k in ('비밀번호는','아이디는','필수','올바르지 않','형식이 맞지','다시 입력')) and '가입' not in pt[:80]:
+        return False,f'가입 실패 — 입력값 규칙 위반 가능({pt[:60].strip()})'
+    if any(k in pt for k in ('본인인증','휴대폰 인증','실명인증','SMS 인증')):
+        return False,'가입 실패 — 본인인증 필요(자동가입 불가)'
+    if any(k in pt for k in ('승인 후','관리자 승인','승인이 필요','가입 승인')):
+        return False,'가입 보류 — 관리자 승인제 게시판(자동발행 불가)'
+    # 성공 신호 — 명시적 완료 문구
+    if any(k in pt for k in ('가입을 환영','회원가입이 완료','가입이 완료','환영합니다','가입을 축하','register_result')) or 'register_result' in plow:
+        return _mark_success('가입완료 페이지 확인')
+
+    # ② 가입 직후 세션이 이미 로그인 상태인지(그누보드는 가입 즉시 로그인되는 경우 많음)
+    try:
+        d.get(base); time.sleep(1.5)
+        if _logged_in(): return _mark_success('가입 직후 세션 로그인됨')
+    except Exception: pass
+
+    # ③ 로그인 재시도 — 로그인 URL 후보를 넓게 시도
+    for lurl in (f'{base}/bbs/login.php', f'{base}/login.php', f'{base}/member/login.php', f'{base}/bbs/login_check.php'):
+        try:
+            d.get(lurl); time.sleep(1.5)
+            filled_login=False
+            for s2 in (("input[name='mb_id'],input[name='user_id'],input[name='login_id'],#login_id",mid),
+                       ("input[name='mb_password'],input[name='user_pw'],input[name='passwd'],input[type='password']",pw)):
+                for el in _safe_find(d,s2[0]):
+                    try:
+                        if el.is_displayed(): el.clear(); el.send_keys(s2[1]); filled_login=True; break
+                    except Exception: pass
+            if not filled_login: continue
+            for lsel in ("form[name='flogin'] input[type='submit']","form[action*='login_check'] input[type='submit']",
+                         "form[action*='login'] input[type='submit']","form[action*='login'] button[type='submit']",
+                         "#login_fs .btn_submit","input[type='submit']","button[type='submit']"):
+                for el in _safe_find(d,lsel):
+                    try:
+                        if el.is_displayed(): el.click(); break
+                    except Exception: pass
+            time.sleep(2); dismiss_alerts(d)
+            if _logged_in(): return _mark_success('로그인 확인')
+        except Exception: continue
+    return False,'가입 제출했으나 로그인 확인 실패(가입 규칙·중복ID·승인제·비표준 로그인폼 가능)'
 
 def _safe_find(d, sel):
     try: return d.find_elements(__import__('selenium.webdriver.common.by',fromlist=['By']).By.CSS_SELECTOR, sel) or []
