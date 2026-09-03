@@ -5720,6 +5720,56 @@ def api_site_learn(sid):
                     'analysis':analysis,'learned':learned})
 
 # ---- 예약 스케줄 CRUD ----
+@app.route('/api/schedules/karaoke-oneclick',methods=['POST'])
+def api_sched_karaoke():
+    """노래방 스케줄 원클릭: discover_direct_queries(지역+업종 조합)를 발행용 키워드
+    풀로 변환해 넣고(브랜드 빈값), 검증 완료 사이트 전체에 매일 발행 스케줄을 등록한다."""
+    cfg=load_config()
+    d=request.get_json(silent=True) or {}
+    SERVICES=['하이퍼블릭','기모노룸','레깅스룸','가라오케','노래주점','룸살롱','룸싸롱','풀싸롱',
+              '쓰리노','셔츠룸','다국적','퍼블릭','노래방']
+    def _split(q):
+        q=q.strip()
+        for sv in sorted(SERVICES,key=len,reverse=True):
+            if q.endswith(sv): return q[:-len(sv)].strip(), sv
+        return '', ''
+    seen=set(); pool=[]
+    for line in (cfg.get('discover_direct_queries','') or '').splitlines():
+        line=line.strip()
+        if not line or line.startswith('#'): continue
+        region,svc=_split(line)
+        if not region or not svc: continue
+        key=(region,svc)
+        if key in seen: continue
+        seen.add(key)
+        pool.append({'지역':region,'서비스':svc,'브랜드':''})  # 브랜드 없이(지역+서비스만)
+    if not pool:
+        return jsonify({'ok':False,'error':'discover_direct_queries에서 지역+업종 조합을 찾지 못했습니다'})
+    save_keywords(pool)
+    # 검증 완료(실게시 검증 + 허용) 사이트 대상 스케줄 등록
+    sites=load_sites()
+    verified=[s for s in sites if is_permitted(s) and s.get('status')!='rejected'
+              and s.get('write_test_status')=='passed'
+              and re.match(r'^https?://', str(s.get('verified_post_url') or ''))]
+    if not verified:
+        return jsonify({'ok':True,'keywords':len(pool),'schedule':None,
+                        'warning':'키워드는 저장했으나 검증 완료 사이트가 없어 스케줄은 만들지 않았습니다'})
+    times=d.get('times') or ['10:00']   # 기본 매일 오전 10시(사장님이 UI에서 변경 가능)
+    scheds=load_scheds()
+    sc={'id':'karaoke_auto','name':'노래방 자동발행(검증사이트)',
+        'keyword_sets':[],   # 빈 리스트 = 공용 키워드 풀(방금 저장한 것) 사용
+        'site_ids':[s.get('id') for s in verified],
+        'times':times,'days':[],'enabled':True,
+        'count':max(1,int(d.get('count',1) or 1)),'last_run':'','completed_keys':[],'completed_at':''}
+    ex=[x for x in scheds if x.get('id')=='karaoke_auto']
+    if ex: scheds[scheds.index(ex[0])].update(sc)
+    else: scheds.append(sc)
+    save_scheds(scheds)
+    add_log(f'[노래방 스케줄] 키워드 {len(pool)}개 로드 · 검증사이트 {len(verified)}곳 · 매일 {",".join(times)} 발행 예약')
+    return jsonify({'ok':True,'keywords':len(pool),'sites':len(verified),
+                    'site_names':[(s.get('name') or s.get('site_url',''))[:20] for s in verified],
+                    'times':times,'count':sc['count']})
+
 @app.route('/api/schedules',methods=['GET','POST','DELETE'])
 def api_scheds():
     if request.method=='POST':
@@ -6000,6 +6050,11 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 <div class="row" style="margin-top:8px;padding-top:8px;border-top:1px solid var(--bd)">
 <button class="btn btn-p" id="allInOneBtn" onclick="runAllInOne()" style="font-weight:700">⚡ 올인원 실행 (발굴→가입→발행→등록)</button>
 <span style="flex:1"></span></div>
+<div class="row" style="margin-top:6px;align-items:center;gap:6px">
+<button class="btn btn-g" id="karaokeSchedBtn" onclick="setupKaraokeSchedule()" style="font-weight:700">🎤 노래방 스케줄 켜기 (검증사이트 자동발행)</button>
+<label style="font-size:11px;color:var(--d)">매일 <input type="time" id="karTime" value="10:00" style="width:auto"> · 사이트당 <input type="number" id="karCount" value="1" min="1" max="10" style="width:48px">건</label>
+<span style="flex:1"></span><span id="karStatus" style="font-size:11px;color:var(--d)"></span></div>
+<div style="font-size:10px;color:var(--y);margin:2px 0">노래방 키워드(지역+업종)를 발행 풀에 넣고, 실게시 검증된 사이트 전체에 매일 자동발행 예약을 겁니다. 각 사이트 하루한도/간격은 사이트 설정값을 따릅니다.</div>
 <div class="row" style="margin-top:6px">
 <button class="btn btn-v" id="pipeRunBtn" onclick="pipelineRun()">🤖 완전 자동 파이프라인 실행 (가입→실발행→등록)</button>
 <label style="display:flex;align-items:center;gap:4px;font-size:11px">개수 <input type="number" id="pipeBatch" value="1" min="1" max="20" style="width:52px"></label>
@@ -6235,6 +6290,27 @@ async function makeRegionalKeywords(){const data=await loadRegionTool();if(!data
 async function previewRegionalKeywords(){const rows=await makeRegionalKeywords();$('rgCount').textContent=rows.length.toLocaleString()+'개 생성 예정'}
 async function applyRegionalKeywords(replace){const rows=await makeRegionalKeywords();if(!rows.length)return;if(rows.length>50000){toast('5만 개를 초과합니다. 지역 또는 단계를 줄여주세요','er');return}const current=replace?[]:$('cDDirect').value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);const merged=[...new Set(current.concat(rows))];$('cDDirect').value=merged.join('\n');$('rgCount').textContent=rows.length.toLocaleString()+'개 생성 · 전체 '+merged.length.toLocaleString()+'개';toast('목록에 반영됨 · 설정 저장을 눌러주세요','ok')}
 async function screenNow(){toast('검수 중...(최대 1분)');const r=await api('/candidates/screen','POST',{limit:20});if(r&&r.ok){toast(r.screened+'건 검수 완료');renderCands()}}
+async function setupKaraokeSchedule(){
+  const btn=document.getElementById('karaokeSchedBtn');
+  const st=document.getElementById('karStatus');
+  const time=(document.getElementById('karTime')||{}).value||'10:00';
+  const count=Math.max(1,parseInt((document.getElementById('karCount')||{}).value||'1',10)||1);
+  if(btn){btn.disabled=true;btn.textContent='🎤 설정 중...';}
+  if(st)st.textContent='';
+  try{
+    const r=await api('/schedules/karaoke-oneclick','POST',{times:[time],count:count});
+    if(r&&r.ok){
+      if(r.schedule===null||r.warning){
+        toast(r.warning||'키워드만 저장됨','er');
+        if(st)st.textContent='키워드 '+(r.keywords||0)+'개 저장 · '+(r.warning||'');
+      }else{
+        toast('🎤 노래방 스케줄 켜짐 · 키워드 '+r.keywords+'개 · '+r.sites+'곳 매일 '+(r.times||[]).join(',')+' 발행');
+        if(st)st.textContent='✅ 켜짐: 키워드 '+r.keywords+'개 · '+r.sites+'곳('+(r.site_names||[]).join(', ')+') 매일 '+(r.times||[]).join(',')+' 사이트당 '+r.count+'건';
+      }
+    }else{ toast((r&&r.error)||'설정 실패','er'); if(st)st.textContent=(r&&r.error)||'실패'; }
+  }catch(e){ toast(e.message,'er'); if(st)st.textContent=e.message; }
+  if(btn){btn.disabled=false;btn.textContent='🎤 노래방 스케줄 켜기 (검증사이트 자동발행)';}
+}
 async function runAllInOne(){
   // 올인원: Brave 발굴(게시판찾기) → 이어서 완전자동 파이프라인(가입→발행→등록)을 한 번에.
   const btn=document.getElementById('allInOneBtn');
