@@ -352,24 +352,55 @@ def _signup_form_measure(site):
             t=' '.join(data.split())
             if t: self.text.append(t)
     base=_signup_origin(site); platform=site.get('platform') or 'gnuboard'
-    url=site.get('signup_url') or base+('/member/join.html' if platform=='cafe24' else '/bbs/register.php')
     sess=_rq.Session(); hdr={'User-Agent':'Mozilla/5.0 (signup-form-audit; administrator initiated)'}
-    r=sess.get(url,timeout=20,verify=False,headers=hdr,allow_redirects=True); r.raise_for_status()
-    html=r.text; measured_url=r.url
-    # 그누보드 약관 화면이면 동의값을 세션에 전달해 실제 가입 폼까지만 조회한다.
-    if platform!='cafe24' and not re.search(r'name=["\']mb_password["\']',html,re.I):
-        form_url=urllib.parse.urljoin(r.url,'register_form.php')
-        r=sess.post(form_url,data={'agree':'1','agree2':'1'},timeout=20,verify=False,headers=hdr,allow_redirects=True)
-        r.raise_for_status(); html=r.text; measured_url=r.url
-    p=FormParser(); p.feed(html)
     def signup_forms(parsed):
         out=[]
         for f in parsed.forms:
             keys=' '.join((x.get('name') or '')+' '+(x.get('id') or '') for x in f['fields']).lower()
             action=(f.get('action') or '').lower()
-            if ('register_form_update' in action or 'member/join' in action or
-                (re.search(r'(password_re|password_confirm|passwd_confirm)',keys) and re.search(r'(email|nick|name)',keys))): out.append(f)
+            pw_count=sum(1 for x in f['fields'] if (x.get('type') or '').lower()=='password')
+            has_id=bool(re.search(r'(mb_id|member_id|login_id|user.?id|reg_mb_id)',keys))
+            # 로그인 폼 오인 방지: 로그인 액션이 명확하면 제외
+            is_login=('login' in action or 'login_check' in action) and pw_count<=1 and 'register' not in action and 'join' not in action
+            # 가입 폼 인정 조건(완화): 액션이 가입계열 OR 비번2개(가입/비번확인) OR (아이디필드+비번 존재)
+            looks_signup=(
+                'register' in action or 'register_form_update' in action or 'member/join' in action or 'join' in action
+                or pw_count>=2
+                or (has_id and pw_count>=1)
+                or (re.search(r'(password_re|password_confirm|passwd_confirm|mb_password_re)',keys) and re.search(r'(email|nick|name)',keys))
+            )
+            if looks_signup and not is_login: out.append(f)
         return out
+    # 가입 URL 후보(설치 경로가 제각각이라 여러 표준 경로를 순차 시도). 첫 폼 발견에서 멈춘다.
+    if site.get('signup_url'):
+        url_candidates=[site['signup_url']]
+    elif platform=='cafe24':
+        url_candidates=[base+'/member/join.html',base+'/member/agreement.html']
+    else:
+        url_candidates=[base+p for p in ('/bbs/register.php','/register.php',
+                        '/gnu/bbs/register.php','/g5/bbs/register.php','/bbs/register_form.php')]
+    def _measure_url(url):
+        r=sess.get(url,timeout=20,verify=False,headers=hdr,allow_redirects=True); r.raise_for_status()
+        html=r.text; measured_url=r.url
+        # 그누보드 약관 화면이면 동의값을 세션에 전달해 실제 가입 폼까지만 조회한다.
+        if platform!='cafe24' and not re.search(r'name=["\']mb_password["\']',html,re.I):
+            form_url=urllib.parse.urljoin(r.url,'register_form.php')
+            try:
+                r2=sess.post(form_url,data={'agree':'1','agree2':'1'},timeout=20,verify=False,headers=hdr,allow_redirects=True)
+                r2.raise_for_status(); html=r2.text; measured_url=r2.url
+            except Exception: pass
+        return html, measured_url
+    url=url_candidates[0]; html=''; measured_url=url; forms=[]
+    for cand in url_candidates:
+        try:
+            html, measured_url = _measure_url(cand)
+        except Exception:
+            continue
+        p=FormParser(); p.feed(html)
+        forms=signup_forms(p)
+        if forms: url=cand; break
+        url=cand  # 마지막 시도 URL 보존(폼 못 찾아도 Selenium 폴백에서 씀)
+    p=FormParser(); p.feed(html)
     forms=signup_forms(p)
     # 정적 요청에서 상단 로그인폼만 보이는 사이트는 Selenium으로 약관 다음 화면까지 재측정한다.
     if not forms:
