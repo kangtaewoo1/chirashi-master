@@ -1755,8 +1755,18 @@ def gnuboard_post(site, title, content_html):
     # 로그인
     if mid:
         d.get(f'{bbs}/login.php'); time.sleep(2)
-        d.find_element(By.CSS_SELECTOR,"input[name='mb_id']").send_keys(mid)
-        d.find_element(By.CSS_SELECTOR,"input[name='mb_password']").send_keys(mpw)
+        # 단수 find_element는 칸이 없으면 예외로 전체 발행이 죽는다 → _safe_find로 방어.
+        id_ok=False; pw_ok=False
+        for el in _safe_find(d,"input[name='mb_id'],input[name='user_id'],input[name='login_id']"):
+            try:
+                if el.is_displayed(): el.clear(); el.send_keys(mid); id_ok=True; break
+            except Exception: pass
+        for el in _safe_find(d,"input[name='mb_password'],input[name='user_pw'],input[name='passwd'],input[type='password']"):
+            try:
+                if el.is_displayed(): el.clear(); el.send_keys(mpw); pw_ok=True; break
+            except Exception: pass
+        if not (id_ok and pw_ok):
+            return False,'로그인 실패 — 로그인 입력칸을 찾지 못함(비표준 로그인폼)'
         # 제출 버튼은 로그인 폼(#login_fs/flogin/action*=login_check) 안의 것만. write.php와 동일하게
         # 헤더 검색폼(fsearchbox)의 검색 버튼이 문서상 먼저라 그냥 submit 셀렉터를 쓰면 잘못 잡힌다.
         login_btn=None
@@ -1778,6 +1788,11 @@ def gnuboard_post(site, title, content_html):
             try: d.execute_script("var f=document.forms['flogin']||document.querySelector(\"form[action*='login_check']\");if(f){if(f.requestSubmit)f.requestSubmit();else f.submit();}")
             except Exception: pass
         time.sleep(2); dismiss_alerts(d)
+        # 로그인 실제 성공 확인(로그아웃 링크 등). 실패면 조기 반환해 원인을 명확히.
+        try: _b=d.find_element(By.TAG_NAME,'body').text[:2000]
+        except Exception: _b=''
+        if not (('로그아웃' in _b) or ('logout' in (d.page_source or '').lower()) or ('mypage' in (d.page_source or '').lower())):
+            return False,'로그인 실패 — 아이디/비번 불일치 또는 승인대기(자동가입 계정 확인 필요)'
 
     # 글쓰기 페이지
     d.get(f'{bbs}/write.php?bo_table={bo}'); time.sleep(2)
@@ -3790,6 +3805,11 @@ def auto_signup(site, submit=True):
         src=(d.page_source or '').lower()
         return ('로그아웃' in body) or ('logout' in src) or ('mypage' in src) or ('회원정보수정' in body)
     def _mark_success(msg):
+        # ★핵심: 가입한 계정을 넘겨받은 site dict에 직접 심는다. auto_pipeline은 임시 dict
+        # (id='cand_...')를 넘기는데, set_site_flag는 저장된 사이트만 갱신하므로 이 대입이 없으면
+        # tmp['mb_id']가 빈 채로 남아 발행 단계에서 '비회원 발행'→로그인필요 게시판 거부가 된다.
+        # 이 두 줄이 '가입은 됐는데 발행 로그인 실패' 반복의 실제 해결.
+        site['mb_id']=mid; site['mb_pass']=pw
         set_site_flag(site.get('id'),mb_id=mid,mb_pass=pw,signup_status='complete',
                       login_saved=True,signup_updated_at=datetime.now().isoformat(timespec='seconds'))
         add_log(f'[자동가입 성공] {site.get("name") or site.get("site_url","")} — {mid} ({msg})')
