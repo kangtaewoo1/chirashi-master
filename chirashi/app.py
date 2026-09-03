@@ -1485,6 +1485,25 @@ def editor_content_for_page(d,content_html):
     html_mode=enable_html_mode(d)
     return (content_html if html_mode else html_to_plain(content_html)),html_mode
 
+def _brand_email(cfg, site=None):
+    """발행 연락처(wr_email)용 이메일을 자동 생성한다. post_email이 설정돼 있으면 그걸 쓰고,
+    없으면 브랜드명을 영문 슬러그로 바꿔 <slug><사이트별번호>@gmail.com 형태로 만든다.
+    (인증메일이 오지 않는 단순 연락처 칸이라 실제 수신 불가여도 무방하다.)
+    사이트마다 뒤 번호가 달라지도록 site id 해시를 붙여 한 주소를 전 사이트에 도배하지 않는다."""
+    fixed=(cfg.get('post_email') or '').strip()
+    if fixed: return fixed
+    slug=re.sub(r'[^a-z0-9]','',(cfg.get('brand') or 'post').strip().lower())
+    if not slug or not re.match(r'^[a-z]',slug):  # 한글 등으로 슬러그가 비면 안전한 기본값
+        slug='post'+(slug or '')
+    slug=slug[:20]
+    suffix=''
+    if site is not None:
+        sid=str(site.get('id') or site.get('site_url') or '')
+        if sid:
+            import hashlib
+            suffix=str(int(hashlib.md5(sid.encode()).hexdigest(),16)%1000)  # 사이트별 0~999 고정 번호(돌려쓰기)
+    return f'{slug}{suffix}@gmail.com'
+
 def fill_required_post_fields(d,site):
     """빨간 별표/required 추가 필드를 의미에 맞는 설정값으로 채운다."""
     from selenium.webdriver.common.by import By
@@ -1493,6 +1512,7 @@ def fill_required_post_fields(d,site):
     guest_pw=(cfg.get('guest_post_password') or '').strip()
     video_url=(cfg.get('video_url') or '').strip()
     landing=(cfg.get('landing_url') or '').strip()
+    post_email=_brand_email(cfg, site)  # wr_email 등 이메일 필수항목 자동 채움값(빈값 방지)
     try: page_text=(d.find_element(By.TAG_NAME,'body').text or '').lower()[:6000]
     except Exception: page_text=''
     # KBoard 비회원 글쓰기는 별표 필수항목이어도 required 속성이 없는
@@ -1538,14 +1558,14 @@ def fill_required_post_fields(d,site):
         value=''
         if re.search(r'(wr_name|이름)',blob): value=brand
         elif typ=='password' or re.search(r'(password|passwd|비밀번호)',blob): value=guest_pw
-        elif re.search(r'(email|e-mail|이메일)',blob): value=(cfg.get('post_email') or '')
+        elif re.search(r'(email|e-mail|이메일)',blob): value=post_email  # 자동 브랜드메일(빈값 방지)
         elif re.search(r'(tel|phone|연락처|전화|휴대)',blob): value=(cfg.get('phone') or brand)
         elif re.search(r'(youtube|youtu\.be|vimeo|동영상|영상)',blob) or (name in ('wr_link1','link1') and re.search(r'(youtube|유투브|유튜브|vimeo|비메오|동영상)',page_text)): value=video_url or landing or site.get('site_url','')
         elif re.search(r'(link|url|homepage|홈페이지|링크)',blob): value=landing or site.get('site_url','')
         else:
             # 의미를 특정 못한 필수 텍스트/텍스트영역(그누보드 wr_2/wr_5 등 커스텀 확장필드)은
             # 발행을 막지 말고 안전한 일반값으로 채운다(브랜드명). 이메일 형태면 이메일값.
-            value=(cfg.get('post_email') or f'{brand}@gmail.com') if 'mail' in blob else brand
+            value=post_email if 'mail' in blob else brand
         if value:
             if _robust_fill(d,el,value): filled.append(name)
             else: missing.append(name)
@@ -6384,10 +6404,16 @@ def main():
     print(f'\n찌라시 마스터 v6 - 정직 발행 모드\nhttp://{host}:{port}\n브랜드: {cfg.get("brand","설정필요")}')
     if os.environ.get('CHIRASHI_PASSWORD') is None and cfg.get('password','admin1234')=='admin1234':
         print('⚠️  기본 비밀번호(admin1234) 사용 중 — 공개 서버라면 반드시 변경하세요!')
-    # 재시작 복구: 미완료 작업 큐 복원
+    # 재시작 복구: 미완료 작업 큐 복원 → 복구된 작업이 있으면 워커를 띄워 이어서 발행한다.
+    # (큐가 비어 있으면 워커를 띄우지 않아 불필요한 자동발행이 없다. 이후 스케줄/원클릭이
+    #  큐에 작업을 넣으면 각 호출부가 알아서 start_workers를 부른다.)
     try:
         n=recover_queue()
-        if n: print(f'↻ 미완료 작업 {n}건 복구됨 (워커 시작 시 이어서 발행)')
+        if n:
+            print(f'↻ 미완료 작업 {n}건 복구됨 → 워커 자동 시작해 이어서 발행')
+            try:
+                if not wk_active: start_workers(cfg.get('workers',2))
+            except Exception as e: print('워커 자동시작 실패:',e)
     except Exception as e: print('복구 건너뜀:',e)
     # 시작 시 사이트 목록 최신화: 발행 막힌 사이트 자동 탈락
     try:
