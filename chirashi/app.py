@@ -5981,6 +5981,9 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 <span style="flex:1"></span>
 <button class="btn btn-r btn-xs" onclick="if(confirm('탈락 후보만 삭제할까요?'))clearRejected()">탈락 정리</button></div>
 <div class="row" style="margin-top:8px;padding-top:8px;border-top:1px solid var(--bd)">
+<button class="btn btn-p" id="allInOneBtn" onclick="runAllInOne()" style="font-weight:700">⚡ 올인원 실행 (발굴→가입→발행→등록)</button>
+<span style="flex:1"></span></div>
+<div class="row" style="margin-top:6px">
 <button class="btn btn-v" id="pipeRunBtn" onclick="pipelineRun()">🤖 완전 자동 파이프라인 실행 (가입→실발행→등록)</button>
 <label style="display:flex;align-items:center;gap:4px;font-size:11px">개수 <input type="number" id="pipeBatch" value="1" min="1" max="20" style="width:52px"></label>
 <span style="flex:1"></span><span id="pipeStatus" style="font-size:11px;color:var(--d)"></span></div>
@@ -6215,6 +6218,37 @@ async function makeRegionalKeywords(){const data=await loadRegionTool();if(!data
 async function previewRegionalKeywords(){const rows=await makeRegionalKeywords();$('rgCount').textContent=rows.length.toLocaleString()+'개 생성 예정'}
 async function applyRegionalKeywords(replace){const rows=await makeRegionalKeywords();if(!rows.length)return;if(rows.length>50000){toast('5만 개를 초과합니다. 지역 또는 단계를 줄여주세요','er');return}const current=replace?[]:$('cDDirect').value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);const merged=[...new Set(current.concat(rows))];$('cDDirect').value=merged.join('\n');$('rgCount').textContent=rows.length.toLocaleString()+'개 생성 · 전체 '+merged.length.toLocaleString()+'개';toast('목록에 반영됨 · 설정 저장을 눌러주세요','ok')}
 async function screenNow(){toast('검수 중...(최대 1분)');const r=await api('/candidates/screen','POST',{limit:20});if(r&&r.ok){toast(r.screened+'건 검수 완료');renderCands()}}
+async function runAllInOne(){
+  // 올인원: Brave 발굴(게시판찾기) → 이어서 완전자동 파이프라인(가입→발행→등록)을 한 번에.
+  const btn=document.getElementById('allInOneBtn');
+  const logBox=document.getElementById('pipeLog');
+  if(logBox){logBox.innerHTML='';logBox.style.display='block';}
+  const pLog=(line,cls)=>{ if(!logBox)return; const color=cls==='ok'?'var(--g)':cls==='er'?'var(--r)':cls==='hi'?'var(--p)':'var(--d)';
+    logBox.innerHTML+=`<div style="color:${color}">${line}</div>`; logBox.scrollTop=logBox.scrollHeight; };
+  if(btn){btn.disabled=true;btn.textContent='⚡ 발굴 중...';}
+  try{
+    // 1단계: 발굴(게시판찾기 우선). 여러 번 돌려 후보를 넉넉히 쌓는다.
+    pLog('▶ 1단계: Brave 게시판 발굴 시작','hi');
+    toast('⚡ 올인원: 게시판 발굴 중...');
+    let totalAdded=0;
+    for(let round=1; round<=3; round++){
+      const r=await api('/candidates/discover','POST',{queries:5});
+      if(r&&r.ok){ totalAdded+=(r.added||0);
+        pLog(`· 발굴 ${round}회차: 신규 ${r.added||0}개 · 검수 ${r.screened||0}건 (오늘 검색 ${r.today_queries||0}회)`, (r.added>0?'ok':''));
+        if((r.today_queries||0)>=100){ pLog('· 오늘 검색 한도(100) 도달 — 발굴 중단','er'); break; }
+      } else { pLog('· 발굴 오류: '+((r&&r.error)||''),'er'); break; }
+    }
+    pLog(`▶ 1단계 완료 — 신규 후보 ${totalAdded}개`, (totalAdded>0?'ok':'er'));
+    if(typeof renderCands==='function') renderCands();
+  }catch(e){ pLog('✖ 발굴 실패: '+e.message,'er'); }
+  if(btn){btn.textContent='⚡ 발행 중...';}
+  pLog('▶ 2단계: 완전 자동 파이프라인 (가입→발행→등록)','hi');
+  // 2단계: 기존 파이프라인 실행부를 그대로 재사용(로그·상태폴링 포함)
+  try{ await pipelineRun(); }
+  catch(e){ pLog('✖ 파이프라인 실패: '+e.message,'er'); }
+  if(btn){btn.disabled=false;btn.textContent='⚡ 올인원 실행 (발굴→가입→발행→등록)';}
+  pLog('■ 올인원 종료','hi');
+}
 async function pipelineRun(){
   // 이 브라우저는 네이티브 confirm/prompt가 막혀 있으므로 사용하지 않는다.
   // 배치 개수는 입력칸(pipeBatch)에서 읽고, 실행 확인은 버튼 클릭 자체로 갈음.
