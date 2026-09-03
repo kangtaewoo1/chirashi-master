@@ -4338,7 +4338,12 @@ def _sec_headers(resp):
     resp.headers['Content-Security-Policy']="frame-ancestors 'none'"
     resp.headers['X-Content-Type-Options']='nosniff'
     resp.headers['Referrer-Policy']='no-referrer'
-    resp.headers['Cache-Control']='no-store'
+    # 캐시 완전 방지 — Cloudflare가 옛 화면(구버전)을 붙잡는 문제 해결.
+    # Cloudflare는 Cache-Control만으론 자체 규칙으로 캐시할 수 있어, CDN 전용 헤더도 함께 보낸다.
+    resp.headers['Cache-Control']='no-store, no-cache, must-revalidate, max-age=0'
+    resp.headers['CDN-Cache-Control']='no-store'
+    resp.headers['Cloudflare-CDN-Cache-Control']='no-store'
+    resp.headers['Pragma']='no-cache'
     resp.headers['Permissions-Policy']='geolocation=(), camera=(), microphone=()'
     return resp
 
@@ -6555,7 +6560,7 @@ async function loadOpenAIUsage(){
 // ---- API 비용 대시보드 (3개 API 통합) ----
 let _usdkrwRate=0;  // USD→KRW 환율(loadUsageDashboard에서 갱신)
 function _usd(v){const n=Number(v||0);const d='$'+(n<0.01&&n>0?n.toFixed(5):n.toFixed(4));return d}
-function _krw(v){const n=Number(v||0);if(!_usdkrwRate)return '';const w=n*_usdkrwRate;
+function _krw(v){const n=Number(v||0);const r=_usdkrwRate||1350;const w=n*r;  // 환율 미확보 시에도 기본 1350으로 원화 표시(안전망)
   // 작은 금액도 원단위까지, 큰 금액은 천단위 콤마
   return '₩'+(w<10?w.toFixed(1):Math.round(w).toLocaleString());}
 function _money(v){const k=_krw(v);return _usd(v)+(k?` <span style="font-size:.82em;color:var(--d)">(${k})</span>`:'');}
