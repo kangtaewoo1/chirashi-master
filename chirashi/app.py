@@ -3355,7 +3355,12 @@ def add_candidates_from(items, cfg, source='search'):
             if int(check.get('digits',0))<8 and not url_is_board:
                 blocked_title+=1; continue
             form_check=screen_candidate(url,cfg) if source!='manual' else {}
-            if source!='manual' and not form_check.get('write_form'):
+            # write_form이 없어도 '게시판 URL이면서 로그인 필요' 후보는 받아둔다 —
+            # auto_pipeline이 자동가입(2captcha·mail.tm)으로 뚫은 뒤 발행을 시도한다.
+            # (비회원 글쓰기 게시판만 받던 관문을, 로그인 게시판까지 확대)
+            _is_board_login=bool(form_check.get('login_required')) and (
+                form_check.get('platform') in ('gnuboard','cafe24','kboard') or url_is_board)
+            if source!='manual' and not form_check.get('write_form') and not _is_board_login:
                 blocked_write+=1; continue
             if source!='manual':
                 form_check['screened']=True
