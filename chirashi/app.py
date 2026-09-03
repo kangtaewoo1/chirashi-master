@@ -258,6 +258,36 @@ def _openai_admin_costs(cfg):
         if bdate is not None: daily.append({'date':bdate,'cost':round(bsum,6)})
     return {'total_usd':round(total,6),'daily':daily}
 
+EXRATE_FILE = DATA_DIR / 'exrate_cache.json'  # USD→KRW 환율 캐시(10분)
+def _usd_krw(cfg=None):
+    """USD→KRW 실시간 환율을 반환한다. 무료 API로 조회하고 10분 캐시,
+    실패 시 캐시값 또는 설정값(usdkrw_rate, 기본 1350)으로 폴백한다.
+    반환: {'rate':float, 'source':'live'|'cache'|'fallback', 'updated_at':str}"""
+    cfg=cfg or load_config()
+    fallback=float((cfg or {}).get('usdkrw_rate') or 1350)
+    cache=load_json(EXRATE_FILE,{}) or {}
+    # 캐시 10분 이내면 그대로
+    try:
+        if cache.get('rate') and cache.get('ts'):
+            age=datetime.utcnow().timestamp()-float(cache['ts'])
+            if age < 600:
+                return {'rate':float(cache['rate']),'source':'cache','updated_at':cache.get('updated_at','')}
+    except Exception: pass
+    # 실시간 조회(무료·키불필요). 실패해도 본 기능을 막지 않는다.
+    try:
+        import requests as _rq
+        r=_rq.get('https://open.er-api.com/v6/latest/USD',timeout=6)
+        j=r.json(); rate=float(((j.get('rates') or {}).get('KRW')) or 0)
+        if rate>0:
+            now=datetime.now().astimezone().strftime('%Y-%m-%d %H:%M')
+            save_json(EXRATE_FILE,{'rate':rate,'ts':datetime.utcnow().timestamp(),'updated_at':now})
+            return {'rate':rate,'source':'live','updated_at':now}
+    except Exception: pass
+    # 폴백: 최근 캐시가 있으면 그걸, 없으면 설정값
+    if cache.get('rate'):
+        return {'rate':float(cache['rate']),'source':'cache','updated_at':cache.get('updated_at','')}
+    return {'rate':fallback,'source':'fallback','updated_at':''}
+
 def uploaded_images():
     out=[]
     for p in sorted(UPLOAD_DIR.iterdir(),key=lambda x:x.stat().st_mtime,reverse=True):
@@ -5503,6 +5533,7 @@ def api_usage():
     total_today=round(openai_block['today_cost_usd']+captcha_block['today_cost_usd']+brave_block['today_cost_usd'],6)
     return jsonify({'ok':True,'openai':openai_block,'twocaptcha':captcha_block,'brave':brave_block,
                     'total_month_usd':total_month,'total_today_usd':total_today,
+                    'usdkrw':_usd_krw(cfg),  # USD→KRW 실시간 환율(원화 표시용)
                     'note':'금액은 관리자키 실측(OpenAI)을 제외하면 설정 단가 기준 추정치입니다. 횟수는 정확합니다.'})
 
 @app.route('/api/test/<sid>',methods=['POST'])
@@ -6522,7 +6553,12 @@ async function loadOpenAIUsage(){
   }
 }
 // ---- API 비용 대시보드 (3개 API 통합) ----
-function _usd(v){const n=Number(v||0);return '$'+(n<0.01&&n>0?n.toFixed(5):n.toFixed(4))}
+let _usdkrwRate=0;  // USD→KRW 환율(loadUsageDashboard에서 갱신)
+function _usd(v){const n=Number(v||0);const d='$'+(n<0.01&&n>0?n.toFixed(5):n.toFixed(4));return d}
+function _krw(v){const n=Number(v||0);if(!_usdkrwRate)return '';const w=n*_usdkrwRate;
+  // 작은 금액도 원단위까지, 큰 금액은 천단위 콤마
+  return '₩'+(w<10?w.toFixed(1):Math.round(w).toLocaleString());}
+function _money(v){const k=_krw(v);return _usd(v)+(k?` <span style="font-size:.82em;color:var(--d)">(${k})</span>`:'');}
 function _bars(series,key){ // 미니 막대(일별/시간별). series=[{cost,count,...}]
   if(!series||!series.length)return '<div style="font-size:9px;color:var(--d)">데이터 없음</div>';
   const mx=Math.max(1,...series.map(x=>Number(x[key]||0)));
@@ -6538,9 +6574,9 @@ function _costCard(b,extraNote){
   return `<div class="twocap-shell">
     <div class="twocap-header"><span style="font-weight:700;color:var(--t)">${esc(b.label)}${est}</span><span style="font-size:9px;color:var(--d)">${esc(b.note||'')}</span></div>
     <div class="twocap-metrics" style="grid-template-columns:repeat(4,1fr)">
-      <div class="twocap-metric"><div class="label">이번 달</div><div class="value green">${_usd(b.month_cost_usd)}</div><div style="font-size:8px;color:var(--d)">${b.month_requests||0}회</div></div>
-      <div class="twocap-metric"><div class="label">오늘</div><div class="value blue">${_usd(b.today_cost_usd)}</div><div style="font-size:8px;color:var(--d)">${b.today_requests||0}회</div></div>
-      <div class="twocap-metric"><div class="label">횟수당(평균)</div><div class="value amber">${_usd(b.per_call_usd)}</div></div>
+      <div class="twocap-metric"><div class="label">이번 달</div><div class="value green">${_usd(b.month_cost_usd)}</div><div style="font-size:8px;color:var(--d)">${_krw(b.month_cost_usd)||''} · ${b.month_requests||0}회</div></div>
+      <div class="twocap-metric"><div class="label">오늘</div><div class="value blue">${_usd(b.today_cost_usd)}</div><div style="font-size:8px;color:var(--d)">${_krw(b.today_cost_usd)||''} · ${b.today_requests||0}회</div></div>
+      <div class="twocap-metric"><div class="label">횟수당(평균)</div><div class="value amber">${_usd(b.per_call_usd)}</div><div style="font-size:8px;color:var(--d)">${_krw(b.per_call_usd)||''}</div></div>
       <div class="twocap-metric"><div class="label">단가</div><div class="value" style="font-size:11px;line-height:1.35;color:var(--t)">${esc(upStr)}</div></div>
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:9px">
@@ -6564,9 +6600,11 @@ async function loadUsageDashboard(silent){
   const box=$('costCards'); if(box&&!silent)box.innerHTML='<div style="color:var(--d);font-size:11px">불러오는 중…</div>';
   const u=await api('/usage','GET');
   if(!u||!u.ok){if(box&&!silent)box.innerHTML='<div style="color:var(--y);font-size:11px">비용 정보를 불러오지 못했습니다.</div>';return}
-  $('costTotalMonth').textContent=_usd(u.total_month_usd);
-  $('costTotalToday').textContent=_usd(u.total_today_usd);
-  const ai=$('costAutoInfo'); if(ai){const t=new Date();ai.textContent='30초마다 자동 새로고침 · 갱신 '+String(t.getHours()).padStart(2,'0')+':'+String(t.getMinutes()).padStart(2,'0')+':'+String(t.getSeconds()).padStart(2,'0')}
+  _usdkrwRate=(u.usdkrw&&u.usdkrw.rate)||0;  // 환율 갱신(원화 병기용)
+  $('costTotalMonth').innerHTML=_money(u.total_month_usd);
+  $('costTotalToday').innerHTML=_money(u.total_today_usd);
+  const rateInfo=u.usdkrw?('환율 ₩'+Math.round(u.usdkrw.rate).toLocaleString()+'/$'+(u.usdkrw.source==='live'?' 실시간':u.usdkrw.source==='cache'?' 캐시':' 기본값')):'';
+  const ai=$('costAutoInfo'); if(ai){const t=new Date();ai.textContent='30초마다 자동 새로고침 · 갱신 '+String(t.getHours()).padStart(2,'0')+':'+String(t.getMinutes()).padStart(2,'0')+':'+String(t.getSeconds()).padStart(2,'0')+(rateInfo?' · '+rateInfo:'')}
   const o=u.openai||{},c=u.twocaptcha||{},b=u.brave||{};
   const oNote=o.admin_error?('관리자 조회 실패: '+esc(o.admin_error)):(o.remaining_budget_usd!=null?('남은 예산 '+_usd(o.remaining_budget_usd)):'');
   let cNote='';

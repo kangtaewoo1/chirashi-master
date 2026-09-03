@@ -23,6 +23,7 @@ chirashi/data/rejected_domains.json
 chirashi/data/openai_usage.json
 chirashi/data/captcha_usage.json
 chirashi/data/brave_usage.json
+chirashi/data/exrate_cache.json
 chirashi/data/twocaptcha_balance.json
 chirashi/data/workrooms.json
 chirashi/data/logs.json
