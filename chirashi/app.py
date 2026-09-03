@@ -892,9 +892,17 @@ def detect_captcha(d):
     low=html.lower()
     if 'cf-turnstile' in low or 'turnstile' in low: return 'turnstile'
     if 'h-captcha' in low or 'hcaptcha' in low: return 'hcaptcha'
-    if 'g-recaptcha' in low or 'grecaptcha' in low or 'recaptcha' in low: return 'recaptcha'
-    if ('captcha_key' in low or 'kcaptcha' in low or 'g5_captcha' in low
-        or '자동등록방지' in html or '자동입력방지' in html or '보안문자' in html or 'captcha' in low):
+    # kcaptcha(그누보드 이미지 캡차) 확실 신호는 recaptcha 문자열보다 먼저 확정한다.
+    # (실제로는 kcaptcha인데 페이지에 'recaptcha' 문자열만 있어 recaptcha로 오판→sitekey 못찾음
+    #  으로 실패하던 문제 수정. kcaptcha는 발행에서 2captcha로 이미 뚫린다.)
+    if 'captcha_key' in low or 'kcaptcha' in low or 'g5_captcha' in low \
+       or '자동등록방지' in html or '자동입력방지' in html:
+        return 'kcaptcha'
+    # reCAPTCHA는 실제 위젯/JS 객체가 있을 때만 인정한다(단순 'recaptcha' 문자열은 근거 약함).
+    if 'g-recaptcha' in low or 'grecaptcha' in low or 'data-sitekey' in low:
+        return 'recaptcha'
+    # 그 밖의 약한 신호(보안문자, 일반 'captcha' 문자열)는 그누보드 이미지 캡차로 처리.
+    if '보안문자' in html or 'recaptcha' in low or 'captcha' in low:
         return 'kcaptcha'
     return ''
 
