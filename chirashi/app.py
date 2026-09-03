@@ -2775,7 +2775,9 @@ def finalize_post(site,ok,fail_reason=''):
 
 def _site_permanent_block(s):
     """이 사이트가 '영구히 발행 불가'인지 판정. 사유 문자열 반환(아니면 '')."""
-    if s.get('signup_email_verification'): return '이메일 인증 필요(자동가입 불가)'
+    # 이메일 인증 필요만으로는 영구차단하지 않는다 — 자동가입이 mail.tm 임시메일로
+    # 인증을 실제 시도하기 때문(즉시차단 모순 제거). 진짜 안 되는 사이트는 아래
+    # fail_streak(연속 실패) 조건에서 걸러진다.
     tbr=str(s.get('technical_block_reason') or '')
     if any(k in tbr for k in ('폼을 찾지 못','글쓰기 폼','게시판ID')): return '글쓰기 폼 없음: '+tbr[:60]
     lfr=str(s.get('last_fail_reason') or '')
@@ -5108,11 +5110,8 @@ def api_site_signup_prepare(sid):
             for k in ['signup_profile_host','signup_rules','signup_url','signup_profile_version','signup_profile_changed','signup_profile_measured_at','signup_has_captcha','signup_email_verification']:
                 saved[k]=site.get(k)
         site=saved
-        if site.get('signup_email_verification'):
-            site.update({'signup_status':'rejected','signup_eligible':False,'signup_reject_reason':'이메일 인증 필요',
-                         'signup_updated_at':now})
-            save_sites(current)
-            return jsonify({'ok':False,'rejected':True,'error':'이메일 인증이 필요한 사이트라 가입 대상에서 제외했습니다'}),409
+        # 이메일 인증 필요 사이트도 제외하지 않는다 — 자동가입이 mail.tm 임시메일로 인증까지
+        # 시도한다(적극 시도). 참고용으로 인증 필요 표시만 남긴다.
         rules=d.get('rules') or site.get('signup_rules') or {}
         mid,pw=_signup_credentials(site,rules)
         raw_url=site.get('site_url',''); parts=urllib.parse.urlsplit(raw_url)
@@ -5140,9 +5139,7 @@ def api_site_signup_learn(sid):
         if saved:
             for k in ['signup_profile_host','signup_rules','signup_url','signup_profile_version','signup_profile_changed','signup_profile_measured_at','signup_has_captcha','signup_email_verification']:
                 saved[k]=site.get(k)
-            if site.get('signup_email_verification'):
-                saved.update({'signup_status':'rejected','signup_eligible':False,'signup_reject_reason':'이메일 인증 필요',
-                              'signup_updated_at':datetime.now().isoformat(timespec='seconds')})
+            # 이메일 인증 필요 사이트도 제외하지 않는다(자동가입이 mail.tm으로 인증 시도).
             save_sites(current)
     return jsonify({'ok':True,'version':profile['version'],'changed':site.get('signup_profile_changed',False),
                     'seen_count':profile['seen_count'],'rules':profile['rules'],'captcha':profile['captcha'],
