@@ -3619,6 +3619,18 @@ def auto_signup(site, submit=True):
         except Exception: pass
     if not _has_pw_field():
         return False,'가입 폼(비밀번호 입력칸)에 도달 실패 — 약관/인증 단계 확인'
+    # 2.5) 휴대폰 본인인증(SMS) 폼은 자동가입 불가 — 임시메일·캡차 비용 쓰기 전에 조기 제외.
+    # (본인인증을 통과해야 아이디/이름 칸이 활성화되는 폼. win_hp_cert 등 본인인증 버튼 존재.)
+    try:
+        page=(d.page_source or '').lower()
+        cert_signals=('win_hp_cert' in page or 'nice본인인증' in page or 'checkplus' in page
+                      or '휴대폰 본인인증' in (d.page_source or '') or '휴대폰본인인증' in (d.page_source or '')
+                      or 'kcb' in page and 'cert' in page)
+        # 아이디/이름 등 핵심 가입필드가 hidden이면 본인인증 후 노출되는 폼일 확률이 높다
+        name_hidden=bool(_safe_find(d,"input[name='mb_name'][type='hidden'],input[name='mb_id'][type='hidden']"))
+        if cert_signals and name_hidden:
+            return False,'휴대폰 본인인증 필요 — 자동가입 불가(본인인증 게시판 제외)'
+    except Exception: pass
     # 3) role별 필드 자동 입력 — 학습된 셀렉터 우선
     filled=[]
     def _fill(role, sel):
@@ -3639,16 +3651,34 @@ def auto_signup(site, submit=True):
     # 3.5) 그누보드 표준 필드명 폴백 — 학습 셀렉터로 못 채운 role을 표준 name/id로 재시도한다.
     # (그누보드는 회원가입 필드명이 표준화돼 있어, 학습이 어긋나도 대부분 이 폴백으로 구제된다.)
     GNU_STD={
-        'id':"#reg_mb_id,input[name='mb_id']",
-        'password':"#reg_mb_password,input[name='mb_password']",
-        'password_confirm':"#reg_mb_password_re,input[name='mb_password_re']",
-        'email':"#reg_mb_email,input[name='mb_email'],input[type='email']",
-        'name':"input[name='mb_name']",
-        'nickname':"#reg_mb_nick,input[name='mb_nick']",
+        'id':"#reg_mb_id,input[name='mb_id'],input[name='user_id'],input[name='userid'],input[name='login_id'],input[name='member_id'],input[name='m_id']",
+        'password':"#reg_mb_password,input[name='mb_password'],input[name='user_pw'],input[name='passwd'],input[name='password'],input[name='m_password']",
+        'password_confirm':"#reg_mb_password_re,input[name='mb_password_re'],input[name='passwd_re'],input[name='password_re'],input[name='re_password'],input[name='password2'],input[name='passwd_confirm']",
+        'email':"#reg_mb_email,input[name='mb_email'],input[name='email'],input[name='user_email'],input[type='email']",
+        'name':"input[name='mb_name'],input[name='name'],input[name='user_name']",
+        'nickname':"#reg_mb_nick,input[name='mb_nick'],input[name='nickname'],input[name='nick']",
     }
     for role,sel in GNU_STD.items():
         if role not in filled:
             _fill(role, sel)
+    # 3.6) type 기반 위치추정 최후 폴백 — name/id가 완전 비표준이라 위에서 못 채운 경우,
+    # 화면에 보이는 password 입력칸 순서로 비번/비번확인을, 첫 text 칸을 아이디로 채운다.
+    if 'password' not in filled:
+        try:
+            pws=[el for el in _safe_find(d,"input[type='password']") if el.is_displayed()]
+            if pws:
+                pws[0].clear(); pws[0].send_keys(pw); filled.append('password')
+                if len(pws)>=2 and 'password_confirm' not in filled:
+                    pws[1].clear(); pws[1].send_keys(pw); filled.append('password_confirm')
+        except Exception: pass
+    if 'id' not in filled:
+        try:
+            # 이미 채운 요소를 제외한, 보이는 첫 text 입력칸을 아이디로 추정
+            texts=[el for el in _safe_find(d,"input[type='text'],input:not([type])") if el.is_displayed()
+                   and not (el.get_attribute('value') or '').strip()]
+            if texts:
+                texts[0].clear(); texts[0].send_keys(mid); filled.append('id')
+        except Exception: pass
     add_log(f'[자동가입 입력] {site.get("name") or site.get("site_url","")} — 입력: {",".join(filled) or "없음"}')
     if 'id' not in filled or 'password' not in filled:
         return False,f'가입 필수필드 입력 실패(입력됨: {",".join(filled) or "없음"})'
@@ -3784,6 +3814,21 @@ def auto_pipeline_once(limit=5):
     site_domains={_domain_of(s.get('site_url','')) for s in load_sites()}
     with _cand_lock:
         cands=load_cands()
+        # 자동가입 실패로 rejected된 게시판을 하루 지나면 ready로 되살려 새 코드로 재시도한다.
+        # (자동가입 로직이 개선돼도 옛 실패가 rejected로 굳어 재시도조차 안 되던 문제 방지.)
+        # 무한 반복 방지: 후보당 재시도 3회까지. 불법/주차/영구탈락은 되살리지 않는다.
+        revived=0; today_s=_kst_now().strftime('%Y-%m-%d')
+        for c in cands:
+            rr=str(c.get('reject_reason',''))
+            if (c.get('status')=='rejected' and '자동가입 실패' in rr
+                    and '본인인증' not in rr  # 휴대폰 본인인증 게시판은 되살려도 무의미 → 제외
+                    and not c.get('illegal') and not c.get('parked')
+                    and int(c.get('signup_retry',0) or 0) < 3
+                    and str(c.get('signup_retry_date',''))!=today_s):
+                c['status']='ready'; c['signup_retry']=int(c.get('signup_retry',0) or 0)+1
+                c['signup_retry_date']=today_s; revived+=1
+        if revived:
+            save_cands(cands); add_log(f'[자동가입 재시도] 이전 실패 게시판 {revived}곳 재시도 대상 복원')
     # 대상: 검수완료(ready) + 아직 사이트 미등록 + 자동탈락 아님 + '실제 글쓰기 경로'가 있는 것만.
     # (114/맵 등 전화번호·디렉토리 사이트는 write_form도 bo_table도 없어 가입/발행이 불가 → 제외)
     def _has_write_path(c):
