@@ -6560,7 +6560,15 @@ const publishable=sites.filter(s=>!!s.permission&&sources.includes(s.registratio
 // 체크 상태 보존
 const checked=new Set(getSiteIds());
 if(!sites.length){$('siteList').innerHTML='<p style="color:var(--d);padding:30px;text-align:center">등록된 사이트가 없습니다</p>';return}
-$('siteList').innerHTML='<table><thead><tr><th><input type="checkbox" id="allCb" onclick="document.querySelectorAll(\'.cb\').forEach(c=>c.checked=this.checked)"></th><th>이름</th><th>허용</th><th>URL</th><th>게시판</th><th>오늘</th><th>상태</th><th>동작</th></tr></thead><tbody>'+sites.map(siteRow).join('')+'</tbody></table>';
+// '실제 발행되는 것만' 필터: 기본은 발행 실패(rejected/failed) 사이트를 숨긴다.
+// (사장님 요청 — 목록엔 되는 것/시도 예정만 보이게. 전체보기 토글로 숨긴 것도 확인 가능)
+const showAll=window._siteShowAll||false;
+const isDead=s=>(s.status==='rejected'||s.status==='failed'||s.permission===false&&['manual_admin','admin_bulk','legacy_admin','candidate_registered','verified_test'].indexOf(s.registration_source)>=0);
+const shown=showAll?sites:sites.filter(s=>!isDead(s));
+const hiddenN=sites.length-shown.length;
+const toggle=`<div class="row" style="margin-bottom:6px;font-size:11px;color:var(--d)"><label style="display:flex;align-items:center;gap:5px"><input type="checkbox" style="width:auto" ${showAll?'checked':''} onclick="window._siteShowAll=this.checked;renderSites()">발행 불가 사이트도 보기</label><span style="flex:1"></span>${hiddenN>0?`<span style="color:var(--y)">발행 불가 ${hiddenN}곳 숨김</span>`:'<span style="color:var(--g)">발행 가능한 사이트만 표시 중</span>'}</div>`;
+if(!shown.length){$('siteList').innerHTML=toggle+'<p style="color:var(--d);padding:30px;text-align:center">표시할 사이트가 없습니다'+(hiddenN>0?' (발행 불가 '+hiddenN+'곳 숨김 — 위 체크박스로 보기)':'')+'</p>';return}
+$('siteList').innerHTML=toggle+'<table><thead><tr><th><input type="checkbox" id="allCb" onclick="document.querySelectorAll(\'.cb\').forEach(c=>c.checked=this.checked)"></th><th>이름</th><th>허용</th><th>URL</th><th>게시판</th><th>오늘</th><th>상태</th><th>동작</th></tr></thead><tbody>'+shown.map(siteRow).join('')+'</tbody></table>';
 checked.forEach(id=>{const c=document.querySelector(`.cb[data-id="${id}"]`);if(c)c.checked=true})}
 
 // ---- 통계/진행률 폴링 ----
