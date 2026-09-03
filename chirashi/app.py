@@ -3573,17 +3573,37 @@ def auto_signup(site, submit=True):
         except Exception: pass
     if not _has_pw_field():
         return False,'가입 폼(비밀번호 입력칸)에 도달 실패 — 약관/인증 단계 확인'
-    # 3) role별 필드 자동 입력
+    # 3) role별 필드 자동 입력 — 학습된 셀렉터 우선
     filled=[]
+    def _fill(role, sel):
+        val=vals_by_role.get(role)
+        if not val: return False
+        for el in _safe_find(d,sel):
+            try:
+                if el.is_displayed():
+                    el.clear(); el.send_keys(val)
+                    if role not in filled: filled.append(role)
+                    return True
+            except Exception: pass
+        return False
     for f in fields:
         role=f.get('role') or ''; sel=f.get('selector') or ''
         if not sel or role in ('','captcha'): continue
-        val=vals_by_role.get(role)
-        if not val: continue
-        for el in _safe_find(d,sel):
-            try:
-                if el.is_displayed(): el.clear(); el.send_keys(val); filled.append(role); break
-            except Exception: pass
+        _fill(role, sel)
+    # 3.5) 그누보드 표준 필드명 폴백 — 학습 셀렉터로 못 채운 role을 표준 name/id로 재시도한다.
+    # (그누보드는 회원가입 필드명이 표준화돼 있어, 학습이 어긋나도 대부분 이 폴백으로 구제된다.)
+    GNU_STD={
+        'id':"#reg_mb_id,input[name='mb_id']",
+        'password':"#reg_mb_password,input[name='mb_password']",
+        'password_confirm':"#reg_mb_password_re,input[name='mb_password_re']",
+        'email':"#reg_mb_email,input[name='mb_email'],input[type='email']",
+        'name':"input[name='mb_name']",
+        'nickname':"#reg_mb_nick,input[name='mb_nick']",
+    }
+    for role,sel in GNU_STD.items():
+        if role not in filled:
+            _fill(role, sel)
+    add_log(f'[자동가입 입력] {site.get("name") or site.get("site_url","")} — 입력: {",".join(filled) or "없음"}')
     if 'id' not in filled or 'password' not in filled:
         return False,f'가입 필수필드 입력 실패(입력됨: {",".join(filled) or "없음"})'
     # 4) 캡차 있으면 2captcha로 해결 후 입력
