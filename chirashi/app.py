@@ -3217,7 +3217,12 @@ GNU_BO_TABLES=['promotion','promotion1','hongbo','hongbo1','ad','link','partner'
                'free','free1','guest','company','pr','event','notice_pr']
 # Brave에 잘 먹히는 '평문 URL조각' — inurl: 대신 실제 경로 문자열을 그대로 검색
 # (홍보·제휴·자유게시판 계열 bo_table을 넓게 커버 — 매일 우선 실행되므로 다양할수록 좋다)
-BRAVE_URL_FRAGMENTS=['bbs/board.php bo_table=promotion','bbs/board.php bo_table=hongbo',
+# '바로 발행되는 500곳' 목표 — 비회원(로그인 없이) 글쓰기 게시판을 앞쪽에 우선 배치한다.
+# write.php로 바로 글쓰기 가능하고 '비회원/누구나/회원가입 없이' 신호가 있는 게시판을 노림.
+BRAVE_URL_FRAGMENTS=['bbs/write.php bo_table=promotion 비회원','bbs/write.php bo_table=free 비회원',
+                     'bbs/board.php 비회원 글쓰기 홍보','bbs/board.php 회원가입 없이 글쓰기',
+                     'bbs/board.php 누구나 글쓰기 홍보게시판','bbs/write.php 비회원 홍보 환영',
+                     'bbs/board.php bo_table=promotion','bbs/board.php bo_table=hongbo',
                      'bbs/board.php bo_table=link','bbs/board.php bo_table=partner',
                      'bbs/board.php bo_table=ad','bbs/board.php bo_table=banner',
                      'bbs/board.php bo_table=pr','bbs/board.php bo_table=company',
