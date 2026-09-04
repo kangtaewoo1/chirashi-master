@@ -3559,9 +3559,10 @@ def discover_once(cfg=None, max_queries=10):
     direct=[x.strip() for x in (cfg.get('discover_direct_queries','') or '').splitlines()
             if x.strip() and not x.lstrip().startswith('#')]  # 지역×업종(커서 순환)
     finder=list(dict.fromkeys(finder))
-    # 하루 쿼리 예산의 앞 60%를 finder에 배정(매일 게시판찾기 우선), 나머지는 direct.
-    # finder가 예산보다 많으면 fcursor로 여러 날에 걸쳐 순회한다(날짜 바뀌어도 fcursor는 이어짐).
-    finder_budget=int(qlimit*0.6) if finder else 0
+    # '바로 되는 500곳' 목표: 쿼리의 대부분(90%)을 게시판찾기(finder)에 쓴다.
+    # direct(지역+업종)는 업소 홈페이지만 나와 발행 불가라 최소한만. finder는 fcursor로
+    # 여러 날에 걸쳐 순회(날짜 바뀌어도 fcursor 유지)해 122개 검색어를 골고루 소진.
+    finder_budget=int(qlimit*0.9) if finder else 0
     if not finder and not direct:
         queries=build_queries(cfg)
         if not queries: return {'ok':False,'error':'쿼리 없음'}
@@ -6852,7 +6853,11 @@ def main():
             cfg['auto_pipeline_enabled']=True
             cfg['goal500_applied']=True
             save_config(cfg)
-            print('🎯 500곳 목표 세팅 적용 — 발굴 하루500·5분주기·파이프라인10·자동ON')
+            # 오늘 발굴 한도가 옛 방식으로 소진됐을 수 있으니 커서를 리셋해 게시판찾기부터
+            # 다시 발굴하게 한다(업소 홈페이지 대신 실제 게시판을 찾도록).
+            try: save_json(DISCO_FILE,{'date':_kst_now().strftime('%Y-%m-%d'),'queries':0,'found':0,'cursor':0,'fcursor':0})
+            except Exception: pass
+            print('🎯 500곳 목표 세팅 적용 — 발굴 하루500·5분주기·파이프라인10·자동ON·발굴리셋')
     except Exception as e: print('500 세팅 적용 실패:',e)
     host=os.environ.get('HOST','127.0.0.1'); port=int(os.environ.get('PORT','8888'))
     print(f'\n찌라시 마스터 v6 - 정직 발행 모드\nhttp://{host}:{port}\n브랜드: {cfg.get("brand","설정필요")}')
