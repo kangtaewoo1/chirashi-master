@@ -549,12 +549,13 @@ def load_config():
        'telegram_control':False,'backup_time':'','verify_enabled':True,'mix_keywords':True,
        'block_unpaid':True,
        'google_api_key':'','google_cx':'','brave_api_key':'','search_provider':'brave','discover_enabled':False,
-       'discover_daily_target':100,'discover_query_limit':100,'discover_keywords':'',
+       'discover_daily_target':500,'discover_query_limit':500,'discover_batch':12,'discover_keywords':'',
+       'site_goal':500,   # 실제 발행 가능 사이트 확보 목표(대시보드 진행률 표시용)
        'discover_direct_queries':'','video_url':'','landing_url':'','post_email':'','guest_post_password':'',
        'twocaptcha_api_key':'','twocaptcha_enabled':False,
        'twocaptcha_price_recaptcha_usd':0.003,'twocaptcha_price_image_usd':0.0005,
        'brave_price_per_query_usd':0.005,  # Pro 플랜 기준 쿼리당 $0.005(설정 탭에서 변경 가능)
-       'auto_pipeline_enabled':False,'auto_pipeline_batch':3}
+       'auto_pipeline_enabled':False,'auto_pipeline_batch':10}
     c=load_json(CONFIG_FILE,None)
     if c is None or not isinstance(c,dict): save_json(CONFIG_FILE,d); return d.copy()
     for k,v in d.items():
@@ -4088,7 +4089,8 @@ def discover_loop():
             provider=(cfg.get('search_provider') or 'brave').lower()
             ready=bool(cfg.get('brave_api_key')) if provider=='brave' else bool(cfg.get('google_api_key') and cfg.get('google_cx'))
             if cfg.get('discover_enabled') and ready:
-                discover_once(cfg,max_queries=4)
+                # 500곳 목표: 한 배치에 더 많이 발굴(하루 쿼리 한도는 discover_once가 지킴).
+                discover_once(cfg,max_queries=int(cfg.get('discover_batch',12) or 12))
             else:
                 # 발굴 꺼져 있어도 미검수 후보는 계속 처리
                 if any(not c.get('screened') for c in load_cands()): screen_pending(10)
@@ -4105,7 +4107,7 @@ def discover_loop():
                 except Exception as e: add_log(f'[자동정리 오류] {str(e)[:80]}')
         except Exception as e:
             add_log(f'[발굴 루프 오류] {str(e)[:100]}')
-        time.sleep(900)   # 15분마다
+        time.sleep(300)   # 5분마다 (500곳 목표 — 빠른 발굴. Brave 하루한도는 discover_once가 지킴)
 
 def member_paid_now(m):
     """이번 달 납부 완료 여부."""
@@ -5392,7 +5394,18 @@ def api_wk_resume():
 
 @app.route('/api/workers/stats',methods=['GET'])
 def api_wk_stats():
-    return jsonify({**wk_stats,'active':wk_active,'paused':wk_paused})
+    # 500곳 목표 진행률: 실게시 검증된 발행 가능 사이트 수 집계
+    try:
+        cfg=load_config(); goal=int(cfg.get('site_goal',500) or 500)
+        ADMIN=('manual_admin','admin_bulk','legacy_admin','candidate_registered','verified_test')
+        sites=load_sites()
+        publishable=sum(1 for s in sites if s.get('permission') and s.get('registration_source') in ADMIN
+                        and s.get('status')!='rejected' and s.get('write_test_status')=='passed'
+                        and str(s.get('verified_post_url') or '').startswith(('http://','https://')))
+    except Exception:
+        goal=500; publishable=0
+    return jsonify({**wk_stats,'active':wk_active,'paused':wk_paused,
+                    'site_goal':goal,'site_done':publishable})
 
 @app.route('/api/workers/reset',methods=['POST'])
 def api_wk_reset():
@@ -6061,7 +6074,7 @@ LOGIN_HTML=r'''<div style="display:flex;align-items:center;justify-content:cente
 </form></div></div>'''
 
 DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
-<div class="stats" id="live"><span>큐:<b id="q">0</b></span><span>성공:<b id="ok" style="color:var(--g)">0</b></span><span>실패:<b id="fl" style="color:var(--r)">0</b></span><span>스킵:<b id="sk" style="color:var(--y)">0</b></span><span>워커:<b id="ws" style="color:{{'var(--g)' if wk_on else 'var(--d)'}}">{{'ON' if wk_on else 'OFF'}}</b></span></div>
+<div class="stats" id="live"><span>큐:<b id="q">0</b></span><span>성공:<b id="ok" style="color:var(--g)">0</b></span><span>실패:<b id="fl" style="color:var(--r)">0</b></span><span>스킵:<b id="sk" style="color:var(--y)">0</b></span><span>워커:<b id="ws" style="color:{{'var(--g)' if wk_on else 'var(--d)'}}">{{'ON' if wk_on else 'OFF'}}</b></span><span style="margin-left:10px;padding-left:10px;border-left:1px solid var(--b)">🎯 발행가능 <b id="siteGoal" style="color:var(--p)">-</b></span></div>
 <a href="/logout" class="btn-xs" style="background:var(--b);color:var(--d);text-decoration:none">로그아웃</a></header>
 
 <div class="tabs"><button class="tab on" onclick="T('gen')">글 생성</button><button class="tab" onclick="T('wlog')">워커 실행로그</button><button class="tab" onclick="T('images')">이미지 저장</button><button class="tab" onclick="T('sites')">사이트 (<span id="siteTabCount">{{sites|length}}</span>)</button><button class="tab" onclick="T('res')">결과</button><button class="tab" onclick="T('disco')">발굴</button><button class="tab" onclick="T('mem')">회원·정산</button><button class="tab" onclick="T('stats')">통계</button><button class="tab" onclick="T('cost')">API 비용</button><button class="tab" onclick="T('set')">설정</button></div>
@@ -6796,6 +6809,7 @@ checked.forEach(id=>{const c=document.querySelector(`.cb[data-id="${id}"]`);if(c
 // ---- 통계/진행률 폴링 ----
 async function poll(){const r=await api('/workers/stats','GET');if(!r)return;
 $('q').textContent=r.queued||0;$('ok').textContent=r.success||0;$('fl').textContent=r.fail||0;$('sk').textContent=r.skipped||0;
+if(r.site_goal){const sg=$('siteGoal');if(sg){const done=r.site_done||0,goal=r.site_goal;const pct=Math.round(done/goal*100);sg.textContent=done+'/'+goal+' ('+pct+'%)';sg.style.color=done>=goal?'var(--g)':'var(--p)'}}
 const wstate=r.paused?'PAUSE':(r.active?'ON':'OFF');$('ws').textContent=wstate;$('ws').style.color=r.paused?'var(--y)':(r.active?'var(--g)':'var(--d)');
 const total=r.total||0,done=r.done||0;
 if(total>0){$('progCard').style.display='block';const pct=Math.round(done/total*100);$('progBar').style.width=pct+'%';$('progText').textContent=`${done} / ${total} (${pct}%)`+(r.skipped?` · 스킵 ${r.skipped}`:'')}else{$('progCard').style.display='none'}
