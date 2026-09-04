@@ -549,7 +549,7 @@ def load_config():
        'telegram_control':False,'backup_time':'','verify_enabled':True,'mix_keywords':True,
        'block_unpaid':True,
        'google_api_key':'','google_cx':'','brave_api_key':'','search_provider':'brave','discover_enabled':False,
-       'discover_daily_target':500,'discover_query_limit':500,'discover_batch':12,'discover_keywords':'',
+       'discover_daily_target':500,'discover_query_limit':500,'discover_batch':50,'discover_keywords':'',
        'site_goal':500,   # 실제 발행 가능 사이트 확보 목표(대시보드 진행률 표시용)
        'discover_direct_queries':'','video_url':'','landing_url':'','post_email':'','guest_post_password':'',
        'twocaptcha_api_key':'','twocaptcha_enabled':False,
@@ -4096,7 +4096,7 @@ def discover_loop():
             ready=bool(cfg.get('brave_api_key')) if provider=='brave' else bool(cfg.get('google_api_key') and cfg.get('google_cx'))
             if cfg.get('discover_enabled') and ready:
                 # 500곳 목표: 한 배치에 더 많이 발굴(하루 쿼리 한도는 discover_once가 지킴).
-                discover_once(cfg,max_queries=int(cfg.get('discover_batch',12) or 12))
+                discover_once(cfg,max_queries=int(cfg.get('discover_batch',50) or 50))
             else:
                 # 발굴 꺼져 있어도 미검수 후보는 계속 처리
                 if any(not c.get('screened') for c in load_cands()): screen_pending(10)
@@ -4113,7 +4113,7 @@ def discover_loop():
                 except Exception as e: add_log(f'[자동정리 오류] {str(e)[:80]}')
         except Exception as e:
             add_log(f'[발굴 루프 오류] {str(e)[:100]}')
-        time.sleep(300)   # 5분마다 (500곳 목표 — 빠른 발굴. Brave 하루한도는 discover_once가 지킴)
+        time.sleep(60)   # 1분마다 (500곳 목표 — 최대 속도로 하루 할당량을 빨리 채운다. 한도는 discover_once가 지킴)
 
 def member_paid_now(m):
     """이번 달 납부 완료 여부."""
@@ -6328,7 +6328,7 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 </details>
 <div class="row" style="margin-bottom:6px"><span style="color:var(--d);font-size:11px">하루 후보 목표</span><input type="number" id="cDTarget" value="100" min="10" max="1000" style="width:90px">
 <span style="color:var(--d);font-size:11px">하루 쿼리 한도</span><input type="number" id="cDQuery" value="100" min="1" max="10000" style="width:90px" title="Brave API 플랜 한도 안에서 사용"></div>
-<label style="display:flex;align-items:center;gap:6px;color:var(--g);font-size:12px;margin-bottom:6px"><input type="checkbox" id="cDiscoOn" style="width:auto">24시간 자동 발굴 켜기 (15분마다 조금씩 수집·검수)</label>
+<label style="display:flex;align-items:center;gap:6px;color:var(--g);font-size:12px;margin-bottom:6px"><input type="checkbox" id="cDiscoOn" style="width:auto">24시간 자동 발굴 켜기 (1분마다 빠르게 — 하루 할당량 500 채우기)</label>
 <small style="color:var(--d)">검색 키워드 목록 (한 줄에 하나 — 입력 그대로 Brave 검색, #으로 시작하면 메모)</small>
 <textarea id="cDDirect" rows="6" placeholder="&quot;홍보게시판&quot; 마사지&#10;inurl:bbs/board.php &quot;업체등록&quot;&#10;인천 광고 가능한 게시판"></textarea>
 <div style="font-size:10px;color:var(--g);margin-top:4px">설정 저장을 누르면 서버에 영구 저장되며, 위 목록만 입력 순서대로 검색합니다.</div>
@@ -6843,21 +6843,20 @@ def main():
     # 500곳 목표 자동 세팅 — 서버 config.json에 남아있는 옛 값(하루100 등)을 500 세팅으로
     # 한 번만 강제 적용한다. (마커 goal500_applied로 1회만 — 이후 사용자가 바꾼 값은 존중)
     try:
-        if not cfg.get('goal500_applied'):
+        if cfg.get('goal500_applied')!='v2':   # 버전 올려 새 세팅(배치50·1분주기)을 재적용
             cfg['discover_daily_target']=500
             cfg['discover_query_limit']=500
-            cfg['discover_batch']=12
+            cfg['discover_batch']=50
             cfg['auto_pipeline_batch']=10
             cfg['site_goal']=500
             cfg['discover_enabled']=True
             cfg['auto_pipeline_enabled']=True
-            cfg['goal500_applied']=True
+            cfg['goal500_applied']='v2'
             save_config(cfg)
-            # 오늘 발굴 한도가 옛 방식으로 소진됐을 수 있으니 커서를 리셋해 게시판찾기부터
-            # 다시 발굴하게 한다(업소 홈페이지 대신 실제 게시판을 찾도록).
+            # 발굴 커서를 리셋해 게시판찾기부터 다시 발굴한다(업소 홈페이지 대신 실제 게시판).
             try: save_json(DISCO_FILE,{'date':_kst_now().strftime('%Y-%m-%d'),'queries':0,'found':0,'cursor':0,'fcursor':0})
             except Exception: pass
-            print('🎯 500곳 목표 세팅 적용 — 발굴 하루500·5분주기·파이프라인10·자동ON·발굴리셋')
+            print('🎯 500곳 목표 세팅 v2 적용 — 발굴 하루500·1분주기·배치50·파이프라인10·자동ON·발굴리셋')
     except Exception as e: print('500 세팅 적용 실패:',e)
     host=os.environ.get('HOST','127.0.0.1'); port=int(os.environ.get('PORT','8888'))
     print(f'\n찌라시 마스터 v6 - 정직 발행 모드\nhttp://{host}:{port}\n브랜드: {cfg.get("brand","설정필요")}')
