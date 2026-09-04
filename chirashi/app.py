@@ -6834,6 +6834,21 @@ def main():
         os.environ['TZ']='Asia/Seoul'; time.tzset()
     except Exception: pass
     cfg=load_config()
+    # 500곳 목표 자동 세팅 — 서버 config.json에 남아있는 옛 값(하루100 등)을 500 세팅으로
+    # 한 번만 강제 적용한다. (마커 goal500_applied로 1회만 — 이후 사용자가 바꾼 값은 존중)
+    try:
+        if not cfg.get('goal500_applied'):
+            cfg['discover_daily_target']=500
+            cfg['discover_query_limit']=500
+            cfg['discover_batch']=12
+            cfg['auto_pipeline_batch']=10
+            cfg['site_goal']=500
+            cfg['discover_enabled']=True
+            cfg['auto_pipeline_enabled']=True
+            cfg['goal500_applied']=True
+            save_config(cfg)
+            print('🎯 500곳 목표 세팅 적용 — 발굴 하루500·5분주기·파이프라인10·자동ON')
+    except Exception as e: print('500 세팅 적용 실패:',e)
     host=os.environ.get('HOST','127.0.0.1'); port=int(os.environ.get('PORT','8888'))
     print(f'\n찌라시 마스터 v6 - 정직 발행 모드\nhttp://{host}:{port}\n브랜드: {cfg.get("brand","설정필요")}')
     if os.environ.get('CHIRASHI_PASSWORD') is None and cfg.get('password','admin1234')=='admin1234':
