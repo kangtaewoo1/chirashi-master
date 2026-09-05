@@ -1628,8 +1628,17 @@ def html_to_plain(content):
     return re.sub(r'\n{3,}','\n\n',text).strip()
 
 def enable_html_mode(d):
-    """HTML 체크박스 또는 KBoard의 '코드' 탭을 활성화한다."""
+    """HTML 체크박스 또는 KBoard의 '코드' 탭을 활성화한다.
+       SmartEditor2/WYSIWYG(iframe·contenteditable·oEditors) 에디터가 있으면 HTML이 그대로
+       렌더되므로 체크박스가 없어도 HTML 모드로 본다(에디터형 게시판에서 평문화 방지)."""
     from selenium.webdriver.common.by import By
+    try:
+        if d.find_elements(By.CSS_SELECTOR,
+                "iframe.se2_input_wysiwyg,iframe[id*='editor'],iframe[title*='편집'],iframe[title*='Rich'],div[contenteditable='true']"):
+            return True
+        if _safe_js(d,"return (typeof oEditors!=='undefined')&&!!oEditors&&!!oEditors.getById&&!!oEditors.getById['wr_content']"):
+            return True
+    except Exception: pass
     for el in d.find_elements(By.CSS_SELECTOR,"input[type='checkbox']"):
         if not _sel_vis(el): continue
         blob=' '.join([_sel_attr(el,'name'),_sel_attr(el,'id'),_sel_attr(el,'value'),_sel_attr(el,'title')]).lower()
