@@ -559,6 +559,7 @@ def load_config():
        'min_interval_minutes':1,   # 발행 간격(분): 1=사실상 무간격, daily_limit=0=하루 무제한(대표님 요청)
        'publish_loop_enabled':True,'publish_interval_sec':300,   # 24시간 상시발행 루프(5분 주기 큐 보충)
        'workroom_workers':3,   # 작업실별 전용 발행 워커(=동시 크롬) 수 상한. VPS 사양에 맞게 조절
+       'vps_reserve_mb':350,'vps_mb_per_worker':300,   # 메모리 가드 민감도(낮출수록 워커 더 허용·OOM위험↑)
 
        'discover_interval_sec':600,   # 발굴 주기 10분(크레딧 절약). 목표 도달 시 자동 중단
        'log_token':'cae3aaa53d6f3576a1c1f6a258f79129'}   # 읽기전용 로그 조회 토큰(?token= 로 /api/logs·/api/worker-log 접근)
@@ -4585,11 +4586,14 @@ def publish_loop():
                 cap=max(1,int(cfg.get('workroom_workers',3) or 3))
                 need=max(1,min(cap,max(1,len(rooms))))   # 작업실 없으면 1(통합풀), 있으면 min(상한,작업실수)
                 # VPS 보호: 가용 메모리가 부족하면 동시 워커(크롬) 수를 자동 축소한다.
-                # 크롬 1개당 ~450MB로 잡고 여유 500MB를 남긴다. 원하는 수보다 줄면 업그레이드 권장.
+                # 민감도는 설정으로 조절(대표님 요청: 가드 민감도 낮춤). 크롬 1개당 추정치·예비를 낮추면
+                # 같은 메모리에서 더 많은 워커를 허용(단 OOM 위험↑). 기본: 예비 350MB, 크롬당 300MB.
                 try:
+                    _reserve=int(cfg.get('vps_reserve_mb',350) or 350)
+                    _per=max(150,int(cfg.get('vps_mb_per_worker',300) or 300))
                     mt=open('/proc/meminfo').read()
                     avail=int(re.search(r'MemAvailable:\s+(\d+)',mt).group(1))//1024   # MB
-                    mem_cap=max(1,(avail-500)//450)
+                    mem_cap=max(1,(avail-_reserve)//_per)
                     if mem_cap<need:
                         if _MEM_WARN[0]!=f'{need}->{mem_cap}':
                             add_log(f'[VPS 경고] 메모리 부족(가용 {avail}MB) — 동시 발행 워커 {need}→{mem_cap}개로 자동 축소. 처리량을 위해 VPS 업그레이드(RAM 증설)를 권장합니다.','정리')
