@@ -2189,8 +2189,9 @@ def resolve_platform(site):
     return detect_platform(site.get('site_url',''))
 
 # ==================== 감독형 자가학습 발행 (셀렉터 자동 탐색) ====================
-SUBJECT_HINTS=['subject','title','제목','wr_subject','head','tit','bo_subject']
-CONTENT_HINTS=['content','contents','내용','body','wr_content','memo','board_content','desc']
+SUBJECT_HINTS=['subject','title','제목','wr_subject','head','tit','bo_subject','headline','sj','제 목']
+CONTENT_HINTS=['content','contents','내용','body','wr_content','memo','board_content','desc','editor',
+               'text','story','article','ir1','se_','ck','td_content','document_content']
 SUBMIT_HINTS=['등록','작성','확인','저장','올리','완료','submit','write','save','send','regist','apply','ok','confirm']
 
 def _sel_vis(el):
@@ -2399,7 +2400,9 @@ def discover_write_page(d, base, site):
             pu=urllib.parse.urlparse(href); pb=urllib.parse.urlparse(base)
             if (pu.scheme,pu.netloc)!=(pb.scheme,pb.netloc): continue
             blob=((a.text or '')+' '+href+' '+_sel_attr(a,'class')+' '+_sel_attr(a,'id')).lower()
-            if any(k in blob for k in ['글쓰기','글 쓰기','write.php','/write.html','mode=write','act=write']):
+            if any(k in blob for k in ['글쓰기','글 쓰기','글작성','글 작성','새글','새 글','등록하기','작성하기',
+                    '문의하기','문의작성','write.php','/write.html','/write','mode=write','act=write',
+                    'act=dispboardwrite','board_write','bbs_write','/new','/post/new','wr_write']):
                 cands.append(href)
     except Exception: pass
     if plat=='cafe24':
@@ -2409,6 +2412,15 @@ def discover_write_page(d, base, site):
     else:
         cands += [f'/bbs/write.php?bo_table={bo or "free"}']
     cands+=[f'/bbs/write.php?bo_table={bo or "free"}',f'/board/write.html?board_no={bo if bo.isdigit() else "1"}']
+    # 추가 플랫폼/경로 커버리지(전환율↑): XE/Rhymix·일반 게시판 write 경로까지 시도
+    _b=bo or 'free'
+    cands += [
+        f'/?mid={_b}&act=dispBoardWrite', f'/index.php?mid={_b}&act=dispBoardWrite',   # XE/Rhymix
+        f'/{_b}/write', f'/board/{_b}/write', f'/bbs/{_b}/write', f'/community/{_b}/write',
+        f'/board.php?bo_table={_b}&mode=write', f'/bbs/board.php?bo_table={_b}&mode=write',
+        '/bbs/write.php?bo_table=notice', '/bbs/write.php?bo_table=qa', '/bbs/write.php?bo_table=qna',
+        '/write', '/post/new', '/new',
+    ]
     seen=set()
     for path in cands:
         target=path if str(path).startswith(('http://','https://')) else base+path
@@ -2455,6 +2467,29 @@ def discover_write_page(d, base, site):
                     add_log(f'[게시판 자동교정] {site.get("name") or base} — 유령 게시판({bo}) → 실제 게시판({b})')
                     return d.current_url or t
         except Exception: pass
+    # 폴백2: XE/Rhymix(mid=) 게시판 — 홈페이지에서 mid= 링크를 모아 글쓰기 화면을 시도한다.
+    try:
+        from selenium.webdriver.common.by import By
+        d.get((site.get('site_url') or base).strip()); time.sleep(2); dismiss_alerts(d)
+        mids=[]
+        for a in d.find_elements(By.CSS_SELECTOR,"a[href*='mid=']"):
+            mm=re.search(r'mid=([A-Za-z0-9_]+)',_sel_attr(a,'href'))
+            if mm and mm.group(1) not in mids: mids.append(mm.group(1))
+        for mid_ in mids[:10]:
+            for t in (base+f'/?mid={mid_}&act=dispBoardWrite', base+f'/index.php?mid={mid_}&act=dispBoardWrite'):
+                if t in seen: continue
+                seen.add(t)
+                try: d.get(t); time.sleep(1.5); dismiss_alerts(d)
+                except Exception: continue
+                cu=(d.current_url or '').lower()
+                if 'login' in cu or 'err' in (d.title or '').lower() or '오류' in (d.title or ''): continue
+                if discover_subject(d) and discover_content(d)[1]:
+                    try: set_site_flag(site.get('id'), bo_table=mid_, platform='xe')
+                    except Exception: pass
+                    if isinstance(site,dict): site['bo_table']=mid_
+                    add_log(f'[게시판 자동교정] {site.get("name") or base} — XE 게시판({mid_}) 발견')
+                    return d.current_url or t
+    except Exception: pass
     return None
 
 def _save_site_analysis(site_id, analysis, rec=None):
