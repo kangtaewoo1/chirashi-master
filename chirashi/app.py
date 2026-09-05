@@ -548,14 +548,15 @@ def load_config():
        'notify_done':False,'notify_fail':True,'update_token':'',
        'telegram_control':False,'backup_time':'','verify_enabled':True,'mix_keywords':True,
        'block_unpaid':True,
-       'google_api_key':'','google_cx':'','brave_api_key':'','search_provider':'brave','discover_enabled':False,
+       'google_api_key':'','google_cx':'','brave_api_key':'','search_provider':'brave','discover_enabled':True,
        'discover_daily_target':500,'discover_query_limit':500,'discover_batch':50,'discover_keywords':'',
        'site_goal':500,   # 실제 발행 가능 사이트 확보 목표(대시보드 진행률 표시용)
        'discover_direct_queries':'','video_url':'','landing_url':'','post_email':'','guest_post_password':'',
        'twocaptcha_api_key':'','twocaptcha_enabled':False,
        'twocaptcha_price_recaptcha_usd':0.003,'twocaptcha_price_image_usd':0.0005,
        'brave_price_per_query_usd':0.005,  # Pro 플랜 기준 쿼리당 $0.005(설정 탭에서 변경 가능)
-       'auto_pipeline_enabled':False,'auto_pipeline_batch':10}
+       'auto_pipeline_enabled':True,'auto_pipeline_batch':10,
+       'min_interval_minutes':180}   # 발행 안전한도: daily_limit(위)=하루3건 + 최소간격 180분
     c=load_json(CONFIG_FILE,None)
     if c is None or not isinstance(c,dict): save_json(CONFIG_FILE,d); return d.copy()
     for k,v in d.items():
@@ -2839,8 +2840,13 @@ def site_daily_limit(site,cfg):
     except Exception: return 3
 
 def site_min_interval(site):
-    try: return max(0,int(site.get('min_interval_minutes',60) or 0))
-    except Exception: return 60
+    # 사이트별 값 없으면 config 기본(min_interval_minutes, 없으면 180) 사용 — site_daily_limit과 동일 패턴
+    try:
+        default=int(load_config().get('min_interval_minutes',180) or 0)
+    except Exception:
+        default=180
+    try: return max(0,int(site.get('min_interval_minutes',default) or 0))
+    except Exception: return default
 
 def _fresh_site(site):
     return next((s for s in load_sites() if s.get('id')==site.get('id')),site)
