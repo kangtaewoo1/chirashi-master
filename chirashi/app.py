@@ -4256,45 +4256,74 @@ def collect_all_keywords():
         pass
     return pool
 
+_WR_CURSOR={}   # workroom_id -> 다음 발행할 조합 인덱스(메모리). 재시작 시 0부터=처음부터 반복
+_WR_RR=[0]      # 작업실 라운드로빈 포인터(모든 작업실을 번갈아 동시 진행)
+
+def _workroom_combos(room):
+    """작업실 keyword_csv → [{'지역','서비스','브랜드'}, ...] (한 줄=한 조합=한 글)."""
+    combos=[]
+    for line in str(room.get('keyword_csv') or '').splitlines():
+        p=[x.strip() for x in line.split(',')]
+        if len(p)>=3 and all(p[:3]):
+            combos.append({'지역':p[0],'서비스':p[1],'브랜드':p[2]})
+        elif p and p[0]:
+            combos.append({'지역':p[0],'서비스':(p[1] if len(p)>1 else ''),'브랜드':(p[2] if len(p)>2 else '')})
+    return combos
+
 def publish_loop():
-    """24시간 상시발행: 발행가능 사이트 중 하루한도·간격을 통과한 곳에 키워드 풀 기반 글을 큐잉한다.
-       키워드는 전역 풀 + 작업실을 통합(collect_all_keywords)해서 쓴다.
-       실제 발행은 worker_loop이 하며, 발행 직전 한도·간격·publishable을 다시 확인한다(이중 안전).
-       publish_loop_enabled(설정)로 즉시 끄고, publish_interval_sec로 주기 조절 가능."""
+    """24시간 상시발행(작업실 소진형).
+       - 모든 키워드 작업실을 라운드로빈으로 번갈아 진행(동시 작업).
+       - 각 작업실의 조합을 순서대로 소진하고, 끝나면 맨 위부터 무한 반복.
+       - 매 조합을 '발행가능 사이트 전체'에 각각 유니크 글로 발행(사이트/호출마다 새 제목·본문).
+       - 큐가 빌 때만, 지금 간격·한도를 통과한 사이트에만 보충 → 워커 스킵/생성 낭비 방지.
+       - 작업실이 하나도 없으면 전역+회원 통합 풀(랜덤)로 폴백."""
     while True:
+        slept=20
         try:
             cfg=load_config()
-            interval=int(cfg.get('publish_interval_sec',300) or 300)
             if not cfg.get('publish_loop_enabled'):
-                time.sleep(interval); continue
+                time.sleep(int(cfg.get('publish_interval_sec',300) or 300)); continue
             sites=[s for s in load_sites() if is_publishable(s)]
             if not sites:
-                time.sleep(interval); continue
-            # 큐가 이미 충분히 차 있으면 과잉 큐잉 방지(발행가능 사이트 수 이상 대기중이면 스킵)
+                time.sleep(60); continue
+            # 큐가 차 있으면 드레인 대기(과잉 큐잉 → 간격 스킵/생성 낭비 방지)
             if post_queue.qsize() >= max(2,len(sites)):
-                time.sleep(interval); continue
-            pool=collect_all_keywords()
-            if not pool:
-                add_log('[상시발행] 키워드 풀이 비어 대기 — 키워드 탭에서 조합을 추가하세요')
-                time.sleep(interval); continue
-            queued=0
-            for s in sites:
-                if not under_daily_limit(s,cfg): continue
-                ok,_=under_min_interval(s)
-                if not ok: continue
-                kw=pick_keywords(pool,cfg)   # 기존 키워드 선택 로직 재사용(지역/서비스/브랜드 dict)
+                time.sleep(slept); continue
+            # 지금 발행 가능한(간격·한도 통과) 사이트만
+            elig=[s for s in sites if under_daily_limit(s,cfg) and under_min_interval(s)[0]]
+            if not elig:
+                time.sleep(slept); continue
+            rooms=[r for r in (load_json(WORKROOMS_FILE,[]) or []) if _workroom_combos(r)]
+            if rooms:
+                rr=_WR_RR[0] % len(rooms); _WR_RR[0]=rr+1
+                r=rooms[rr]; combos=_workroom_combos(r); rid=r.get('id','')
+                cur=int(_WR_CURSOR.get(rid,0) or 0)
+                if cur>=len(combos): cur=0
+                kw=combos[cur]; _WR_CURSOR[rid]=cur+1
                 try:
-                    n=enqueue_generated([s],kw,cfg,{'region':kw.get('지역',''),'service':kw.get('서비스','')})[0]
-                    queued+=n
+                    n=enqueue_generated(elig,kw,cfg,{'region':kw.get('지역',''),'service':kw.get('서비스',''),
+                            'workroom_id':rid,'workroom_name':r.get('name','')})[0]
+                    if n:
+                        if not wk_active: start_workers(cfg.get('workers',2))
+                        add_log(f"[상시발행] 작업실 '{r.get('name','')}' 조합 {cur+1}/{len(combos)} → {n}개 사이트 발행 (작업실 {len(rooms)}개 동시)")
                 except Exception as e:
                     add_log(f'[상시발행 오류] {str(e)[:80]}')
-                if not wk_active: start_workers(cfg.get('workers',2))
-            if queued:
-                add_log(f'[상시발행] {queued}건 큐 등록 (발행가능 {len(sites)}곳 중 한도·간격 통과분)')
+            else:
+                pool=collect_all_keywords()
+                if not pool:
+                    add_log('[상시발행] 키워드 풀이 비어 대기 — 키워드 작업실에 조합을 추가하세요')
+                    time.sleep(int(cfg.get('publish_interval_sec',300) or 300)); continue
+                kw=pick_keywords(pool,cfg)
+                try:
+                    n=enqueue_generated(elig,kw,cfg,{'region':kw.get('지역',''),'service':kw.get('서비스','')})[0]
+                    if n:
+                        if not wk_active: start_workers(cfg.get('workers',2))
+                        add_log(f'[상시발행] 통합풀 랜덤 → {n}개 사이트 발행')
+                except Exception as e:
+                    add_log(f'[상시발행 오류] {str(e)[:80]}')
         except Exception as e:
             add_log(f'[상시발행 루프 오류] {str(e)[:100]}')
-        try: time.sleep(int(load_config().get('publish_interval_sec',300) or 300))
-        except Exception: time.sleep(300)
+        time.sleep(slept)
 
 def discover_loop():
     """24시간 자동 발굴 — 목표치까지 천천히 채우고 남는 시간엔 검수."""
@@ -5164,7 +5193,12 @@ def api_workrooms():
         for line in keyword_csv.splitlines():
             p=[x.strip() for x in line.split(',')]
             if len(p)>=3 and all(p[:3]): rows.append(','.join(p[:3]))
-        room.update({'name':name,'keyword_csv':'\n'.join(rows),'site_id':str(d.get('site_id') or ''),
+        new_csv='\n'.join(rows)
+        # 키워드 목록이 바뀌면 소진 커서를 맨 위로 리셋(새로 생성/교체 시 처음부터 소진).
+        if new_csv!=(room.get('keyword_csv') or ''):
+            _WR_CURSOR[rid]=0
+        room.update({'name':name,'keyword_csv':new_csv,'site_id':str(d.get('site_id') or ''),
+                     'bases':str(d.get('bases') or ''),   # 키워드 종류(재접속 시 복원용)
                      'updated_at':_kst_now().strftime('%Y-%m-%d %H:%M')})
         save_json(WORKROOMS_FILE,rooms)
         return jsonify({'ok':True,'id':rid,'name':name,'count':len(rows)})
@@ -6676,15 +6710,15 @@ function shortProvince(x){return x.replace(/특별자치시$|특별자치도$|�
 function shortDistrict(x){const last=x.trim().split(/\s+/).pop();return last.replace(/시$|군$|구$/,'')}
 let _workrooms=[];
 async function loadWorkrooms(){const r=await api('/workrooms','GET');if(!Array.isArray(r))return;_workrooms=r;const s=$('wrSelect');const keep=s.value;s.innerHTML='<option value="">작업실 선택</option>'+r.map(x=>'<option value="'+esc(x.id)+'">'+esc(x.name)+'</option>').join('');if(r.some(x=>x.id===keep))s.value=keep;else if(r.length)s.value=r[0].id;showWorkroom()}
-function showWorkroom(){const r=_workrooms.find(x=>x.id===$('wrSelect').value);$('wrName').value=r?r.name:'';$('wrKeywords').value=r?r.keyword_csv:'';$('wrSite').value=r?r.site_id:'';$('wrSaved').textContent=r?('저장 '+(r.updated_at||'')):''}
-async function newWorkroom(){const name=(prompt('새 작업실 이름',(_workrooms.length+1)+'번 작업실')||'').trim();if(!name)return;const r=await api('/workrooms','POST',{name:name,keyword_csv:'',site_id:''});if(r&&r.ok){await loadWorkrooms();$('wrSelect').value=r.id;showWorkroom();toast(name+' 추가됨','ok')}}
-async function saveWorkroom(){const id=$('wrSelect').value;if(!id){toast('먼저 작업실을 추가하세요','er');return}const r=await api('/workrooms','POST',{id:id,name:$('wrName').value.trim(),keyword_csv:$('wrKeywords').value,site_id:$('wrSite').value});if(r&&r.ok){toast('작업실 저장 완료 · '+r.count+'개 조합','ok');await loadWorkrooms();$('wrSelect').value=id;showWorkroom()}else toast((r&&r.error)||'저장 실패','er')}
+function showWorkroom(){const r=_workrooms.find(x=>x.id===$('wrSelect').value);$('wrName').value=r?r.name:'';$('wrKeywords').value=r?r.keyword_csv:'';if($('wrBases'))$('wrBases').value=(r&&r.bases)?r.bases:'';$('wrSite').value=r?r.site_id:'';$('wrSaved').textContent=r?('저장 '+(r.updated_at||'')):''}
+async function newWorkroom(){const name=(prompt('새 작업실 이름','작업실'+(_workrooms.length+1))||'').trim();if(!name)return;const r=await api('/workrooms','POST',{name:name,keyword_csv:'',site_id:'',bases:''});if(r&&r.ok){await loadWorkrooms();$('wrSelect').value=r.id;showWorkroom();toast(name+' 추가됨','ok')}}
+async function saveWorkroom(){const id=$('wrSelect').value;if(!id){toast('먼저 작업실을 추가하세요','er');return}const r=await api('/workrooms','POST',{id:id,name:$('wrName').value.trim(),keyword_csv:$('wrKeywords').value,site_id:$('wrSite').value,bases:($('wrBases')?$('wrBases').value:'')});if(r&&r.ok){toast('작업실 저장 완료 · '+r.count+'개 조합','ok');await loadWorkrooms();$('wrSelect').value=id;showWorkroom()}else toast((r&&r.error)||'저장 실패','er')}
 async function deleteWorkroom(){const id=$('wrSelect').value;if(!id)return;if(!confirm('선택한 작업실과 키워드 목록을 삭제할까요?'))return;await api('/workrooms','DELETE',{id:id});await loadWorkrooms();toast('작업실 삭제됨')}
 function workroomProvinceRank(p){const x=shortProvince(p);if(x==='인천')return 0;if(x==='경기')return 1;if(x==='서울')return 2;if(x==='충청남'||x==='충남'||x==='대전')return 3;if(x==='충청북'||x==='충북')return 4;if(x==='세종')return 5;if(x==='전북'||x==='전라북')return 6;if(x==='전남'||x==='전라남'||x==='광주')return 7;if(['부산','대구','울산','경남','경상남'].includes(x))return 8;if(x==='경북'||x==='경상북')return 9;if(x==='강원')return 10;if(x==='제주')return 11;return 99}
 function randomThree(items){const a=[...new Set(items)];for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]}return a.slice(0,3)}
 async function makeWorkroomRegional(){const data=await loadRegionTool();if(!data)return[];const bases=[...new Set($('wrBases').value.split(/\r?\n/).map(x=>x.trim()).filter(x=>x&&!x.startsWith('#')))];if(bases.length<3){toast('서로 다른 키워드를 한 줄에 하나씩 최소 3개 입력하세요','er');return[]}const only=$('wrProvince').value,join=$('wrJoin').value,regions=[];Object.entries(data).sort((a,b)=>workroomProvinceRank(a[0])-workroomProvinceRank(b[0])).forEach(([province,districts])=>{if(only&&province!==only)return;if($('wrCity').checked)regions.push(shortProvince(province));Object.entries(districts||{}).forEach(([district,dongs])=>{if($('wrGu').checked)regions.push(shortDistrict(district));if($('wrDong').checked)(dongs||[]).forEach(d=>regions.push(d))})});const out=[];regions.forEach(region=>{const picked=randomThree(bases);out.push(picked.map(base=>region+join+base).join(','))});return out}
 async function previewWorkroomRegional(){const rows=await makeWorkroomRegional();$('wrRegionCount').textContent=rows.length.toLocaleString()+'개 생성 예정'}
-async function applyWorkroomRegional(replace){const rows=await makeWorkroomRegional();if(!rows.length)return;if(rows.length>50000){toast('5만 개를 초과합니다. 지역 범위를 줄여주세요','er');return}const current=replace?[]:$('wrKeywords').value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);const merged=[...new Set(current.concat(rows))];$('wrKeywords').value=merged.join('\n');$('wrRegionCount').textContent=rows.length.toLocaleString()+'개 생성 · 작업실 전체 '+merged.length.toLocaleString()+'개';toast('작업실 목록에 반영됨 · 작업실 저장을 눌러주세요','ok')}
+async function applyWorkroomRegional(replace){const id=$('wrSelect').value;if(!id){toast('먼저 작업실을 추가/선택하세요','er');return}const rows=await makeWorkroomRegional();if(!rows.length)return;if(rows.length>50000){toast('5만 개를 초과합니다. 지역 범위를 줄여주세요','er');return}const current=replace?[]:$('wrKeywords').value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);const merged=[...new Set(current.concat(rows))];$('wrKeywords').value=merged.join('\n');$('wrRegionCount').textContent='저장 중...';const r=await api('/workrooms','POST',{id:id,name:$('wrName').value.trim(),keyword_csv:merged.join('\n'),site_id:$('wrSite').value,bases:($('wrBases')?$('wrBases').value:'')});if(r&&r.ok){$('wrRegionCount').textContent=rows.length.toLocaleString()+'개 생성 · 자동저장됨 총 '+merged.length.toLocaleString()+'개';toast('생성+작업실 자동저장 완료 · '+merged.length.toLocaleString()+'개 조합','ok');await loadWorkrooms();$('wrSelect').value=id;showWorkroom()}else{$('wrRegionCount').textContent=rows.length.toLocaleString()+'개 생성(저장 실패)';toast((r&&r.error)||'자동저장 실패 — 작업실 저장 버튼을 눌러주세요','er')}}
 function copyWorkroomToBulk(){const rows=$('wrKeywords').value.trim();if(!rows){toast('작업실 키워드가 없습니다','er');return}const room=_workrooms.find(x=>x.id===$('wrSelect').value);$('kwlist').value=rows;$('kwlist').dataset.workroomId=room?room.id:'';$('kwlist').dataset.workroomName=room?room.name:'직접 입력';$('kwSiteFilter').value=$('wrSite').value;$('kwCount').textContent=(room?'['+room.name+'] ':'')+rows.split(/\r?\n/).filter(Boolean).length+'줄';toast((room?'['+room.name+'] ':'')+'발행 목록에 적용됨','ok');$('kwlist').scrollIntoView({behavior:'smooth',block:'center'})}
 async function makeRegionalKeywords(){const data=await loadRegionTool();if(!data)return[];const bases=$('rgKeywords').value.split(/\r?\n/).map(x=>x.trim()).filter(x=>x&&!x.startsWith('#'));if(!bases.length){toast('조합할 키워드를 한 줄에 하나씩 입력하세요','er');return[]}const only=$('rgProvince').value;const join=$('rgJoin').value;const regions=[];Object.entries(data).forEach(([province,districts])=>{if(only&&province!==only)return;if($('rgCity').checked)regions.push(shortProvince(province));Object.entries(districts||{}).forEach(([district,dongs])=>{if($('rgGu').checked)regions.push(shortDistrict(district));if($('rgDong').checked)(dongs||[]).forEach(d=>regions.push(d))})});const out=[];const seen=new Set();regions.forEach(region=>bases.forEach(base=>{const q=region+join+base;if(!seen.has(q)){seen.add(q);out.push(q)}}));return out}
 async function previewRegionalKeywords(){const rows=await makeRegionalKeywords();$('rgCount').textContent=rows.length.toLocaleString()+'개 생성 예정'}
