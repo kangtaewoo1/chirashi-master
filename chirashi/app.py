@@ -6407,30 +6407,43 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 <button class="btn btn-y" onclick="postAll()">전체 사이트 발행</button></div></div></div>
 
 <div id="p-kw" class="panel on">
-<div class="note">🗂 여기에 키워드 조합을 넣으면 24시간 자동 발행에 반영됩니다. 대표님이 관리할 것은 <b style="color:var(--p)">키워드</b>와 <b style="color:var(--p)">이미지</b>뿐입니다.</div>
-<div class="card" style="border-color:#334155"><h3>🗂 키워드 작업실 — 키워드 묶음별 독립 저장</h3>
+<div class="note">🗂 <b>작업실 하나 = 업종 하나</b>. 키워드 종류만 넣고 <b style="color:var(--p)">생성</b>만 누르면 24시간 자동 발행됩니다. 관리할 건 <b style="color:var(--p)">키워드</b>와 <b style="color:var(--p)">이미지</b>뿐.</div>
+<div class="card" style="border-color:#334155"><h3>🗂 키워드 작업실 — 업종별로 추가 (예: 노래방 · 마사지 · 셔츠룸)</h3>
 <div class="row">
 <select id="wrSelect" onchange="showWorkroom()" style="min-width:180px"><option value="">작업실 선택</option></select>
-<input id="wrName" placeholder="예: 1번 작업실" style="max-width:220px">
+<input id="wrName" placeholder="예: 노래방" style="max-width:200px">
 <button class="btn btn-p" onclick="newWorkroom()">+ 작업실 추가</button>
-<button class="btn btn-g" onclick="saveWorkroom()">작업실 저장</button>
+<button class="btn btn-g btn-xs" onclick="saveWorkroom()">이름 저장</button>
 <button class="btn btn-r btn-xs" onclick="deleteWorkroom()">삭제</button>
 <span id="wrSaved" style="color:var(--d);font-size:10px"></span></div>
-<div class="row" style="margin-top:8px">
+
+<div style="margin-top:14px;font-weight:700;color:var(--p);font-size:12px">1) 지역 범위</div>
+<div class="row" style="margin-top:4px">
 <select id="wrProvince" style="width:auto"><option value="">전국</option></select>
 <label><input type="checkbox" id="wrCity" checked style="width:auto"> 시·도</label>
 <label><input type="checkbox" id="wrGu" checked style="width:auto"> 시·구·군</label>
 <label><input type="checkbox" id="wrDong" checked style="width:auto"> 읍·면·동</label>
-<select id="wrJoin" style="width:auto"><option value="">붙여쓰기</option><option value=" ">띄어쓰기</option></select>
-<span style="color:var(--d);font-size:10px">지역명은 짧게 조합됩니다: 서울+키워드 · 강남+키워드 · 호암직동+키워드</span></div>
-<textarea id="wrBases" rows="3" placeholder="키워드 종류를 한 줄에 하나씩 3개 이상 입력&#10;출장마사지&#10;마사지&#10;홍보게시판" style="margin-top:7px"></textarea>
-<div style="color:var(--d);font-size:10px;margin-top:4px">지역 순서는 고정하고, 지역마다 전체 키워드 중 서로 다른 3개를 새로 랜덤 선택합니다. 첫 번째가 해당 글의 메인 키워드입니다.</div>
-<div class="row" style="margin-top:6px"><button class="btn btn-d" onclick="previewWorkroomRegional()">생성 개수 확인</button><button class="btn btn-v" onclick="applyWorkroomRegional(false)">작업실 목록에 추가</button><button class="btn btn-y" onclick="applyWorkroomRegional(true)">작업실 목록 교체</button><span id="wrRegionCount" style="color:var(--d);font-size:10px">0개</span></div>
-<textarea id="wrKeywords" rows="5" placeholder="키워드1,키워드2,키워드3 — 작업실마다 따로 저장됩니다" style="margin-top:7px"></textarea>
-<div class="row" style="margin-top:6px"><select id="wrSite" style="width:auto"><option value="">전체 실게시 검증 사이트</option>{% for s in publish_sites %}<option value="{{s.id}}">{{s.name or s.site_url[:20]}}</option>{% endfor %}</select><button class="btn btn-p" onclick="copyWorkroomToBulk()">이 작업실을 아래 발행 목록에 적용</button><span style="color:var(--d);font-size:10px">실제 글 발행과 결과 URL 확인을 통과한 허용 사이트만 선택됩니다.</span></div>
+<select id="wrJoin" style="width:auto"><option value="">붙여쓰기</option><option value=" ">띄어쓰기</option></select></div>
+
+<div style="margin-top:14px;font-weight:700;color:var(--p);font-size:12px">2) 키워드 종류 <span style="font-weight:400;color:var(--d)">(한 줄에 하나, 3개 이상)</span></div>
+<textarea id="wrBases" rows="3" placeholder="출장마사지&#10;마사지&#10;홍보게시판" style="margin-top:4px"></textarea>
+<div style="color:var(--d);font-size:10px;margin-top:4px">지역마다 위 키워드 중 서로 다른 3개를 랜덤 조합해 글 1건을 만듭니다. 첫 번째가 메인 키워드.</div>
+
+<div style="margin-top:14px;font-weight:700;color:var(--p);font-size:12px">3) 생성 → 자동저장 → 발행</div>
+<div class="row" style="margin-top:4px">
+<button class="btn btn-v" style="font-size:14px;padding:9px 18px" onclick="applyWorkroomRegional(false)">➕ 생성 + 저장 (발행 시작)</button>
+<button class="btn btn-y btn-xs" onclick="applyWorkroomRegional(true)">🔄 전체 교체</button>
+<button class="btn btn-d btn-xs" onclick="previewWorkroomRegional()">개수 확인</button>
+<span id="wrRegionCount" style="color:var(--d);font-size:11px">0개</span></div>
+<div style="color:var(--d);font-size:10px;margin-top:6px">발행 대상: <b style="color:var(--g)">전체 발행가능 사이트 자동</b> · 목록을 다 쓰면 맨 위부터 무한 반복(제목·본문은 매번 새로 생성).</div>
+
+<details style="margin-top:10px"><summary style="cursor:pointer;color:var(--d);font-size:11px">저장된 조합 보기 · 직접 편집</summary>
+<textarea id="wrKeywords" rows="5" placeholder="아직 생성된 조합이 없습니다 — 위 3단계로 생성하세요" style="margin-top:6px"></textarea>
+<button class="btn btn-g btn-xs" style="margin-top:4px" onclick="saveWorkroom()">직접 편집분 저장</button></details>
+<select id="wrSite" style="display:none"><option value="">전체</option></select>
 </div>
 
-<div class="card"><h3>키워드 조합 대량 입력 (CSV: 키워드1,키워드2,키워드3)</h3>
+<div class="card" style="display:none"><h3>키워드 조합 대량 입력 (CSV: 키워드1,키워드2,키워드3)</h3>
 <textarea id="kwlist" rows="4" placeholder="인천셔츠룸,인천노래방,인천가라오케&#10;서울셔츠룸,서울노래방,서울가라오케"></textarea>
 <div class="row" style="margin-top:6px"><button class="btn btn-p" id="bulkRunBtn" onclick="genFromList()">목록 생성 작업 시작</button>
 <span style="color:var(--d);font-size:10px" id="kwCount">0줄</span>
@@ -6438,7 +6451,7 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 <span style="flex:1"></span>
 <select id="kwSiteFilter" style="width:auto"><option value="">전체 실게시 검증 사이트</option>{% for s in publish_sites %}<option value="{{s.id}}">{{s.name or s.site_url[:20]}}</option>{% endfor %}</select></div></div>
 
-<div class="card"><h3>키워드 풀 — 지역순서 적용 및 사용 완료 추적</h3>
+<div class="card" style="display:none"><h3>키워드 풀 — 지역순서 적용 및 사용 완료 추적</h3>
 <div style="font-size:10px;color:var(--d);margin-bottom:6px">한 줄에 <b style="color:var(--p)">키워드1,키워드2,키워드3</b>을 입력합니다. 2·3은 키워드1과 같은 지역이어야 하며, 예약은 지정 지역순서대로 진행하고 전부 사용하면 자동 종료됩니다.</div>
 <textarea id="poolCsv" rows="5" placeholder="키워드1,키워드2,키워드3 — 한 줄에 한 조합&#10;인천셔츠룸,인천노래방,인천가라오케&#10;부천셔츠룸,부천노래방,부천가라오케&#10;서울셔츠룸,서울노래방,서울가라오케"></textarea>
 <div class="row" style="margin-top:6px">
