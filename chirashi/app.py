@@ -558,7 +558,7 @@ def load_config():
        'auto_pipeline_enabled':True,'auto_pipeline_batch':10,
        'min_interval_minutes':1,   # 발행 간격(분): 1=사실상 무간격, daily_limit=0=하루 무제한(대표님 요청)
        'publish_loop_enabled':True,'publish_interval_sec':300,   # 24시간 상시발행 루프(5분 주기 큐 보충)
-       'workroom_workers':3,   # 작업실별 전용 발행 워커(=동시 크롬) 수 상한. VPS 사양에 맞게 조절
+       'workroom_workers':4,   # 작업실별 전용 발행 워커(=동시 크롬) 수 상한. VPS 사양에 맞게 조절(4vCPU→4)
        'vps_reserve_mb':350,'vps_mb_per_worker':300,   # 메모리 가드 민감도(낮출수록 워커 더 허용·OOM위험↑)
 
        'discover_interval_sec':600,   # 발굴 주기 10분(크레딧 절약). 목표 도달 시 자동 중단
@@ -594,6 +594,14 @@ def load_config():
             if _ch: save_sites(_ss)
         except Exception: pass
         c['interval1_unlimited_migrated']=True
+        try: save_json(CONFIG_FILE,c)
+        except Exception: pass
+    # 1회 마이그레이션: VPS 업그레이드(4vCPU/8GB)에 맞춰 동시 발행 워커 상한 3→4.
+    # (기존 config가 옛 기본값 3이면만 올리고, 대표님이 따로 조정한 값은 존중)
+    if not c.get('wr_workers4_migrated'):
+        if int(c.get('workroom_workers',0) or 0) in (0,3):
+            c['workroom_workers']=4
+        c['wr_workers4_migrated']=True
         try: save_json(CONFIG_FILE,c)
         except Exception: pass
     return c
