@@ -618,11 +618,24 @@ def _twocaptcha_usage_summary(cfg):
         return {'ok':False,'disabled':False,'error':str(e)[:180],'currency':'USD','balance':0.0,'remaining_usd':0.0,'charged_since_last_check_usd':0.0,'updated_at':None}
 
 def save_config(c): save_json(CONFIG_FILE,c)
-def add_log(msg):
+def _log_category(msg):
+    """로그 메시지 앞부분으로 작업 종류를 자동 분류(워커 실행로그 탭 필터용).
+    기존 add_log 호출을 안 고쳐도 [발굴]/[검수]/[가입]/[발행] 프리픽스로 자동 분류된다."""
+    m=str(msg)
+    if any(k in m for k in ['[발굴','[후보','[게시판','발굴','Brave']): return '발굴'
+    if any(k in m for k in ['[검수','검수','[재검수']): return '검수'
+    if any(k in m for k in ['[자동가입','[가입','가입']): return '가입'
+    if any(k in m for k in ['[발행','[예약','[워커','[자동등록','발행','등록','제출','2captcha','캡차']): return '발행'
+    if any(k in m for k in ['[자동정리','[사이트 정리','탈락','정리','삭제']): return '정리'
+    if any(k in m for k in ['[자동파이프라인','[파이프라인','파이프라인']): return '파이프라인'
+    return '기타'
+
+def add_log(msg, category=None):
+    cat=category or _log_category(msg)
     with _json_lock(LOG_FILE):
         logs=load_json(LOG_FILE,[])
-        logs.append({'time':datetime.now().strftime('%H:%M:%S'),'msg':msg})
-        if len(logs)>500: logs=logs[-500:]
+        logs.append({'time':datetime.now().strftime('%H:%M:%S'),'msg':msg,'cat':cat})
+        if len(logs)>800: logs=logs[-800:]
         save_json(LOG_FILE,logs)
 
 # ==================== 전화번호 표기 ====================
@@ -2920,6 +2933,38 @@ def reconcile_sites():
     if changed: add_log(f'[자동정리] {changed}개 사이트 자동 탈락(발행 불가)')
     return changed
 
+def purge_dead_sites(confirm=False):
+    """'진짜 되는 사이트(실게시 검증)'만 남기고 안 되는 사이트를 목록에서 삭제한다.
+    - 되는 것 판정: is_autopostable (permission + status!=rejected + write_test_status=passed
+      + verified_post_url http). 이게 아니면 삭제 대상.
+    - confirm=False면 삭제 예정 목록만 반환(dry-run). True면 백업 후 실제 삭제.
+    - 안전장치: 되는 게 0개면 전멸 방지로 중단. 삭제 전 원본 백업(복원 가능).
+    이 함수는 스케줄러/자동호출에 연결하지 않는다 — 관리자 버튼으로만 실행."""
+    with POST_LOCK:
+        sites=load_sites()
+        keep=[s for s in sites if is_autopostable(s)]
+        dead=[s for s in sites if not is_autopostable(s)]
+        dead_info=[{'name':s.get('name') or s.get('site_url',''),'url':s.get('site_url',''),
+                    'status':s.get('status',''),'reason':('rejected' if s.get('status')=='rejected'
+                    else 'failed' if s.get('status')=='failed' else '미검증(실게시 검증 안됨)')} for s in dead]
+        if not confirm:
+            return {'ok':True,'dry_run':True,'keep':len(keep),'dead':len(dead),'dead_sites':dead_info}
+        if not keep:
+            return {'ok':False,'error':'되는 사이트가 0개 — 전멸 방지로 삭제 중단'}
+        if not dead:
+            return {'ok':True,'deleted':0,'keep':len(keep),'message':'삭제할 사이트 없음'}
+        # 백업(복원 가능하게 원본 파일 복사)
+        try:
+            import shutil
+            bak=str(SITES_FILE)+'.purge-bak-'+_kst_now().strftime('%Y%m%d-%H%M%S')
+            shutil.copy(str(SITES_FILE),bak)
+        except Exception: bak=''
+        save_sites(keep)
+        try: add_rejected_domains([_domain_of(s.get('site_url','')) for s in dead],'사이트 정리 삭제')
+        except Exception: pass
+        add_log(f'[사이트 정리] 안 되는 {len(dead)}개 삭제 · 되는 {len(keep)}개 유지 (백업: {bak.split("/")[-1] if bak else "실패"})','정리')
+    return {'ok':True,'deleted':len(dead),'keep':len(keep),'backup':bak,'dead_sites':dead_info}
+
 def start_workers(n=2):
     global wk_active,wk_paused
     if wk_active: return
@@ -5190,8 +5235,13 @@ def api_worker_log():
     sites=load_sites(); publishable=[s for s in sites if is_publishable(s)]
     assisted=[s for s in sites if is_assisted_postable(s)]
     captcha=[s.get('name') or s.get('site_url','') for s in sites if s.get('has_captcha')]
+    # 모든 작업(발굴/검수/가입/발행/정리)을 분류된 활동 로그로 제공(최근 300개, 최신순)
+    activity=list(reversed(load_json(LOG_FILE,[])))[:300]
+    for a in activity:
+        if 'cat' not in a: a['cat']=_log_category(a.get('msg',''))
     return jsonify({'ok':True,'tasks':tasks[:100],'history':history[:500],
                     'publishable_count':len(publishable),'assisted_count':len(assisted),'captcha_sites':captcha,
+                    'activity':activity,
                     'workers':{**wk_stats,'active':wk_active,'paused':wk_paused}})
 
 @app.route('/api/manual-checks',methods=['GET'])
@@ -5462,6 +5512,16 @@ def api_sites_reconcile():
     try:
         n=reconcile_sites()
         return jsonify({'ok':True,'dropped':n})
+    except Exception as e:
+        return jsonify({'ok':False,'error':str(e)[:150]}),500
+
+@app.route('/api/sites/purge',methods=['POST'])
+def api_sites_purge():
+    """안 되는 사이트를 목록에서 삭제(진짜 되는 것만 남김). body {confirm:true} 없으면
+    삭제 예정 목록만 반환(dry-run). 삭제 전 자동 백업 + 전멸 방지 가드."""
+    try:
+        d=request.get_json(silent=True) or {}
+        return jsonify(purge_dead_sites(confirm=bool(d.get('confirm'))))
     except Exception as e:
         return jsonify({'ok':False,'error':str(e)[:150]}),500
 
