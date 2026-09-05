@@ -2961,38 +2961,39 @@ def _is_error_or_demo_site(s):
     return ''
 
 def reconcile_sites():
-    """사이트 목록 상시 최신화: 발행이 막힌 사이트를 자동 탈락(permission 해제)시킨다.
-       - 실제게시 검증 완료(verified_post_url 있음) 사이트는 보호(오탈락 방지).
-       - 영구 불가 조건에 해당하면 rejected + permission=False + 사유 저장."""
-    changed=0; dropped_doms=[]; now=_kst_now().strftime('%Y-%m-%d %H:%M')
+    """사이트 목록 상시 최신화: '안 되는' 사이트를 목록에서 자동 삭제한다(대표님 요청 — 안 되는 건 남기지 않음).
+       - 삭제 대상: 오류/데모 사이트, 영구차단(_site_permanent_block: 폼없음·차단·연속실패), 기존 rejected.
+       - 보호: 실게시 검증 완료(verified_post_url) 사이트, 진행중(가입/검증 중) 사이트는 유지.
+       - 삭제 도메인은 영구 탈락 목록에 기록(재발굴 차단). 삭제 시 sites.json 롤링 백업(.autodrop-bak)."""
+    now=_kst_now().strftime('%Y-%m-%d %H:%M')
+    kept=[]; removed=[]; dropped_doms=[]; locked=0
     with POST_LOCK:
         sites=load_sites()
         for s in sites:
-            if s.get('status')=='rejected': continue
-            # 오류안내/데모 사이트는 검증됨 여부와 무관하게 즉시 영구 탈락(헛발행 방지).
             edr=_is_error_or_demo_site(s)
-            if edr:
-                s.update({'status':'rejected','permission':False,'write_test_status':'failed',
-                          'verified_post_url':'','auto_drop_reason':edr,'auto_dropped_at':now})
-                changed+=1; dropped_doms.append(_domain_of(s.get('site_url','')))
-                continue
-            # 실게시 검증된 사이트는 일시 실패로 함부로 탈락시키지 않는다
-            if str(s.get('verified_post_url') or '').startswith(('http://','https://')):
-                # 단, 검증됐어도 연속 실패가 크게 쌓이면(서버 사망 등) 발행만 잠근다
-                if int(s.get('fail_streak',0) or 0)>=FAIL_STREAK_DROP+2:
-                    if s.get('permission'):
-                        s['permission']=False; s['auto_drop_reason']=f'검증됨이나 연속 실패 {s.get("fail_streak")}회 — 발행 잠금'
-                        s['auto_dropped_at']=now; changed+=1
-                continue
-            reason=_site_permanent_block(s)
+            verified=str(s.get('verified_post_url') or '').startswith(('http://','https://'))
+            # 검증된 사이트는 오류/데모가 아닌 한 보호(일시 실패로 삭제 안 함)
+            if verified and not edr:
+                if int(s.get('fail_streak',0) or 0)>=FAIL_STREAK_DROP+2 and s.get('permission'):
+                    s['permission']=False; s['auto_drop_reason']=f'검증됨이나 연속 실패 {s.get("fail_streak")}회 — 발행 잠금'
+                    s['auto_dropped_at']=now; locked+=1
+                kept.append(s); continue
+            # 안 되는 사이트(오류/데모·기존 rejected·영구차단) → 목록에서 삭제
+            reason=edr or ('기존 탈락' if s.get('status')=='rejected' else _site_permanent_block(s))
             if reason:
-                s.update({'status':'rejected','permission':False,
-                          'auto_drop_reason':reason,'auto_dropped_at':now})
-                changed+=1; dropped_doms.append(_domain_of(s.get('site_url','')))
-        if changed: save_sites(sites)
-    if dropped_doms:   # 자동 탈락 사이트 도메인도 영구 목록에 기록(재발굴 방지)
-        add_rejected_domains(dropped_doms,'사이트 자동탈락')
-    if changed: add_log(f'[자동정리] {changed}개 사이트 자동 탈락(발행 불가)')
+                removed.append(s); dropped_doms.append(_domain_of(s.get('site_url','')))
+            else:
+                kept.append(s)   # 진행중(가입/검증 중) 등은 유지
+        if removed or locked:
+            if removed:
+                try:
+                    import shutil; shutil.copy(str(SITES_FILE),str(SITES_FILE)+'.autodrop-bak')
+                except Exception: pass
+            save_sites(kept)
+    if dropped_doms:   # 삭제 도메인은 영구 탈락 목록에 기록(재발굴 방지)
+        add_rejected_domains(dropped_doms,'안 되는 사이트 자동삭제')
+    if removed: add_log(f'[자동정리] 안 되는 사이트 {len(removed)}개 자동삭제(발행가능·진행중만 유지)','정리')
+    return len(removed)
     return changed
 
 def purge_dead_sites(confirm=False):
@@ -7124,13 +7125,12 @@ const srcOK=s=>['manual_admin','admin_bulk','legacy_admin','candidate_registered
 const isPub=s=>!!s.permission&&srcOK(s)&&s.status!=='rejected'&&s.write_test_status==='passed'&&/^https?:\/\//.test(s.verified_post_url||'');
 const isDead=s=>(s.status==='rejected'||s.status==='failed'||(s.permission===false&&srcOK(s)&&s.write_test_status==='failed'));
 const pubs=sites.filter(isPub);
-const dead=sites.filter(s=>!isPub(s)&&isDead(s));
 const prog=sites.filter(s=>!isPub(s)&&!isDead(s));
 $('siteTabCount').textContent=pubs.length;   // 탭 카운트=실시간 발행가능 수(대표님 요청)
 const showProg=window._siteShowProg||false;
 let shown=pubs.slice();
-if(showProg)shown=shown.concat(prog);   // '안 되는(dead)'은 이 영역에 목록 노출하지 않음 — 발행가능/진행중만
-const toggle=`<div class="row" style="margin-bottom:6px;font-size:11px;color:var(--d);flex-wrap:wrap;gap:8px"><span style="color:var(--g)">🟢 발행가능 ${pubs.length}곳</span>${prog.length?`<label style="display:flex;align-items:center;gap:4px"><input type="checkbox" style="width:auto" ${showProg?'checked':''} onclick="window._siteShowProg=this.checked;renderSites()">진행중 ${prog.length}곳 보기</label>`:''}<span style="flex:1"></span>${dead.length?`<span style="color:var(--d)">안 되는 ${dead.length}곳</span> <button class="btn btn-r btn-xs" onclick="purgeDeadSites()">🗑 정리</button>`:''}</div>`;
+if(showProg)shown=shown.concat(prog);   // '안 되는' 사이트는 서버가 자동삭제 — 이 영역은 발행가능/진행중만
+const toggle=`<div class="row" style="margin-bottom:6px;font-size:11px;color:var(--d);flex-wrap:wrap;gap:8px"><span style="color:var(--g)">🟢 발행가능 ${pubs.length}곳</span>${prog.length?`<label style="display:flex;align-items:center;gap:4px"><input type="checkbox" style="width:auto" ${showProg?'checked':''} onclick="window._siteShowProg=this.checked;renderSites()">진행중 ${prog.length}곳 보기</label>`:''}<span style="flex:1"></span></div>`;
 if(!shown.length){$('siteList').innerHTML=toggle+'<p style="color:var(--d);padding:30px;text-align:center">발행가능 사이트가 아직 없습니다'+(prog.length?' (진행중 '+prog.length+'곳 — 위에서 보기)':'')+'</p>';return}
 $('siteList').innerHTML=toggle+'<table><thead><tr><th><input type="checkbox" id="allCb" onclick="document.querySelectorAll(\'.cb\').forEach(c=>c.checked=this.checked)"></th><th>이름</th><th>허용</th><th>URL</th><th>게시판</th><th>오늘</th><th>상태</th><th>동작</th></tr></thead><tbody>'+shown.map(siteRow).join('')+'</tbody></table>';
 checked.forEach(id=>{const c=document.querySelector(`.cb[data-id="${id}"]`);if(c)c.checked=true})}
