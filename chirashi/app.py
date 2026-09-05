@@ -3689,45 +3689,94 @@ def _tempmail_req(path, method='GET', data=None, token=None):
     except Exception as e:
         return 0, {'error': str(e)[:80]}
 
+def _1secmail_create():
+    """1secmail 임시메일 발급. 반환: (address, pw, token=login|domain) 또는 (None,None,None).
+       1secmail은 계정 생성이 불필요 — 임의 주소로 바로 수신 가능. token에 'login|domain'을 담아
+       wait 단계에서 재사용한다."""
+    try:
+        st, doms = _http_json('https://www.1secmail.com/api/v1/?action=getDomainList')
+        if not isinstance(doms, list) or not doms: return None, None, None
+        domain = random.choice(doms)
+        login = f'twseo{secrets.token_hex(4)}'
+        addr = f'{login}@{domain}'
+        return addr, secrets.token_hex(8), f'{login}|{domain}'
+    except Exception:
+        return None, None, None
+
+def _http_json(url):
+    """GET JSON (1secmail용). 반환 (status, obj)."""
+    try:
+        req=urllib.request.Request(url, headers={'User-Agent':'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return resp.status, json.loads(resp.read().decode())
+    except Exception:
+        return 0, None
+
 def tempmail_create():
-    """임시메일 주소를 발급하고 (address, password, token)을 반환. 실패 시 (None,...)."""
+    """임시메일 발급 — mail.tm 우선, 실패 시 1secmail 폴백(전략2D 로테이션).
+       반환: (address, password, token). token 문자열 앞에 서비스 태그를 붙여 wait가 구분한다:
+       'MT:<token>' = mail.tm, '1S:<login>|<domain>' = 1secmail. 실패 시 (None,None,None)."""
+    # 1) mail.tm 시도
     st, doms = _tempmail_req('/domains')
-    if st != 200 or not isinstance(doms, dict): return None, None, None
-    members = doms.get('hydra:member') or []
-    if not members: return None, None, None
-    domain = members[0].get('domain')
-    addr = f'twseo{secrets.token_hex(5)}@{domain}'; pw = secrets.token_hex(10)
-    st, _ = _tempmail_req('/accounts', 'POST', {'address': addr, 'password': pw})
-    if st not in (200, 201): return None, None, None
-    st, tok = _tempmail_req('/token', 'POST', {'address': addr, 'password': pw})
-    token = tok.get('token') if (st == 200 and isinstance(tok, dict)) else None
-    return (addr, pw, token) if token else (None, None, None)
+    if st == 200 and isinstance(doms, dict):
+        members = doms.get('hydra:member') or []
+        if members:
+            domain = members[0].get('domain')
+            addr = f'twseo{secrets.token_hex(5)}@{domain}'; pw = secrets.token_hex(10)
+            st, _ = _tempmail_req('/accounts', 'POST', {'address': addr, 'password': pw})
+            if st in (200, 201):
+                st, tok = _tempmail_req('/token', 'POST', {'address': addr, 'password': pw})
+                token = tok.get('token') if (st == 200 and isinstance(tok, dict)) else None
+                if token:
+                    return addr, pw, 'MT:' + token
+    # 2) 1secmail 폴백
+    addr, pw, tk = _1secmail_create()
+    if tk:
+        return addr, pw, '1S:' + tk
+    return None, None, None
+
+def _extract_verify(blob, text):
+    """메일 본문에서 인증 링크 또는 6자리 코드 추출. 반환 {'link':..}/{'code':..}/None."""
+    for murl in re.findall(r'https?://[^\s"\'<>]+', blob):
+        if re.search(r'(email_check|auth|confirm|verify|activate|register|certify|인증)', murl, re.I):
+            return {'link': murl}
+    mcode = re.search(r'\b(\d{6})\b', text)
+    if mcode: return {'code': mcode.group(1)}
+    return None
 
 def tempmail_wait_verify_link(token, timeout=120):
-    """받은편지함을 폴링해 인증 메일의 인증 링크(또는 6자리 코드)를 찾아 반환.
+    """받은편지함 폴링 → 인증 링크/6자리 코드. token 태그(MT:/1S:)로 서비스 구분(전략2D).
        반환: {'link':url} 또는 {'code':'123456'} 또는 None."""
     deadline = time.time() + timeout
+    # --- 1secmail ---
+    if str(token).startswith('1S:'):
+        login, _, domain = token[3:].partition('|')
+        while time.time() < deadline:
+            st, msgs = _http_json(f'https://www.1secmail.com/api/v1/?action=getMessages&login={login}&domain={domain}')
+            if isinstance(msgs, list):
+                for m in msgs:
+                    mid = m.get('id')
+                    st2, full = _http_json(f'https://www.1secmail.com/api/v1/?action=readMessage&login={login}&domain={domain}&id={mid}')
+                    if not isinstance(full, dict): continue
+                    text = (full.get('textBody') or '') + ' '
+                    blob = text + ' ' + (full.get('htmlBody') or '') + ' ' + (full.get('body') or '')
+                    r = _extract_verify(blob, text)
+                    if r: return r
+            time.sleep(4)
+        return None
+    # --- mail.tm (기본; 'MT:' 접두 제거) ---
+    mt = token[3:] if str(token).startswith('MT:') else token
     while time.time() < deadline:
-        st, msgs = _tempmail_req('/messages', token=token)
+        st, msgs = _tempmail_req('/messages', token=mt)
         items = (msgs.get('hydra:member') or []) if isinstance(msgs, dict) else []
         for m in items:
             mid = m.get('id')
-            st2, full = _tempmail_req(f'/messages/{mid}', token=token)
+            st2, full = _tempmail_req(f'/messages/{mid}', token=mt)
             if st2 != 200 or not isinstance(full, dict): continue
             text = (full.get('text') or '') + ' '
-            html = ''
-            h = full.get('html')
-            if isinstance(h, list): html = ' '.join(h)
-            elif isinstance(h, str): html = h
-            blob = text + ' ' + html
-            # 1) 인증 링크(그누보드: register_email_check / auth / confirm / verify)
-            for murl in re.findall(r'https?://[^\s"\'<>]+', blob):
-                if re.search(r'(email_check|auth|confirm|verify|activate|register|certify|인증)', murl, re.I):
-                    return {'link': murl}
-            # 2) 6자리 인증 코드
-            mcode = re.search(r'\b(\d{6})\b', text)
-            if mcode:
-                return {'code': mcode.group(1)}
+            h = full.get('html'); html = ' '.join(h) if isinstance(h, list) else (h if isinstance(h, str) else '')
+            r = _extract_verify(text + ' ' + html, text)
+            if r: return r
         time.sleep(4)
     return None
 
