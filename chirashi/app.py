@@ -3108,6 +3108,10 @@ def is_autopostable(site):
     """자동발행 대상 = 허용 + 실제 게시 성공 URL 검증 완료.
        (CAPTCHA는 2captcha로 자동 해결 시도 → 실패 시 수동 대기)"""
     verified_url=str(site.get('verified_post_url') or '')
+    # 로그인 필요 사이트인데 로그인 정보(mb_id)가 없으면 발행 제외 — 가입 미완료 사이트가
+    # 발행 시도돼 failed 나는 것 방지(대표님 지시 2026-09-06). 비회원 글쓰기(login_required=False)는 영향 없음.
+    if site.get('login_required') and not str(site.get('mb_id') or '').strip():
+        return False
     return (is_permitted(site)
             and site.get('status')!='rejected'
             and site.get('write_test_status')=='passed'
