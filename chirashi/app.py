@@ -561,6 +561,16 @@ def load_config():
     if c is None or not isinstance(c,dict): save_json(CONFIG_FILE,d); return d.copy()
     for k,v in d.items():
         if k not in c: c[k]=v
+    # 완전자동 재설계 1회 마이그레이션: 기존 config가 자동화를 꺼둔 상태여도 1회만 켠다.
+    # (이후 대표님이 의도적으로 끄면 autofull_migrated=True라 다시 켜지 않는다)
+    if not c.get('autofull_migrated'):
+        c['discover_enabled']=True
+        c['auto_pipeline_enabled']=True
+        c.setdefault('daily_limit',3)
+        c.setdefault('min_interval_minutes',180)
+        c['autofull_migrated']=True
+        try: save_json(CONFIG_FILE,c)
+        except Exception: pass
     return c
 
 TWOCAPTCHA_CACHE_FILE=os.path.join(DATA_DIR,'twocaptcha_balance.json')
