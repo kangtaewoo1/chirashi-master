@@ -3628,7 +3628,7 @@ def add_candidates_from(items, cfg, source='search'):
         known_dom={c.get('domain') for c in cands}
         site_dom={_domain_of(s.get('site_url','')) for s in load_sites()}
         rejected_dom=load_rejected_domains()   # 영구 탈락: 재수집 안 함
-        added=0; blocked_unreachable=0; blocked_write=0; blocked_rejected=0
+        added=0; blocked_unreachable=0; blocked_write=0; blocked_rejected=0; blocked_errpage=0
         for it in items:
             url=it.get('url') if isinstance(it,dict) else str(it)
             if not url or not url.startswith('http'): continue
@@ -3642,6 +3642,10 @@ def add_candidates_from(items, cfg, source='search'):
             check=precheck_search_result(url) if source!='manual' else {'reachable':True,'title':'','digits':8}
             if not check.get('reachable'):
                 blocked_unreachable+=1; continue
+            # 오류안내/에러 페이지 제목이면 후보에서 즉시 제외(뚜뚜월드처럼 홈이 '오류안내 페이지'인 곳).
+            _ttl=str(check.get('title') or '')
+            if source!='manual' and any(k in _ttl for k in ERROR_PAGE_HINTS):
+                blocked_errpage+=1; add_rejected_domains(dom,'오류안내 페이지'); continue
             form_check=screen_candidate(url,cfg) if source!='manual' else {}
             # write_form이 없어도 '게시판 URL이면서 로그인 필요' 후보는 받아둔다 —
             # auto_pipeline이 자동가입(2captcha·mail.tm)으로 뚫은 뒤 발행을 시도한다.
@@ -3669,8 +3673,8 @@ def add_candidates_from(items, cfg, source='search'):
             cands.append(rec)
             added+=1
         save_cands(cands)
-    if source!='manual' and (blocked_unreachable or blocked_write or blocked_rejected):
-        add_log(f'[후보 사전필터] 접속불가 {blocked_unreachable} · 글쓰기폼없음 {blocked_write} · 영구탈락 {blocked_rejected} 제외')
+    if source!='manual' and (blocked_unreachable or blocked_write or blocked_rejected or blocked_errpage):
+        add_log(f'[후보 사전필터] 접속불가 {blocked_unreachable} · 오류페이지 {blocked_errpage} · 글쓰기폼없음 {blocked_write} · 영구탈락 {blocked_rejected} 제외')
     return added
 
 def screen_pending(limit=30):
@@ -4240,6 +4244,11 @@ def auto_pipeline_once(limit=5):
         # URL이 게시판 경로면 bo_table 미추출이어도 시도 대상 (write.php/board.php/bbs 등)
         u=(c.get('url') or '').lower()
         return bool(re.search(r'(bbs/|board\.php|write\.php|bo_table=|/board/|board_no=|kboard)', u))
+    # 오류안내 페이지 제목 후보는 처리 전에 즉시 탈락(뚜뚜월드처럼 홈이 '오류안내 페이지' — 발행 무의미).
+    for _c in cands:
+        if _c.get('status') in ('ready','new') and any(k in str(_c.get('title') or '') for k in ERROR_PAGE_HINTS):
+            try: _cand_set(_c['id'],status='rejected',reject_reason='오류안내 페이지'); _c['status']='rejected'
+            except Exception: pass
     pend=[c for c in cands
           if c.get('screened') and c.get('status')=='ready'
           and not c.get('parked') and not c.get('illegal') and not c.get('ad_banned')
