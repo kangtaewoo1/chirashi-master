@@ -872,7 +872,7 @@ def generate_rich_html(keywords, cfg):
         '분위기 있는 인테리어로 특별한 자리를 완성합니다.',
         '다양한 목적의 모임에 유연하게 대응합니다.',
     ]
-    feats=''.join(f'<li style="margin:8px 0;line-height:1.8;">{x}</li>' for x in random.sample(feat_pool,random.randint(5,7)))
+    feats=''.join(f'<li style="margin:9px 0;line-height:1.85;padding-left:26px;position:relative;"><span style="position:absolute;left:0;color:{c2};font-weight:bold;">✔</span>{x}</li>' for x in random.sample(feat_pool,random.randint(5,7)))
 
     faq_pool=[
         ('예약은 어떻게 하나요?', f'{p}로 문의 주시면 인원과 시간에 맞춰 빠르게 안내해 드립니다. 방문 전 예약을 권장합니다.'),
@@ -888,36 +888,59 @@ def generate_rich_html(keywords, cfg):
     faqs=''.join(f'<dt style="font-weight:bold;color:{c2};margin-top:12px;">Q. {q}</dt><dd style="margin:6px 0 12px 20px;line-height:1.7;">{a}</dd>' for q,a in random.sample(faq_pool,random.randint(4,6)))
 
     reco_pool=['회식·접대 장소를 찾는 직장인','지인들과 편하게 모일 공간이 필요한 분',f'{r} 인근에서 약속 장소를 정하려는 분','믿을 만한 정보로 실패 없이 고르고 싶은 분','분위기 좋은 자리를 원하는 분','접근성 좋은 위치를 선호하는 분']
-    recos=''.join(f'<li style="margin:8px 0;line-height:1.8;">{x}</li>' for x in random.sample(reco_pool,random.randint(3,min(5,len(reco_pool)))))
+    recos=''.join(f'<li style="margin:9px 0;line-height:1.85;padding-left:26px;position:relative;"><span style="position:absolute;left:0;">👉</span>{x}</li>' for x in random.sample(reco_pool,random.randint(3,min(5,len(reco_pool)))))
 
-    review=random.choice([
-        f'지인 추천으로 {r} {s}에 다녀왔습니다. {mood} 분위기에 응대도 친절해서 편안하게 즐겼어요. 다음에도 또 방문하고 싶습니다.',
-        f'회식 장소로 {r} {s}를 예약했는데 공간이 넓고 깔끔해서 만족스러웠습니다. {b} 안내대로 미리 문의하니 준비가 잘 되어 있었어요.',
-        f'위치가 찾기 쉬워 초행인데도 헤매지 않았습니다. {r} {s} 분위기가 좋아 모임이 화기애애했어요. 추천합니다.',
-        f'{b} 정보를 보고 방문했는데 기대 이상이었습니다. 가격도 합리적이고 응대도 세심해 좋은 자리가 됐습니다.',
-        f'{r}에서 {s} 고민하다 방문했는데 선택 잘했다는 생각이 들었어요. {mood} 공간에서 편하게 대화 나눴습니다.',
-    ])
-    chips=' '.join(f'<span style="display:inline-block;padding:4px 12px;margin:3px;background:#E5E9EE;font-size:13px;color:{c3};border:1px solid #dde4f0;border-radius:4px;">{x}</span>' for x in random.sample(rel,random.randint(8,min(13,len(rel)))))
-
-    # 중간 콘텐츠 블록들 — 순서를 매번 섞어 변형 폭을 키움(중복 방지)
+    # 후기 카드(페르소나 + 별점) — 여러 개를 카드로
+    personas=['첫 방문 고객','40대 직장인','단골 손님','회식 담당자','지인 추천 방문','30대 고객','모임 총무']
+    rev_pool=[
+        f'{mood} 분위기에 응대도 친절해서 편하게 즐겼습니다. {r} 근처에서 이만한 곳 찾기 어려워요.',
+        '회식 장소로 예약했는데 공간이 넓고 깔끔해 만족스러웠어요. 미리 문의하니 준비가 잘 돼 있었습니다.',
+        '위치가 찾기 쉬워 초행인데도 안 헤맸어요. 분위기가 좋아 모임이 화기애애했습니다. 추천합니다.',
+        f'가격도 합리적이고 응대가 세심해 좋은 자리가 됐습니다. {b} 안내대로 하니 편했어요.',
+        f'{r}에서 {s} 고민하다 방문했는데 선택 잘했어요. 편하게 대화 나눌 수 있었습니다.',
+        '재방문 의사 있습니다. 다음 모임도 여기로 잡으려고요. 전반적으로 만족스러웠어요.',
+    ]
+    _pp=random.sample(personas,3); _rr=random.sample(rev_pool,3)
+    reviews=''.join(
+        f'<div style="background:#20293a;color:#e8edf4;border-radius:10px;padding:15px 18px;margin:11px 0;">'
+        f'<div style="font-weight:bold;margin-bottom:6px;">{pp} <span style="color:#ffc107;letter-spacing:2px;">★★★★★</span></div>'
+        f'<div style="line-height:1.75;color:#cbd5e1;font-size:14px;">{rr}</div></div>' for pp,rr in zip(_pp,_rr))
+    # 이용 안내/혜택 박스(초록 강조)
+    benefit_pool=['투명한 안내 — 방문 전 문의로 편하게 확인','단골 고객을 위한 세심한 응대','편안하고 프라이빗한 공간','합리적이고 정직한 운영','원하는 시간대 맞춤 예약','청결하게 관리되는 쾌적한 환경']
+    benefits=''.join(f'<li style="margin:8px 0;line-height:1.8;padding-left:22px;position:relative;"><span style="position:absolute;left:0;color:{c1};">◆</span>{x}</li>' for x in random.sample(benefit_pool,random.randint(3,4)))
+    # 이용 팁
+    tip_pool=['원하시는 분위기나 코스를 미리 말씀해 주시면 맞춤 안내가 가능합니다.','처음이시라면 궁금한 점을 미리 정리해 문의하시면 더 자세히 안내받으실 수 있습니다.','예약은 원하시는 날짜보다 조금 미리 잡으시면 좋은 시간대를 선택하실 수 있습니다.','특별한 날이라면 미리 말씀해 주세요. 분위기에 맞게 준비해 드립니다.','단체 인원은 사전에 알려주시면 공간 배치가 원활합니다.']
+    tips=''.join(f'<li style="margin:8px 0;line-height:1.8;padding-left:24px;position:relative;"><span style="position:absolute;left:0;">💡</span>{x}</li>' for x in random.sample(tip_pool,random.randint(3,4)))
+    # 핵심 키워드 해시태그
+    tagwords=[f'{r}{s}',r,s,b]+rel[:5]
+    hashtags=' '.join(f'<span style="display:inline-block;padding:6px 13px;margin:4px 4px;background:#eef2f7;color:{c1};border:1px solid {c2};border-radius:20px;font-size:13px;font-weight:600;">#{re.sub(r"[^가-힣A-Za-z0-9]","",str(x))}</span>' for x in tagwords if str(x).strip())
+    # 리치 소제목(아이콘 + 좌측 강조바)
+    def SEC(icon,tt): return f'<h2 style="color:{c1};font-size:22px;margin:36px 0 14px;padding:11px 15px;border-left:6px solid {c2};background:#f5f7fb;border-radius:0 6px 6px 0;">{icon} {tt}</h2>'
+    price_box=(f'<div style="border:1px solid {c2};background:#f4faf6;border-radius:10px;padding:18px 20px;margin:24px 0;">'
+        f'<p style="font-weight:bold;color:{c1};font-size:16px;margin:0 0 10px;">✅ {r} {s} 이용 안내</p>'
+        f'<ul style="margin:0;padding:0;list-style:none;font-size:14px;color:#333;">{benefits}</ul></div>')
+    # 중간 콘텐츠 블록 — 순서를 매번 섞어 변형 폭 확대(중복 방지)
     blocks=[
-        H(f'{r} {s} 주요 특징')+f'<ul style="font-size:15px;padding-left:20px;color:#444;">{feats}</ul>',
-        H(f'{r} {s} 이런 분께 추천합니다')+f'<ul style="font-size:15px;padding-left:20px;color:#444;">{recos}</ul>',
-        H(f'{r} {s} 자주 묻는 질문')+f'<dl style="font-size:15px;margin:15px 0;">{faqs}</dl>',
-        H(f'{r} {s} 방문 후기')+f'<p style="font-size:15px;line-height:1.9;">{review}</p>',
-        H(f'{r} 인근 이용 가능 지역')+f'<div style="margin:12px 0;line-height:2.6;">{chips}</div>',
+        SEC('⭐',f'{r} {s} 주요 특징')+f'<ul style="font-size:15px;padding:0;list-style:none;color:#444;">{feats}</ul>',
+        SEC('🙋',f'{r} {s} 이런 분께 추천합니다')+f'<ul style="font-size:15px;padding:0;list-style:none;color:#444;">{recos}</ul>',
+        SEC('💬',f'{r} {s} 자주 묻는 질문')+f'<dl style="font-size:15px;margin:14px 0;">{faqs}</dl>',
+        SEC('🌟',f'{r} {s} 이용 후기')+reviews,
+        SEC('💡',f'{r} {s} 이용 팁')+f'<ul style="font-size:15px;padding:0;list-style:none;color:#444;">{tips}</ul>',
     ]
     random.shuffle(blocks)
-    html=(f'<h1 style="font-size:22px;font-weight:bold;margin:0 0 18px 0;color:#222;">{title}</h1>'
+    html=(f'<h1 style="font-size:23px;font-weight:bold;margin:0 0 18px;color:#1a1a1a;line-height:1.45;">{title}</h1>'
         + IMG(0, f'{r} {s}의 {mood.split()[0]} 공간')
-        + H(f'{r} {s} 안내')
-        + f'<p style="font-size:16px;margin:18px 0;line-height:1.9;">{intro}</p>'
-        + f'<p style="font-size:15px;margin:14px 0;line-height:1.9;color:#333;">{para2}</p>'
+        + SEC('📍',f'{r} {s} 안내')
+        + f'<p style="font-size:16px;margin:16px 0;line-height:1.95;">{intro}</p>'
+        + f'<p style="font-size:15px;margin:14px 0;line-height:1.95;color:#333;">{para2}</p>'
+        + price_box
         + ''.join(blocks)
-        + f'<div style="margin:40px 0;padding:22px;background:#f8f9fa;border-radius:8px;text-align:center;">'
-          f'<p style="font-size:18px;font-weight:bold;color:{c1};">{r} {s} 문의 및 예약</p>'
-          f'<p style="font-size:24px;font-weight:bold;color:{c2};margin:12px 0;">{p}</p>'
-          f'<p style="font-size:14px;color:#666;">{b} · 믿을 수 있는 {r} {s} 정보</p></div>')
+        + SEC('#️⃣','핵심 키워드')
+        + f'<div style="margin:12px 0 6px;line-height:2.4;">{hashtags}</div>'
+        + f'<div style="margin:38px 0 8px;padding:24px;background:linear-gradient(135deg,#f8f9fa,#eef2f7);border-radius:12px;text-align:center;border-top:4px solid {c1};">'
+          f'<p style="font-size:18px;font-weight:bold;color:{c1};margin:0;">📞 {r} {s} 문의 · 예약</p>'
+          f'<p style="font-size:26px;font-weight:bold;color:{c2};margin:12px 0;">{p}</p>'
+          f'<p style="font-size:14px;color:#666;margin:0;">{b} · 믿을 수 있는 {r} {s} 정보</p></div>')
     return html, title
 
 # ==================== GPT 본문 생성 (선택) ====================
