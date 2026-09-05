@@ -7069,9 +7069,11 @@ if(c.login_required)flags.push('<span class="st st-i">로그인필요</span>');
 if(c.write_form)flags.push('<span class="st st-ok">글쓰기폼</span>');
 if(c.last_post_days!=null)flags.push('<span class="st st-i">최근글 '+c.last_post_days+'일</span>');
 const stmap={ready:'<span class="st st-ok">검수완료</span>',new:'<span class="st st-i">미검수</span>',approved:'<span class="st st-ok">사이트등록</span>',rejected:'<span class="st st-f">제외</span>'};
-const acts=(c.status==='approved')?'':(
- '<button class="btn btn-g btn-xs" onclick="approveCand(\''+esc(c.id)+'\')">사이트 등록</button> '+
- '<button class="btn btn-r btn-xs" onclick="setCand(\''+esc(c.id)+'\',\'rejected\')">탈락</button>');
+// 완전자동: 수동 버튼 대신 자동 처리 상태만 표시(되는 곳 자동등록·안 되는 곳 자동탈락).
+const acts=(c.status==='approved')?'<span style="color:var(--g);font-size:10px">✓ 자동 등록됨</span>'
+ :(c.status==='rejected')?'<span style="color:var(--r);font-size:10px">자동 탈락(재발굴 제외)</span>'
+ :(c.status==='ready')?'<span style="color:var(--p);font-size:10px">🤖 자동 가입·발행 대기</span>'
+ :'<span style="color:var(--d);font-size:10px">검수 중…</span>';
 return '<tr><td style="color:'+scc+';font-weight:700;font-size:15px">'+sc+'</td>'+
 '<td><a href="'+esc(c.url)+'" target="_blank" style="color:var(--p)"><b>'+esc(c.domain||'')+'</b></a><br><span style="color:var(--d);font-size:10px">'+esc((c.board_name||c.title||'').slice(0,44))+'</span></td>'+
 '<td style="max-width:230px">'+flags.join(' ')+(c.reject_reason?'<br><span style="color:var(--r);font-size:10px">'+esc(c.reject_reason)+'</span>':'')+'</td>'+
