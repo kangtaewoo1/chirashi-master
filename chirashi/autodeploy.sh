@@ -1,28 +1,29 @@
 #!/bin/bash
 # chirashi 자동배포 — GitHub 최신 app.py를 받아 검증 후 확실히 재시작한다.
-# crontab에서 5분마다 실행되므로, push만 하면 콘솔 없이 자동 반영된다.
+# crontab에서 주기 실행되므로, push만 하면 콘솔 없이 자동 반영된다.
+# 다운로드는 GitHub API(raw 미디어타입)를 쓴다 — raw.githubusercontent.com CDN 캐시(수분)를
+# 우회해 push 직후 즉시 최신을 받는다.
 set -u
 DIR=/opt/chirashi
-RAW=https://raw.githubusercontent.com/kangtaewoo1/chirashi-master/master/chirashi/app.py
+API=https://api.github.com/repos/kangtaewoo1/chirashi-master/contents/chirashi/app.py?ref=master
 LOG=/tmp/chirashi-autodeploy.log
 PORT=8888
 cd "$DIR" || exit 0
 
-# 앱을 확실히 죽이고(옛 프로세스 잔존 방지) 새로 띄우는 공용 함수
+# 앱 재시작 — systemd(chirashi.service, Restart=always)가 프로세스를 관리하므로
+# systemd에게 재시작을 맡긴다. (pkill/nohup은 systemd가 되살려 충돌하므로 쓰지 않는다)
 restart_app() {
-  pkill -f "venv/bin/python app.py" 2>/dev/null
-  for i in 1 2 3 4 5; do
-    pgrep -f "venv/bin/python app.py" >/dev/null || break
-    sleep 1
-  done
-  pkill -9 -f "venv/bin/python app.py" 2>/dev/null   # 그래도 살아있으면 강제 종료
-  sleep 1
-  nohup venv/bin/python app.py > /tmp/chirashi.log 2>&1 &
+  systemctl restart chirashi
   sleep 3
 }
 
-# 1) 최신 파일 받기(실패하면 종료)
-if ! curl -fsSL "$RAW" -o app.py.remote 2>/dev/null; then exit 0; fi
+# 1) 최신 파일 받기(GitHub API, raw 미디어타입 — CDN 캐시 없음). 실패하면 종료
+if ! curl -fsSL -H "Accept: application/vnd.github.raw" "$API" -o app.py.remote 2>/dev/null; then exit 0; fi
+# 받은 게 빈 파일이거나 에러 JSON이면 반영하지 않음(안전장치)
+if [ ! -s app.py.remote ]; then rm -f app.py.remote; exit 0; fi
+if head -c 1 app.py.remote | grep -q '{'; then
+  echo "$(date) API가 JSON 반환(레이트리밋/오류 추정) — 반영 안 함" >>"$LOG"; rm -f app.py.remote; exit 0
+fi
 # 2) 파일이 같으면(변경 없음) 아무것도 안 함
 if [ -f app.py ] && cmp -s app.py app.py.remote; then rm -f app.py.remote; exit 0; fi
 # 3) 문법 검사 실패하면 반영 안 함(현재 버전 유지)
