@@ -3528,18 +3528,16 @@ def add_candidates_from(items, cfg, source='search'):
             if not dom or dom in known_dom or dom in site_dom: continue
             if dom.replace('www.','') in rejected_dom:   # 이전에 탈락한 도메인은 건너뜀
                 blocked_rejected+=1; continue
-            # URL 자체가 게시판 경로(그누보드/카페24)면 '제목 숫자 8개' 규칙을 면제한다.
-            # (홍보게시판은 제목이 '홍보게시판'처럼 숫자가 없을 때가 많아 오탈락하던 문제)
-            url_is_board=bool(re.search(r'(bbs/board\.php|bo_table=|/board/.*list\.html|board_no=)',url.lower()))
+            # 접속 가능 여부만 확인. '제목 숫자 8개' 규칙은 정상 게시판도 대량 오탈락시켜 제거함
+            # (대표님 지시 2026-09-06). 주차/스팸은 뒤의 screen_candidate가 parked/illegal로 거른다.
             check=precheck_search_result(url) if source!='manual' else {'reachable':True,'title':'','digits':8}
             if not check.get('reachable'):
                 blocked_unreachable+=1; continue
-            if int(check.get('digits',0))<8 and not url_is_board:
-                blocked_title+=1; continue
             form_check=screen_candidate(url,cfg) if source!='manual' else {}
             # write_form이 없어도 '게시판 URL이면서 로그인 필요' 후보는 받아둔다 —
             # auto_pipeline이 자동가입(2captcha·mail.tm)으로 뚫은 뒤 발행을 시도한다.
             # (비회원 글쓰기 게시판만 받던 관문을, 로그인 게시판까지 확대)
+            url_is_board=bool(re.search(r'(bbs/board\.php|bo_table=|/board/.*list\.html|board_no=)',url.lower()))
             _is_board_login=bool(form_check.get('login_required')) and (
                 form_check.get('platform') in ('gnuboard','cafe24','kboard') or url_is_board)
             if source!='manual' and not form_check.get('write_form') and not _is_board_login:
