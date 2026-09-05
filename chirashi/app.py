@@ -557,7 +557,8 @@ def load_config():
        'brave_price_per_query_usd':0.005,  # Pro 플랜 기준 쿼리당 $0.005(설정 탭에서 변경 가능)
        'auto_pipeline_enabled':True,'auto_pipeline_batch':10,
        'min_interval_minutes':180,   # 발행 안전한도: daily_limit(위)=하루3건 + 최소간격 180분
-       'publish_loop_enabled':True,'publish_interval_sec':300}   # 24시간 상시발행 루프(5분 주기 큐 보충)
+       'publish_loop_enabled':True,'publish_interval_sec':300,   # 24시간 상시발행 루프(5분 주기 큐 보충)
+       'discover_interval_sec':600}   # 발굴 주기 10분(크레딧 절약). 목표 도달 시 자동 중단
     c=load_json(CONFIG_FILE,None)
     if c is None or not isinstance(c,dict): save_json(CONFIG_FILE,d); return d.copy()
     for k,v in d.items():
@@ -3286,6 +3287,10 @@ GNU_BO_TABLES=['promotion','promotion1','hongbo','hongbo1','ad','link','partner'
 BRAVE_URL_FRAGMENTS=['bbs/write.php bo_table=promotion 비회원','bbs/write.php bo_table=free 비회원',
                      'bbs/board.php 비회원 글쓰기 홍보','bbs/board.php 회원가입 없이 글쓰기',
                      'bbs/board.php 누구나 글쓰기 홍보게시판','bbs/write.php 비회원 홍보 환영',
+                     # 전략1: 광고허용·비회원 글쓰기 확실한 긍정 신호 강화
+                     'bbs/board.php 자유홍보 게시판 글쓰기','bbs/board.php 업체등록 무료 홍보',
+                     'bbs/board.php 광고 환영 비회원','bbs/board.php 홍보 자유롭게 게시판',
+                     'bbs/write.php bo_table=ad 비회원','bbs/write.php bo_table=partner 홍보',
                      'bbs/board.php bo_table=promotion','bbs/board.php bo_table=hongbo',
                      'bbs/board.php bo_table=link','bbs/board.php bo_table=partner',
                      'bbs/board.php bo_table=ad','bbs/board.php bo_table=banner',
@@ -4198,9 +4203,15 @@ def discover_loop():
             cfg=load_config()
             provider=(cfg.get('search_provider') or 'brave').lower()
             ready=bool(cfg.get('brave_api_key')) if provider=='brave' else bool(cfg.get('google_api_key') and cfg.get('google_cx'))
-            if cfg.get('discover_enabled') and ready:
-                # 500곳 목표: 한 배치에 더 많이 발굴(하루 쿼리 한도는 discover_once가 지킴).
+            # 발행가능 사이트가 목표(site_goal)에 도달하면 발굴 중단 — Brave 크레딧 절약(전략C).
+            # 막혀서 목표 밑으로 떨어지면 자동 재개된다.
+            pub_count=len([s for s in load_sites() if is_publishable(s)])
+            goal=int(cfg.get('site_goal',500) or 500)
+            if cfg.get('discover_enabled') and ready and pub_count < goal:
                 discover_once(cfg,max_queries=int(cfg.get('discover_batch',50) or 50))
+            elif cfg.get('discover_enabled') and pub_count >= goal:
+                # 목표 달성 — 발굴 멈추고 미검수 후보만 정리
+                if any(not c.get('screened') for c in load_cands()): screen_pending(10)
             else:
                 # 발굴 꺼져 있어도 미검수 후보는 계속 처리
                 if any(not c.get('screened') for c in load_cands()): screen_pending(10)
@@ -4217,7 +4228,7 @@ def discover_loop():
                 except Exception as e: add_log(f'[자동정리 오류] {str(e)[:80]}')
         except Exception as e:
             add_log(f'[발굴 루프 오류] {str(e)[:100]}')
-        time.sleep(60)   # 1분마다 (500곳 목표 — 최대 속도로 하루 할당량을 빨리 채운다. 한도는 discover_once가 지킴)
+        time.sleep(int(load_config().get('discover_interval_sec',600) or 600))   # 10분마다 (크레딧 절약 — 하루에 몰아 안 쓰고 분산. 한도는 discover_once가 지킴)
 
 def member_paid_now(m):
     """이번 달 납부 완료 여부."""
