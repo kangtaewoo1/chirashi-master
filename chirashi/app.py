@@ -3673,6 +3673,18 @@ def discover_once(cfg=None, max_queries=10):
     st.setdefault('fcursor',0)  # 기존 상태 호환(finder 커서 없던 날)
     target=int(cfg.get('discover_daily_target',100) or 100)
     qlimit=int(cfg.get('discover_query_limit',100) or 100)   # 구글 무료 하루 100
+    # 발행가능 사이트가 목표(site_goal, 기본 500) 미만이면 일일 쿼리·후보 한도를 풀어
+    # 목표를 채울 때까지 계속 발굴한다(대표님 요청). 목표 도달 시 discover_loop이 자동 중단.
+    # ※ Brave 쿼리당 과금 — 배치(discover_batch)·주기(discover_interval_sec)로 속도는 유지.
+    try:
+        _pub=len([s for s in load_sites() if is_publishable(s)])
+        _goal=int(cfg.get('site_goal',500) or 500)
+        if _pub < _goal:
+            if st.get('_goal_mode_logged')!=today:
+                add_log(f'[발굴] 발행가능 {_pub}/{_goal} — 목표까지 한도해제 연속 발굴 모드')
+                st['_goal_mode_logged']=today
+            qlimit=max(qlimit,1000000); target=max(target,1000000)
+    except Exception: pass
     provider=(cfg.get('search_provider') or 'brave').lower()
     finder=_board_finder_queries(provider)          # 게시판 찾기(매일 우선)
     direct=[x.strip() for x in (cfg.get('discover_direct_queries','') or '').splitlines()
