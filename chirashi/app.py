@@ -4042,7 +4042,8 @@ def auto_pipeline_once(limit=5):
         for c in cands:
             rr=str(c.get('reject_reason',''))
             if (c.get('status')=='rejected' and '자동가입 실패' in rr
-                    and '본인인증' not in rr  # 휴대폰 본인인증 게시판은 되살려도 무의미 → 제외
+                    # 인증벽(본인인증·SMS·실명·성인 등)은 되살려도 무의미 → 영구탈락(전략5)
+                    and not any(w in rr for w in ['본인인증','실명인증','휴대폰','SMS','문자인증','아이핀','성인인증','19금','인증필요'])
                     and not c.get('illegal') and not c.get('parked')
                     and int(c.get('signup_retry',0) or 0) < 3
                     and str(c.get('signup_retry_date',''))!=today_s):
