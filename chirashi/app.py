@@ -4045,12 +4045,19 @@ def auto_signup(site, submit=True):
     add_log(f'[자동가입 입력] {site.get("name") or site.get("site_url","")} — 입력: {",".join(filled) or "없음"}')
     if 'id' not in filled or 'password' not in filled:
         return False,f'가입 필수필드 입력 실패(입력됨: {",".join(filled) or "없음"})'
-    # 4) 캡차 있으면 2captcha로 해결 후 입력
+    # 4) 캡차 있으면 2captcha로 해결 후 입력 — 오답/해결실패 대비 최대 3회 재시도(실측: 캡차 36회 풀렸으나 가입 0)
     cap=detect_captcha(d)
     if cap:
-        ok,cmsg,answer,info=solve_captcha_with_2captcha(d,site,cap,cfg)
+        ok=False; cmsg=''; answer=''; info={}; _catt=0
+        for _catt in range(1,4):
+            ok,cmsg,answer,info=solve_captcha_with_2captcha(d,site,cap,cfg)
+            if ok: break
+            if _catt<3:
+                try: _kcaptcha_force_load(d)   # 새 캡차 이미지 강제 로드 후 재시도
+                except Exception: pass
+                time.sleep(1)
         if not ok:
-            return False,f'가입 캡차({cap}) 해결 실패: {cmsg}'
+            return False,f'가입 캡차({cap}) 해결 {_catt}회 실패: {cmsg}'
         if cap in ('kcaptcha',) and answer:
             done=False
             for csel in ["input[name='captcha_key']","#captcha_key","input[name*='captcha']","input[id*='captcha']"]:
@@ -5792,8 +5799,10 @@ def _signup_credentials(site, rules=None):
     alphabet='abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789'
     chars=[secrets.choice('abcdefghjkmnpqrstuvwxyz'),secrets.choice('ABCDEFGHJKMNPQRSTUVWXYZ'),
            secrets.choice('23456789')]
-    if rules.get('require_special',False) and special: chars.append(secrets.choice(special))
-    pool=alphabet+(special if rules.get('require_special',False) else '')
+    # 특수문자를 항상 1개 포함 — 규칙을 명시하지 않지만 특수문자를 요구하는 게시판이 많아
+    # '입력값 규칙 위반' 가입실패를 줄인다(대소문자+숫자+특수 모두 보장). (실측 기반 개선)
+    if special: chars.append(secrets.choice(special))
+    pool=alphabet+(special or '')
     chars += [secrets.choice(pool) for _ in range(max(0,plen-len(chars)))]
     random.SystemRandom().shuffle(chars)
     return mid,''.join(chars)
