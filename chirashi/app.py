@@ -558,6 +558,8 @@ def load_config():
        'auto_pipeline_enabled':True,'auto_pipeline_batch':10,
        'min_interval_minutes':1,   # 발행 간격(분): 1=사실상 무간격, daily_limit=0=하루 무제한(대표님 요청)
        'publish_loop_enabled':True,'publish_interval_sec':300,   # 24시간 상시발행 루프(5분 주기 큐 보충)
+       'workroom_workers':3,   # 작업실별 전용 발행 워커(=동시 크롬) 수 상한. VPS 사양에 맞게 조절
+
        'discover_interval_sec':600,   # 발굴 주기 10분(크레딧 절약). 목표 도달 시 자동 중단
        'log_token':'cae3aaa53d6f3576a1c1f6a258f79129'}   # 읽기전용 로그 조회 토큰(?token= 로 /api/logs·/api/worker-log 접근)
     c=load_json(CONFIG_FILE,None)
@@ -4340,60 +4342,114 @@ def _workroom_combos(room):
             combos.append({'지역':p[0],'서비스':(p[1] if len(p)>1 else ''),'브랜드':(p[2] if len(p)>2 else '')})
     return combos
 
-def publish_loop():
-    """24시간 상시발행(작업실 소진형).
-       - 모든 키워드 작업실을 라운드로빈으로 번갈아 진행(동시 작업).
-       - 각 작업실의 조합을 순서대로 소진하고, 끝나면 맨 위부터 무한 반복.
-       - 매 조합을 '발행가능 사이트 전체'에 각각 유니크 글로 발행(사이트/호출마다 새 제목·본문).
-       - 큐가 빌 때만, 지금 간격·한도를 통과한 사이트에만 보충 → 워커 스킵/생성 낭비 방지.
-       - 작업실이 하나도 없으면 전역+회원 통합 풀(랜덤)로 폴백."""
+_WR_SLOTS={}   # slot_index -> Thread (작업실 발행 슬롯 워커 = 동시 크롬)
+
+def _publish_one_combo(kw, wname, rid, cfg):
+    """한 조합(kw)을 '발행가능 사이트 전체'에 각각 유니크 글로 발행(현재 스레드의 크롬 사용).
+       do_post·history·finalize 재사용. 사이트마다 발행 직전 간격·한도·publishable 재확인."""
+    for s in [x for x in load_sites() if is_publishable(x)]:
+        cfg=load_config()
+        if not cfg.get('publish_loop_enabled'): return
+        fresh=next((x for x in load_sites() if x.get('id')==s.get('id')),None)
+        if not fresh or not is_publishable(fresh): continue
+        if not under_daily_limit(fresh,cfg): continue
+        if not under_min_interval(fresh)[0]: continue
+        try:
+            html,title=generate_article(kw,cfg,unique=True)
+        except Exception as e:
+            add_log(f"[작업실:{wname}] 생성오류 {str(e)[:50]}"); continue
+        now=datetime.now().strftime('%Y-%m-%d %H:%M:%S'); jid=secrets.token_hex(8)
+        history_add({'id':jid,'time':now,'updated':now,'site_id':fresh.get('id'),
+            'site_name':fresh.get('name') or fresh.get('site_url',''),'site_url':fresh.get('site_url',''),
+            'bo_table':fresh.get('bo_table',''),'title':title,'region':kw.get('지역',''),'service':kw.get('서비스',''),
+            'workroom_id':rid,'workroom_name':wname,'status':'posting','result_url':'','message':'','attempts':0})
+        ok=False; msg=''
+        for attempt in range(1,4):
+            try:
+                ok,msg=do_post(fresh,title,html)
+                if ok: break
+                reset_driver()
+            except Exception as e:
+                msg=str(e); reset_driver()
+            if attempt<3: time.sleep(min(5*attempt,15))
+        reason=reason_ko=''
+        if not ok: reason,reason_ko,_=classify_fail(msg)
+        try: finalize_post(fresh,ok,fail_reason=('' if ok else str(msg)))
+        except Exception: pass
+        history_update(jid,status='done' if ok else 'failed',
+            result_url=(msg if ok and str(msg).startswith('http') else ''),
+            fail_reason=('' if ok else reason),fail_reason_ko=('' if ok else reason_ko),
+            alive=('yes' if ok and str(msg).startswith('http') else ''),message=str(msg)[:300])
+        with STATS_LOCK:
+            if ok: wk_stats['success']+=1
+            else: wk_stats['fail']+=1
+            wk_stats['done']+=1
+        add_log(f"[작업실:{wname}] {'성공' if ok else '실패:'+reason_ko} {fresh.get('name') or (fresh.get('site_url','') or '')[:20]}")
+        delay=int(cfg.get('post_delay',30) or 0)
+        if delay>0: time.sleep(delay)
+
+def workroom_worker(slot):
+    """발행 슬롯 워커(독립 크롬 스레드). 전체 작업실 중 자기 슬롯 담당분(i%cap==slot)을
+       라운드로빈으로 조합 소진→반복하며 발행가능 사이트 전체에 발행 → '진짜 동시' 발행 구현.
+       작업실이 없으면 슬롯0이 통합풀(전역+회원) 랜덤으로 발행."""
+    add_log(f"[작업실워커 시작] 슬롯 {slot+1}")
     while True:
-        slept=20
         try:
             cfg=load_config()
             if not cfg.get('publish_loop_enabled'):
-                time.sleep(int(cfg.get('publish_interval_sec',300) or 300)); continue
-            sites=[s for s in load_sites() if is_publishable(s)]
-            if not sites:
-                time.sleep(60); continue
-            # 큐가 차 있으면 드레인 대기(과잉 큐잉 → 간격 스킵/생성 낭비 방지)
-            if post_queue.qsize() >= max(2,len(sites)):
-                time.sleep(slept); continue
-            # 지금 발행 가능한(간격·한도 통과) 사이트만
-            elig=[s for s in sites if under_daily_limit(s,cfg) and under_min_interval(s)[0]]
-            if not elig:
-                time.sleep(slept); continue
+                time.sleep(20); continue
             rooms=[r for r in (load_json(WORKROOMS_FILE,[]) or []) if _workroom_combos(r)]
-            if rooms:
-                rr=_WR_RR[0] % len(rooms); _WR_RR[0]=rr+1
-                r=rooms[rr]; combos=_workroom_combos(r); rid=r.get('id','')
+            cap_eff=max(1,min(int(cfg.get('workroom_workers',3) or 3), max(1,len(rooms))))
+            if slot>=cap_eff:
+                add_log(f"[작업실워커 종료] 슬롯 {slot+1} (담당 없음/상한 축소)"); break
+            mine=[r for i,r in enumerate(rooms) if i%cap_eff==slot]
+            if not mine:
+                if slot==0:   # 작업실 없음 → 슬롯0이 통합풀 폴백
+                    pool=collect_all_keywords()
+                    if pool: _publish_one_combo(pick_keywords(pool,cfg),'통합풀','',cfg)
+                    else: add_log('[상시발행] 키워드 작업실에 조합을 추가하세요 (비어있음)')
+                time.sleep(20 if slot==0 else 30); continue
+            if not any(is_publishable(s) for s in load_sites()):
+                time.sleep(30); continue
+            for room in mine:   # 슬롯 담당 작업실들을 라운드로빈(한 사이클에 각 1조합)
+                combos=_workroom_combos(room); rid=room.get('id','')
+                if not combos: continue
                 cur=int(_WR_CURSOR.get(rid,0) or 0)
                 if cur>=len(combos): cur=0
                 kw=combos[cur]; _WR_CURSOR[rid]=cur+1
-                try:
-                    n=enqueue_generated(elig,kw,cfg,{'region':kw.get('지역',''),'service':kw.get('서비스',''),
-                            'workroom_id':rid,'workroom_name':r.get('name','')})[0]
-                    if n:
-                        if not wk_active: start_workers(cfg.get('workers',2))
-                        add_log(f"[상시발행] 작업실 '{r.get('name','')}' 조합 {cur+1}/{len(combos)} → {n}개 사이트 발행 (작업실 {len(rooms)}개 동시)")
-                except Exception as e:
-                    add_log(f'[상시발행 오류] {str(e)[:80]}')
-            else:
-                pool=collect_all_keywords()
-                if not pool:
-                    add_log('[상시발행] 키워드 풀이 비어 대기 — 키워드 작업실에 조합을 추가하세요')
-                    time.sleep(int(cfg.get('publish_interval_sec',300) or 300)); continue
-                kw=pick_keywords(pool,cfg)
-                try:
-                    n=enqueue_generated(elig,kw,cfg,{'region':kw.get('지역',''),'service':kw.get('서비스','')})[0]
-                    if n:
-                        if not wk_active: start_workers(cfg.get('workers',2))
-                        add_log(f'[상시발행] 통합풀 랜덤 → {n}개 사이트 발행')
-                except Exception as e:
-                    add_log(f'[상시발행 오류] {str(e)[:80]}')
+                add_log(f"[작업실:{room.get('name','')}] 조합 {cur+1}/{len(combos)} 발행 시작 (슬롯 {slot+1})")
+                _publish_one_combo(kw,room.get('name',''),rid,cfg)
         except Exception as e:
-            add_log(f'[상시발행 루프 오류] {str(e)[:100]}')
-        time.sleep(slept)
+            add_log(f"[작업실워커 오류 슬롯{slot+1}] {str(e)[:70]}")
+            time.sleep(10)
+    _WR_SLOTS.pop(slot,None)
+    try: reset_driver()   # 이 슬롯 스레드의 크롬 정리
+    except Exception: pass
+
+def publish_loop():
+    """작업실 발행 슬롯 매니저: config workroom_workers 개(작업실 수 이하)의 독립 크롬 워커를
+       유지해 작업실들을 나눠 맡아 '진짜 동시' 발행한다. 죽은 슬롯은 재스폰, 작업실이 늘면 슬롯 증설.
+       발행 실제 로직은 workroom_worker/_publish_one_combo가 담당(post_queue 미사용).
+       ※ 동시 크롬 수가 많아 VPS가 버거우면 workroom_workers를 낮추거나 VPS 업그레이드."""
+    while True:
+        try:
+            cfg=load_config()
+            if cfg.get('publish_loop_enabled'):
+                rooms=[r for r in (load_json(WORKROOMS_FILE,[]) or []) if _workroom_combos(r)]
+                cap=max(1,int(cfg.get('workroom_workers',3) or 3))
+                need=max(1,min(cap,max(1,len(rooms))))   # 작업실 없으면 1(통합풀), 있으면 min(상한,작업실수)
+                for slot in list(_WR_SLOTS.keys()):
+                    t=_WR_SLOTS.get(slot)
+                    if (not t) or (not t.is_alive()) or slot>=need:
+                        _WR_SLOTS.pop(slot,None)
+                for slot in range(need):
+                    t=_WR_SLOTS.get(slot)
+                    if (not t) or (not t.is_alive()):
+                        nt=threading.Thread(target=workroom_worker,args=(slot,),name=f'WR{slot+1}',daemon=True)
+                        _WR_SLOTS[slot]=nt; nt.start()
+        except Exception as e:
+            add_log(f'[작업실 매니저 오류] {str(e)[:100]}')
+        time.sleep(30)
 
 def discover_loop():
     """24시간 자동 발굴 — 목표치까지 천천히 채우고 남는 시간엔 검수."""
