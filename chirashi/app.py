@@ -4134,6 +4134,10 @@ def auto_pipeline_once(limit=5):
     cfg=load_config()
     if not cfg.get('auto_pipeline_enabled'):
         return {'ok':False,'error':'auto_pipeline 비활성화'}
+    # 테스트 발행 키워드: 대표님 작업실/스케줄 통합 풀에서 랜덤 추출(없으면 기본값). 하드코딩 제거.
+    _tk_pool=collect_all_keywords()
+    def _test_kw():
+        return pick_keywords(_tk_pool,cfg) if _tk_pool else {'지역':'인천','서비스':'셔츠룸','브랜드':cfg.get('brand','') or '테스트'}
     site_domains={_domain_of(s.get('site_url','')) for s in load_sites()}
     with _cand_lock:
         cands=load_cands()
@@ -4191,8 +4195,8 @@ def auto_pipeline_once(limit=5):
                     _cand_set(c['id'],status='rejected',reject_reason=f'자동가입 실패: {msg_su[:80]}')
                     results.append({'name':name,'stage':'signup','ok':False,'msg':msg_su})
                     continue  # done 증가·드라이버 리셋은 finally에서 처리
-            # 2) 실제 글 1건 발행 (기존 do_post; false-negative 수정 반영됨)
-            kw={'지역':'인천','서비스':'셔츠룸','브랜드':cfg.get('brand','') or '테스트'}
+            # 2) 실제 글 1건 발행 (기존 do_post; false-negative 수정 반영됨) — 스케줄/작업실 랜덤 키워드
+            kw=_test_kw()
             html,title=generate_article(kw,cfg,unique=True)
             ok,msg=do_post(tmp,title,html)
             # 검수는 비회원 글쓰기로 봤지만 실제 write.php가 로그인으로 튕기는 게시판이 있다.
@@ -4234,8 +4238,46 @@ def auto_pipeline_once(limit=5):
         finally:
             done+=1
             reset_driver(); time.sleep(3)
-    dropped=reconcile_sites()   # 파이프라인 후 사이트 목록 최신화(막힌 곳 자동 탈락)
-    add_log(f'[자동파이프라인] 처리 {done} · 가입 {signed} · 등록 {registered}'+(f' · 자동탈락 {dropped}' if dropped else ''))
+    # 3) 등록됐지만 '준비됨/캡차대기/메일대기'에서 멈춘 사이트: 자동가입을 실제로 끝내고
+    #    스케줄/작업실 랜덤 키워드로 발행 테스트까지 완료 → 성공 시 발행가능으로 등록.
+    prepared=[s for s in load_sites()
+              if s.get('signup_status') in ('prepared','captcha_wait','email_wait')
+              and not str(s.get('verified_post_url') or '').startswith(('http://','https://'))
+              and s.get('status')!='rejected']
+    for s in prepared[:max(1,limit)]:
+        nm=s.get('name') or (s.get('site_url','') or '')[:30]
+        try:
+            ok_su,msg_su=auto_signup(s,submit=True)
+            if not ok_su:
+                at=int(s.get('signup_complete_attempts',0) or 0)+1
+                if at>=3:
+                    set_site_flag(s.get('id'),status='rejected',permission=False,
+                                  auto_drop_reason=f'가입완료 실패 {at}회: {str(msg_su)[:50]}')
+                    add_log(f'[가입완료 실패→탈락] {nm}: {str(msg_su)[:60]}')
+                else:
+                    set_site_flag(s.get('id'),signup_complete_attempts=at)
+                    add_log(f'[가입완료 재시도 {at}/3] {nm}: {str(msg_su)[:60]}')
+                continue
+            signed+=1
+            fresh=next((x for x in load_sites() if x.get('id')==s.get('id')),s)
+            kw=_test_kw()
+            html,title=generate_article(kw,cfg,unique=True)
+            ok,msg=do_post(fresh,title,html)
+            result_url=msg if (ok and str(msg).startswith(('http://','https://'))) else ''
+            if ok and result_url:
+                set_site_flag(s.get('id'),write_test_status='passed',verified_post_url=result_url,
+                              verified_at=_kst_now().strftime('%Y-%m-%d %H:%M'),permission=True,status='idle')
+                registered+=1
+                add_log(f'[가입완료+발행테스트 성공] {nm} → 발행가능 등록 (키워드 {kw.get("지역","")}{kw.get("서비스","")})')
+            else:
+                add_log(f'[발행테스트 실패] {nm}: {str(msg)[:70]}')
+        except Exception as e:
+            add_log(f'[가입완료 오류] {nm}: {str(e)[:70]}')
+        finally:
+            done+=1
+            reset_driver(); time.sleep(2)
+    dropped=reconcile_sites()   # 파이프라인 후 사이트 목록 최신화(안 되는 곳 자동삭제)
+    add_log(f'[자동파이프라인] 처리 {done} · 가입 {signed} · 등록 {registered}'+(f' · 자동삭제 {dropped}' if dropped else ''))
     return {'ok':True,'processed':done,'signed_up':signed,'registered':registered,'dropped':dropped,'results':results}
 
 def _cand_set(cid, **fields):
