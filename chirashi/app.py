@@ -4158,8 +4158,25 @@ def _promoted_site_id(cand):
         if _domain_of(s.get('site_url',''))==dom: return s.get('id')
     return None
 
+def collect_all_keywords():
+    """상시발행용 키워드 통합 — 전역 풀(keywords.json) + 모든 작업실(workrooms.json)의 키워드를 합친다.
+       반환: [{'지역','서비스','브랜드'}, ...]. 대표님이 어디에 넣든 상시발행이 쓸 수 있게."""
+    pool=list(load_keywords() or [])   # 이미 dict 리스트
+    try:
+        for room in (load_json(WORKROOMS_FILE,[]) or []):
+            for line in str(room.get('keyword_csv') or '').splitlines():
+                p=[x.strip() for x in line.split(',')]
+                if len(p)>=3 and all(p[:3]):
+                    pool.append({'지역':p[0],'서비스':p[1],'브랜드':p[2]})
+                elif len(p)>=1 and p[0]:
+                    pool.append({'지역':p[0],'서비스':(p[1] if len(p)>1 else ''),'브랜드':(p[2] if len(p)>2 else '')})
+    except Exception:
+        pass
+    return pool
+
 def publish_loop():
     """24시간 상시발행: 발행가능 사이트 중 하루한도·간격을 통과한 곳에 키워드 풀 기반 글을 큐잉한다.
+       키워드는 전역 풀 + 작업실을 통합(collect_all_keywords)해서 쓴다.
        실제 발행은 worker_loop이 하며, 발행 직전 한도·간격·publishable을 다시 확인한다(이중 안전).
        publish_loop_enabled(설정)로 즉시 끄고, publish_interval_sec로 주기 조절 가능."""
     while True:
@@ -4174,7 +4191,7 @@ def publish_loop():
             # 큐가 이미 충분히 차 있으면 과잉 큐잉 방지(발행가능 사이트 수 이상 대기중이면 스킵)
             if post_queue.qsize() >= max(2,len(sites)):
                 time.sleep(interval); continue
-            pool=load_keywords()
+            pool=collect_all_keywords()
             if not pool:
                 add_log('[상시발행] 키워드 풀이 비어 대기 — 키워드 탭에서 조합을 추가하세요')
                 time.sleep(interval); continue
