@@ -3568,7 +3568,7 @@ def add_candidates_from(items, cfg, source='search'):
         known_dom={c.get('domain') for c in cands}
         site_dom={_domain_of(s.get('site_url','')) for s in load_sites()}
         rejected_dom=load_rejected_domains()   # 영구 탈락: 재수집 안 함
-        added=0; blocked_unreachable=0; blocked_title=0; blocked_write=0; blocked_rejected=0
+        added=0; blocked_unreachable=0; blocked_write=0; blocked_rejected=0
         for it in items:
             url=it.get('url') if isinstance(it,dict) else str(it)
             if not url or not url.startswith('http'): continue
@@ -3609,8 +3609,8 @@ def add_candidates_from(items, cfg, source='search'):
             cands.append(rec)
             added+=1
         save_cands(cands)
-    if source!='manual' and (blocked_unreachable or blocked_title or blocked_write or blocked_rejected):
-        add_log(f'[후보 사전필터] 접속불가 {blocked_unreachable} · 제목숫자<8 {blocked_title} · 글쓰기폼없음 {blocked_write} · 영구탈락 {blocked_rejected} 제외')
+    if source!='manual' and (blocked_unreachable or blocked_write or blocked_rejected):
+        add_log(f'[후보 사전필터] 접속불가 {blocked_unreachable} · 글쓰기폼없음 {blocked_write} · 영구탈락 {blocked_rejected} 제외')
     return added
 
 def screen_pending(limit=30):
