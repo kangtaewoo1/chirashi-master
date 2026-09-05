@@ -6223,14 +6223,14 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 <div class="stats" id="live"><span>큐:<b id="q">0</b></span><span>성공:<b id="ok" style="color:var(--g)">0</b></span><span>실패:<b id="fl" style="color:var(--r)">0</b></span><span>스킵:<b id="sk" style="color:var(--y)">0</b></span><span>워커:<b id="ws" style="color:{{'var(--g)' if wk_on else 'var(--d)'}}">{{'ON' if wk_on else 'OFF'}}</b></span><span style="margin-left:10px;padding-left:10px;border-left:1px solid var(--b)">🎯 발행가능 <b id="siteGoal" style="color:var(--p)">-</b></span></div>
 <a href="/logout" class="btn-xs" style="background:var(--b);color:var(--d);text-decoration:none">로그아웃</a></header>
 
-<div class="tabs"><button class="tab on" onclick="T('gen')">글 생성</button><button class="tab" onclick="T('kw')">키워드</button><button class="tab" onclick="T('wlog')">워커 실행로그</button><button class="tab" onclick="T('images')">이미지 저장</button><button class="tab" onclick="T('sites')">사이트 (<span id="siteTabCount">{{sites|length}}</span>)</button><button class="tab" onclick="T('res')">결과</button><button class="tab" onclick="T('disco')">발굴</button><button id="tab-mem" class="tab" onclick="T('mem')" style="display:none">회원·정산</button><button class="tab" onclick="T('stats')">통계</button><button class="tab" onclick="T('cost')">API 비용</button><button class="tab" onclick="T('set')">설정</button></div>
+<div class="tabs"><button id="tab-gen" class="tab" onclick="T('gen')" style="display:none">글 생성</button><button class="tab on" onclick="T('kw')">키워드</button><button class="tab" onclick="T('wlog')">워커 실행로그</button><button class="tab" onclick="T('images')">이미지 저장</button><button class="tab" onclick="T('sites')">사이트 (<span id="siteTabCount">{{sites|length}}</span>)</button><button class="tab" onclick="T('res')">결과</button><button class="tab" onclick="T('disco')">발굴</button><button id="tab-mem" class="tab" onclick="T('mem')" style="display:none">회원·정산</button><button class="tab" onclick="T('stats')">통계</button><button class="tab" onclick="T('cost')">API 비용</button><button class="tab" onclick="T('set')">설정</button></div>
 <div class="wrap"><div id="toasts"></div>
 <div id="pvOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:500;padding:20px" onclick="if(event.target===this)closePreview()">
 <div style="max-width:820px;margin:0 auto;background:#fff;color:#222;border-radius:10px;max-height:90vh;overflow:auto">
 <div style="position:sticky;top:0;background:#0d1117;color:#fff;padding:10px 14px;display:flex;align-items:center;gap:10px"><b style="flex:1;font-size:13px">🔍 발행 미리보기 (실제 게시판에 보일 모양)</b><span id="pvTitle" style="font-size:11px;color:#9aa"></span><button class="btn btn-r btn-xs" onclick="closePreview()">닫기</button></div>
 <iframe id="pvFrame" style="width:100%;height:70vh;border:0;background:#fff"></iframe></div></div>
 
-<div id="p-gen" class="panel on">
+<div id="p-gen" class="panel">
 <div class="note">✔ 현재 적용 규칙 — <b style="color:var(--p)">메인 키워드1 + 같은 지역 키워드2·3</b>으로 OpenAI 장문 HTML을 생성합니다. 이미지는 저장소에서 1개만 사용하고 ALT에는 키워드1을 넣습니다. 지역 순서는 인천→경기→서울→충남→충북→세종→전북→전남→경상→경북→강원→제주이며, 모든 키워드를 사용하면 예약이 자동 종료됩니다. <b style="color:var(--g)">허용 동의가 기록된 사이트만 발행</b>됩니다.</div>
 
 <div class="card" id="progCard" style="display:none"><h3>발행 진행률</h3>
@@ -6246,7 +6246,7 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 <button class="btn btn-g" onclick="postSel()">선택 사이트 발행</button>
 <button class="btn btn-y" onclick="postAll()">전체 사이트 발행</button></div></div></div>
 
-<div id="p-kw" class="panel">
+<div id="p-kw" class="panel on">
 <div class="note">🗂 여기에 키워드 조합을 넣으면 24시간 자동 발행에 반영됩니다. 대표님이 관리할 것은 <b style="color:var(--p)">키워드</b>와 <b style="color:var(--p)">이미지</b>뿐입니다.</div>
 <div class="card" style="border-color:#334155"><h3>🗂 키워드 작업실 — 키워드 묶음별 독립 저장</h3>
 <div class="row">
