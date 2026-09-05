@@ -551,6 +551,8 @@ def load_config():
        'google_api_key':'','google_cx':'','brave_api_key':'','search_provider':'brave','discover_enabled':True,
        'discover_daily_target':500,'discover_query_limit':500,'discover_batch':50,'discover_keywords':'',
        'site_goal':500,   # 실제 발행 가능 사이트 확보 목표(대시보드 진행률 표시용)
+       # 웹빌더/템플릿 플랫폼 등 발행 불가 도메인 제외 목록(한 줄에 하나, 발굴에서 즉시 제외). 설정에서 관리.
+       'excluded_domains':'isweb.co.kr\nimweb.me\nimweb.io\nmodoo.at\ncreatorlink.net\nwixsite.com\nweebly.com\nblog.me',
        'discover_direct_queries':'','video_url':'','landing_url':'','post_email':'','guest_post_password':'',
        'twocaptcha_api_key':'','twocaptcha_enabled':False,
        'twocaptcha_price_recaptcha_usd':0.003,'twocaptcha_price_image_usd':0.0005,
@@ -3467,9 +3469,20 @@ def _domain_of(url):
     m=re.match(r'https?://([^/]+)',url or '')
     return (m.group(1).lower() if m else '').replace('www.','')
 
+def _excluded_domain_list(cfg=None):
+    """설정(excluded_domains)의 사용자 지정 제외 도메인 목록. 한 줄에 하나(#주석 무시)."""
+    try:
+        cfg=cfg or load_config()
+        return [x.strip().lower() for x in str(cfg.get('excluded_domains','') or '').splitlines()
+                if x.strip() and not x.lstrip().startswith('#')]
+    except Exception:
+        return []
+
 def _is_blacklisted(url):
     u=(url or '').lower()
-    return any(b in u for b in BLACK_DOMAINS)
+    if any(b in u for b in BLACK_DOMAINS): return True
+    # 사용자 지정 제외 도메인(웹빌더 플랫폼 등, isweb.co.kr 같은) — 설정에서 관리.
+    return any(b in u for b in _excluded_domain_list())
 
 # 그누보드 홍보/자유 게시판에서 흔한 bo_table 값 (URL 조각으로 직접 검색)
 GNU_BO_TABLES=['promotion','promotion1','hongbo','hongbo1','ad','link','partner','banner',
@@ -6136,7 +6149,8 @@ def api_cfg():
                   'use_gpt','telegram_token','telegram_chat_id','notify_done','notify_fail','update_token',
                   'telegram_control','backup_time','verify_enabled','mix_keywords','block_unpaid',
                   'google_api_key','google_cx','brave_api_key','search_provider','discover_enabled','discover_daily_target',
-                  'discover_query_limit','discover_keywords','discover_direct_queries',
+                  'discover_query_limit','discover_keywords','discover_direct_queries','excluded_domains',
+                  'workroom_workers','vps_reserve_mb','vps_mb_per_worker','site_goal',
                   'video_url','landing_url','post_email','guest_post_password',
                   'twocaptcha_api_key','twocaptcha_enabled',
                   'twocaptcha_price_recaptcha_usd','twocaptcha_price_image_usd','brave_price_per_query_usd',
@@ -6959,6 +6973,9 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 <small style="color:var(--d)">검색 키워드 목록 (한 줄에 하나 — 입력 그대로 Brave 검색, #으로 시작하면 메모)</small>
 <textarea id="cDDirect" rows="6" placeholder="&quot;홍보게시판&quot; 마사지&#10;inurl:bbs/board.php &quot;업체등록&quot;&#10;인천 광고 가능한 게시판"></textarea>
 <div style="font-size:10px;color:var(--g);margin-top:4px">설정 저장을 누르면 서버에 영구 저장되며, 위 목록만 입력 순서대로 검색합니다.</div>
+<small style="color:var(--d);margin-top:10px;display:block">🚫 제외 도메인 (웹빌더/템플릿 등 발행 불가 — 한 줄에 하나, 이 문자열이 포함된 도메인은 발굴에서 즉시 제외)</small>
+<textarea id="cExcludedDomains" rows="4" placeholder="isweb.co.kr&#10;imweb.me&#10;modoo.at&#10;wixsite.com"></textarea>
+<div style="font-size:10px;color:var(--d);margin-top:4px">예: isweb.co.kr 처럼 한 업체가 수많은 하위사이트를 찍어내는 웹빌더는 여기 넣으면 싹 제외됩니다.</div>
 <details style="margin-top:10px;border:1px solid var(--bd);border-radius:8px;padding:9px"><summary style="cursor:pointer;color:var(--p);font-weight:700">전국 시·구·동 + 키워드 일괄 생성</summary>
 <div style="font-size:10px;color:var(--d);margin:8px 0">전체 주소가 아닌 단계별 짧은 지역명으로 조합합니다: 서울+키워드 · 강남+키워드 · 호암직동+키워드. 같은 검색어는 자동으로 중복 제거합니다.</div>
 <div class="row" style="margin-bottom:6px"><select id="rgProvince" style="width:auto"><option value="">전국</option></select>
@@ -7271,11 +7288,11 @@ function previewPost(){const c=$('gContent').value.trim();if(!c){toast('먼저 �
 function closePreview(){$('pvOverlay').style.display='none';$('pvFrame').srcdoc=''}
 async function delSite(id){if(!confirm('삭제?'))return;await api('/sites','DELETE',{id});renderSites()}
 async function testSite(id){toast('Selenium 테스트 중...');const r=await api('/test/'+id,'POST');if(r&&r.ok)toast('✅ 테스트 성공!'+(r.platform?' ['+(r.platform==='cafe24'?'Cafe24':'그누보드')+']':'')+' '+(r.message||''));else toast('실패: '+(r?.error||r?.message||''),'er')}
-async function saveCfg(){const d={brand:$('cBrand').value.trim(),phone:$('cPhone').value.trim(),phones:$('cPhones').value,video_url:$('cVideoUrl').value.trim(),landing_url:$('cLandingUrl').value.trim(),post_email:$('cPostEmail').value.trim(),workers:parseInt($('cWorkers').value)||2,post_delay:parseInt($('cDelay').value)||0,daily_limit:parseInt($('cDaily').value)||0,use_gpt:$('cUseGpt').checked,model:$('cModel').value.trim()||'gpt-4o-mini',openai_monthly_budget_usd:parseFloat($('cOpenaiBudget').value)||0,openai_input_price_per_million:parseFloat($('cOpenaiInPrice').value)||0,openai_output_price_per_million:parseFloat($('cOpenaiOutPrice').value)||0,telegram_chat_id:$('cTgChat').value.trim(),notify_done:$('cNotifyDone').checked,notify_fail:$('cNotifyFail').checked,backup_time:$('cBackupTime').value.trim(),telegram_control:$('cTgControl').checked,verify_enabled:$('cVerify').checked,mix_keywords:$('cMixKw').checked,block_unpaid:$('cBlockUnpaid').checked,search_provider:'brave',discover_enabled:$('cDiscoOn').checked,discover_daily_target:parseInt($('cDTarget').value)||100,discover_query_limit:parseInt($('cDQuery').value)||100,discover_keywords:'',discover_direct_queries:$('cDDirect').value,twocaptcha_enabled:$('cTwocaptchaEn').checked,brave_price_per_query_usd:parseFloat($('cBravePrice').value)||0,twocaptcha_price_recaptcha_usd:parseFloat($('cCapRePrice').value)||0,twocaptcha_price_image_usd:parseFloat($('cCapImgPrice').value)||0,openai_cached_input_price_per_million:parseFloat($('cOpenaiCachedPrice')?.value)||undefined};
+async function saveCfg(){const d={brand:$('cBrand').value.trim(),phone:$('cPhone').value.trim(),phones:$('cPhones').value,video_url:$('cVideoUrl').value.trim(),landing_url:$('cLandingUrl').value.trim(),post_email:$('cPostEmail').value.trim(),workers:parseInt($('cWorkers').value)||2,post_delay:parseInt($('cDelay').value)||0,daily_limit:parseInt($('cDaily').value)||0,use_gpt:$('cUseGpt').checked,model:$('cModel').value.trim()||'gpt-4o-mini',openai_monthly_budget_usd:parseFloat($('cOpenaiBudget').value)||0,openai_input_price_per_million:parseFloat($('cOpenaiInPrice').value)||0,openai_output_price_per_million:parseFloat($('cOpenaiOutPrice').value)||0,telegram_chat_id:$('cTgChat').value.trim(),notify_done:$('cNotifyDone').checked,notify_fail:$('cNotifyFail').checked,backup_time:$('cBackupTime').value.trim(),telegram_control:$('cTgControl').checked,verify_enabled:$('cVerify').checked,mix_keywords:$('cMixKw').checked,block_unpaid:$('cBlockUnpaid').checked,search_provider:'brave',discover_enabled:$('cDiscoOn').checked,discover_daily_target:parseInt($('cDTarget').value)||100,discover_query_limit:parseInt($('cDQuery').value)||100,discover_keywords:'',discover_direct_queries:$('cDDirect').value,excluded_domains:($('cExcludedDomains')?$('cExcludedDomains').value:''),twocaptcha_enabled:$('cTwocaptchaEn').checked,brave_price_per_query_usd:parseFloat($('cBravePrice').value)||0,twocaptcha_price_recaptcha_usd:parseFloat($('cCapRePrice').value)||0,twocaptcha_price_image_usd:parseFloat($('cCapImgPrice').value)||0,openai_cached_input_price_per_million:parseFloat($('cOpenaiCachedPrice')?.value)||undefined};
 if(d.openai_cached_input_price_per_million===undefined)delete d.openai_cached_input_price_per_million;
 const bk=$('cBraveKey').value.trim();if(bk)d.brave_api_key=bk;
 const pw=$('cPw').value.trim();if(pw)d.password=pw;const gp=$('cGuestPw').value.trim();if(gp)d.guest_post_password=gp;const ok=$('cOpenai').value.trim();if(ok)d.openai_key=ok;const oa=$('cOpenaiAdmin').value.trim();if(oa)d.openai_admin_key=oa;const tg=$('cTgTok').value.trim();if(tg)d.telegram_token=tg;const tc=$('cTwocaptchaKey').value.trim();if(tc)d.twocaptcha_api_key=tc;const r=await api('/config','POST',d);if(r&&r.ok){toast('저장 완료');$('cPw').value='';$('cGuestPw').value='';$('cOpenai').value='';$('cOpenaiAdmin').value='';$('cTgTok').value='';$('cTwocaptchaKey').value='';loadOpenAIUsage()}}
-async function loadCfgUI(){const c=await api('/config','GET');if(!c)return;$('cVideoUrl').value=c.video_url||'';$('cLandingUrl').value=c.landing_url||'';$('cPostEmail').value=c.post_email||'';$('cGuestPw').placeholder=(c.guest_post_password==='***설정됨***')?'설정됨 · 변경시에만 입력':'변경시에만 입력';$('cUseGpt').checked=!!c.use_gpt;$('cNotifyDone').checked=!!c.notify_done;$('cNotifyFail').checked=!!c.notify_fail;$('cTgControl').checked=!!c.telegram_control;$('cVerify').checked=(c.verify_enabled!==false);$('cMixKw').checked=(c.mix_keywords!==false);$('cBlockUnpaid').checked=(c.block_unpaid!==false);$('cDiscoOn').checked=!!c.discover_enabled;if(c.discover_daily_target)$('cDTarget').value=c.discover_daily_target;if(c.discover_query_limit)$('cDQuery').value=c.discover_query_limit;if(typeof c.discover_direct_queries==='string')$('cDDirect').value=c.discover_direct_queries;$('cBraveKey').placeholder=(c.brave_api_key==='***설정됨***')?'설정됨 · 변경시에만 입력':'Brave API 키 입력';if(c.backup_time)$('cBackupTime').value=c.backup_time;if(c.model)$('cModel').value=c.model;if(c.telegram_chat_id)$('cTgChat').value=c.telegram_chat_id;if(typeof c.phones==='string')$('cPhones').value=c.phones;$('cOpenai').placeholder=(c.openai_key==='***설정됨***')?'설정됨 · 변경시만 입력':'sk-... (변경시만)';$('cOpenaiAdmin').placeholder=(c.openai_admin_key==='***설정됨***')?'관리자 키 설정됨 · 변경시만 입력':'관리자 키 없으면 로컬 예상비용 사용';$('cOpenaiBudget').value=c.openai_monthly_budget_usd==null?20:c.openai_monthly_budget_usd;$('cOpenaiInPrice').value=c.openai_input_price_per_million==null?0.15:c.openai_input_price_per_million;$('cOpenaiOutPrice').value=c.openai_output_price_per_million==null?0.60:c.openai_output_price_per_million;$('cTgTok').placeholder=(c.telegram_token==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';$('cTwocaptchaEn').checked=!!c.twocaptcha_enabled;$('cTwocaptchaKey').placeholder=(c.twocaptcha_api_key==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';if(c.brave_price_per_query_usd!=null)$('cBravePrice').value=c.brave_price_per_query_usd;if(c.twocaptcha_price_recaptcha_usd!=null)$('cCapRePrice').value=c.twocaptcha_price_recaptcha_usd;if(c.twocaptcha_price_image_usd!=null)$('cCapImgPrice').value=c.twocaptcha_price_image_usd;loadOpenAIUsage()}
+async function loadCfgUI(){const c=await api('/config','GET');if(!c)return;$('cVideoUrl').value=c.video_url||'';$('cLandingUrl').value=c.landing_url||'';$('cPostEmail').value=c.post_email||'';$('cGuestPw').placeholder=(c.guest_post_password==='***설정됨***')?'설정됨 · 변경시에만 입력':'변경시에만 입력';$('cUseGpt').checked=!!c.use_gpt;$('cNotifyDone').checked=!!c.notify_done;$('cNotifyFail').checked=!!c.notify_fail;$('cTgControl').checked=!!c.telegram_control;$('cVerify').checked=(c.verify_enabled!==false);$('cMixKw').checked=(c.mix_keywords!==false);$('cBlockUnpaid').checked=(c.block_unpaid!==false);$('cDiscoOn').checked=!!c.discover_enabled;if(c.discover_daily_target)$('cDTarget').value=c.discover_daily_target;if(c.discover_query_limit)$('cDQuery').value=c.discover_query_limit;if(typeof c.discover_direct_queries==='string')$('cDDirect').value=c.discover_direct_queries;if($('cExcludedDomains')&&typeof c.excluded_domains==='string')$('cExcludedDomains').value=c.excluded_domains;$('cBraveKey').placeholder=(c.brave_api_key==='***설정됨***')?'설정됨 · 변경시에만 입력':'Brave API 키 입력';if(c.backup_time)$('cBackupTime').value=c.backup_time;if(c.model)$('cModel').value=c.model;if(c.telegram_chat_id)$('cTgChat').value=c.telegram_chat_id;if(typeof c.phones==='string')$('cPhones').value=c.phones;$('cOpenai').placeholder=(c.openai_key==='***설정됨***')?'설정됨 · 변경시만 입력':'sk-... (변경시만)';$('cOpenaiAdmin').placeholder=(c.openai_admin_key==='***설정됨***')?'관리자 키 설정됨 · 변경시만 입력':'관리자 키 없으면 로컬 예상비용 사용';$('cOpenaiBudget').value=c.openai_monthly_budget_usd==null?20:c.openai_monthly_budget_usd;$('cOpenaiInPrice').value=c.openai_input_price_per_million==null?0.15:c.openai_input_price_per_million;$('cOpenaiOutPrice').value=c.openai_output_price_per_million==null?0.60:c.openai_output_price_per_million;$('cTgTok').placeholder=(c.telegram_token==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';$('cTwocaptchaEn').checked=!!c.twocaptcha_enabled;$('cTwocaptchaKey').placeholder=(c.twocaptcha_api_key==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';if(c.brave_price_per_query_usd!=null)$('cBravePrice').value=c.brave_price_per_query_usd;if(c.twocaptcha_price_recaptcha_usd!=null)$('cCapRePrice').value=c.twocaptcha_price_recaptcha_usd;if(c.twocaptcha_price_image_usd!=null)$('cCapImgPrice').value=c.twocaptcha_price_image_usd;loadOpenAIUsage()}
 async function loadOpenAIUsage(){
   const r=await api('/openai/usage','GET');
   const c=await api('/twocaptcha/usage','GET');
