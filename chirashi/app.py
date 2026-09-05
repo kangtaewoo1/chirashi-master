@@ -1952,6 +1952,12 @@ def gnuboard_post(site, title, content_html, skip_login=False):
         except:
             ta=d.find_element(By.CSS_SELECTOR,"textarea[name='wr_content']")
             _robust_fill(d,ta,editor_content)   # hidden textarea면 JS value로 폴백
+    # 그누보드는 폼의 html 필드가 1이어야 HTML을 렌더한다(0이면 태그를 이스케이프→코드 그대로 노출).
+    # 에디터/SET_IR를 거치지 않고 본문을 넣은 경우를 대비해 HTML 허용을 강제로 켠다(raw 코드 방지).
+    if html_mode:
+        try:
+            _safe_js(d,"var f=document.getElementById('fwrite')||document.forms['fwrite']||document.querySelector(\"form[action*='write_update']\");if(f){var h=f.querySelector(\"[name='html']\");if(h){if(h.type==='checkbox'){h.checked=true;}else{h.value='1';}}else{var i=document.createElement('input');i.type='hidden';i.name='html';i.value='1';f.appendChild(i);}}")
+        except Exception: pass
 
     # 본문 HTML에 이미지가 이미 있으면 중복 파일 첨부하지 않는다.
     if '<img' not in (content_html or '').lower(): attach_saved_images(d,1)
@@ -3388,7 +3394,7 @@ def load_cands():
     if changed: save_json(CAND_FILE,cands)
     return cands
 def save_cands(c): save_json(CAND_FILE,c)
-_cand_lock=threading.Lock()
+_cand_lock=threading.RLock()   # 재진입 가능(add_candidates_from 안에서 remove_rejected_domain 호출 등 중첩 허용)
 
 # ---- 영구 탈락 도메인(다음 발굴에서 제외) ----
 def load_rejected_domains():
@@ -3416,6 +3422,19 @@ def add_rejected_domains(domains, reason=''):
         raw['domains']=sorted(cur); raw['log']=log[-2000:]
         save_json(REJECTED_DOMAINS_FILE,raw)
     return added
+
+def remove_rejected_domain(dom):
+    """영구 탈락 목록에서 도메인 제거(수동 재활성화 시). 제거되면 True."""
+    dm=(_domain_of(dom) if str(dom).startswith('http') else str(dom)).lower().replace('www.','')
+    if not dm: return False
+    with _cand_lock:
+        raw=load_json(REJECTED_DOMAINS_FILE,{})
+        if isinstance(raw,list): raw={'domains':raw,'log':[]}
+        cur=set(x.lower() for x in (raw.get('domains') or []))
+        if dm not in cur: return False
+        cur.discard(dm); raw['domains']=sorted(cur)
+        save_json(REJECTED_DOMAINS_FILE,raw)
+    return True
 
 # 쿼리 조합 — 플랫폼 흔적 × 홍보 의도
 GNU_PATTERNS=['inurl:bbs/board.php bo_table=promotion','inurl:bbs/board.php bo_table=hongbo',
@@ -3693,11 +3712,27 @@ def add_candidates_from(items, cfg, source='search'):
         for it in items:
             url=it.get('url') if isinstance(it,dict) else str(it)
             if not url or not url.startswith('http'): continue
-            if _is_blacklisted(url): continue
+            if source!='manual' and _is_blacklisted(url): continue   # 수동은 블랙리스트 무시(대표님 명시 추가)
             dom=_domain_of(url)
-            if not dom or dom in known_dom or dom in site_dom: continue
-            if dom.replace('www.','') in rejected_dom:   # 이전에 탈락한 도메인은 건너뜀
-                blocked_rejected+=1; continue
+            if not dom: continue
+            if source=='manual':
+                # 대표님이 직접 넣은 URL — 영구탈락/블랙리스트/이전 실패를 무시하고 강제 재활성화.
+                _dm=dom.replace('www.','')
+                if _dm in rejected_dom:
+                    try: remove_rejected_domain(_dm)
+                    except Exception: pass
+                # 기존에 같은 도메인 후보가 있으면(특히 rejected) 되살려 재검수한다.
+                _react=False
+                for _c in cands:
+                    if _c.get('domain')==dom:
+                        _c['status']='ready'; _c['screened']=False; _c.pop('reject_reason',None)
+                        _c['url']=url; _react=True
+                if _react:
+                    added+=1; save_cands(cands); add_log(f'[수동추가] 기존 후보 재활성화: {dom}'); continue
+            else:
+                if dom in known_dom or dom in site_dom: continue
+                if dom.replace('www.','') in rejected_dom:   # 이전에 탈락한 도메인은 건너뜀
+                    blocked_rejected+=1; continue
             # 접속 가능 여부만 확인. '제목 숫자 8개' 규칙은 정상 게시판도 대량 오탈락시켜 제거함
             # (대표님 지시 2026-09-06). 주차/스팸은 뒤의 screen_candidate가 parked/illegal로 거른다.
             check=precheck_search_result(url) if source!='manual' else {'reachable':True,'title':'','digits':8}
