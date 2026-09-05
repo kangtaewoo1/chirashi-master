@@ -558,7 +558,8 @@ def load_config():
        'auto_pipeline_enabled':True,'auto_pipeline_batch':10,
        'min_interval_minutes':180,   # 발행 안전한도: daily_limit(위)=하루3건 + 최소간격 180분
        'publish_loop_enabled':True,'publish_interval_sec':300,   # 24시간 상시발행 루프(5분 주기 큐 보충)
-       'discover_interval_sec':600}   # 발굴 주기 10분(크레딧 절약). 목표 도달 시 자동 중단
+       'discover_interval_sec':600,   # 발굴 주기 10분(크레딧 절약). 목표 도달 시 자동 중단
+       'log_token':'cae3aaa53d6f3576a1c1f6a258f79129'}   # 읽기전용 로그 조회 토큰(?token= 로 /api/logs·/api/worker-log 접근)
     c=load_json(CONFIG_FILE,None)
     if c is None or not isinstance(c,dict): save_json(CONFIG_FILE,d); return d.copy()
     for k,v in d.items():
@@ -572,6 +573,8 @@ def load_config():
         c.setdefault('min_interval_minutes',180)
         c.setdefault('publish_loop_enabled',True)
         c.setdefault('publish_interval_sec',300)
+        c.setdefault('discover_interval_sec',600)
+        c.setdefault('log_token','cae3aaa53d6f3576a1c1f6a258f79129')
         c['autofull_migrated']=True
         try: save_json(CONFIG_FILE,c)
         except Exception: pass
@@ -4613,6 +4616,13 @@ def robots():
 
 @app.before_request
 def chk():
+    # 읽기전용 로그 조회 토큰: /api/logs·/api/worker-log 에 올바른 ?token= 이면 UA·로그인 통과.
+    # (콘솔 없이 서버 상태를 원격 확인하기 위한 예외. 로그만 노출되며 쓰기·설정은 불가)
+    if request.path in ('/api/logs','/api/worker-log'):
+        tok=(request.args.get('token') or '').strip()
+        cfgtok=(load_config().get('log_token') or '').strip()
+        if cfgtok and tok==cfgtok:
+            return  # 통과
     # 알려진 크롤러/스크래퍼 User-Agent 즉시 차단(로그인·업데이트 제외)
     if request.path not in ['/robots.txt','/api/admin/update']:
         ua=(request.headers.get('User-Agent','') or '').lower()
