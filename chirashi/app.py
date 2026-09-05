@@ -6884,12 +6884,20 @@ const checked=new Set(getSiteIds());
 if(!sites.length){$('siteList').innerHTML='<p style="color:var(--d);padding:30px;text-align:center">등록된 사이트가 없습니다</p>';return}
 // '실제 발행되는 것만' 필터: 기본은 발행 실패(rejected/failed) 사이트를 숨긴다.
 // (사장님 요청 — 목록엔 되는 것/시도 예정만 보이게. 전체보기 토글로 숨긴 것도 확인 가능)
-const showAll=window._siteShowAll||false;
-const isDead=s=>(s.status==='rejected'||s.status==='failed'||s.permission===false&&['manual_admin','admin_bulk','legacy_admin','candidate_registered','verified_test'].indexOf(s.registration_source)>=0);
-const shown=showAll?sites:sites.filter(s=>!isDead(s));
-const hiddenN=sites.length-shown.length;
-const toggle=`<div class="row" style="margin-bottom:6px;font-size:11px;color:var(--d)"><label style="display:flex;align-items:center;gap:5px"><input type="checkbox" style="width:auto" ${showAll?'checked':''} onclick="window._siteShowAll=this.checked;renderSites()">발행 불가 사이트도 보기</label><span style="flex:1"></span>${hiddenN>0?`<span style="color:var(--y)">발행 불가 ${hiddenN}곳 숨김</span> <button class="btn btn-r btn-xs" onclick="purgeDeadSites()">🗑 안 되는 사이트 정리</button>`:'<span style="color:var(--g)">발행 가능한 사이트만 표시 중</span>'}</div>`;
-if(!shown.length){$('siteList').innerHTML=toggle+'<p style="color:var(--d);padding:30px;text-align:center">표시할 사이트가 없습니다'+(hiddenN>0?' (발행 불가 '+hiddenN+'곳 숨김 — 위 체크박스로 보기)':'')+'</p>';return}
+// 3분류: 발행가능(실제 돌아감) / 진행중(뚫는 중) / 탈락(안 됨)
+const srcOK=s=>['manual_admin','admin_bulk','legacy_admin','candidate_registered','verified_test'].indexOf(s.registration_source)>=0;
+const isPub=s=>!!s.permission&&srcOK(s)&&s.status!=='rejected'&&s.write_test_status==='passed'&&/^https?:\/\//.test(s.verified_post_url||'');
+const isDead=s=>(s.status==='rejected'||s.status==='failed'||(s.permission===false&&srcOK(s)&&s.write_test_status==='failed'));
+const pubs=sites.filter(isPub);
+const dead=sites.filter(s=>!isPub(s)&&isDead(s));
+const prog=sites.filter(s=>!isPub(s)&&!isDead(s));
+const showProg=window._siteShowProg||false;
+const showDead=window._siteShowDead||false;
+let shown=pubs.slice();
+if(showProg)shown=shown.concat(prog);
+if(showDead)shown=shown.concat(dead);
+const toggle=`<div class="row" style="margin-bottom:6px;font-size:11px;color:var(--d);flex-wrap:wrap;gap:8px"><span style="color:var(--g)">🟢 발행가능 ${pubs.length}곳 표시 중</span>${prog.length?`<label style="display:flex;align-items:center;gap:4px"><input type="checkbox" style="width:auto" ${showProg?'checked':''} onclick="window._siteShowProg=this.checked;renderSites()">진행중 ${prog.length}곳 보기</label>`:''}<span style="flex:1"></span>${dead.length?`<label style="display:flex;align-items:center;gap:4px"><input type="checkbox" style="width:auto" ${showDead?'checked':''} onclick="window._siteShowDead=this.checked;renderSites()">안 되는 ${dead.length}곳 보기</label> <button class="btn btn-r btn-xs" onclick="purgeDeadSites()">🗑 안 되는 사이트 정리</button>`:''}</div>`;
+if(!shown.length){$('siteList').innerHTML=toggle+'<p style="color:var(--d);padding:30px;text-align:center">발행가능 사이트가 아직 없습니다'+(prog.length?' (진행중 '+prog.length+'곳 — 위에서 보기)':'')+'</p>';return}
 $('siteList').innerHTML=toggle+'<table><thead><tr><th><input type="checkbox" id="allCb" onclick="document.querySelectorAll(\'.cb\').forEach(c=>c.checked=this.checked)"></th><th>이름</th><th>허용</th><th>URL</th><th>게시판</th><th>오늘</th><th>상태</th><th>동작</th></tr></thead><tbody>'+shown.map(siteRow).join('')+'</tbody></table>';
 checked.forEach(id=>{const c=document.querySelector(`.cb[data-id="${id}"]`);if(c)c.checked=true})}
 
