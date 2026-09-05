@@ -7109,7 +7109,7 @@ $('pvOverlay').style.display='block';renderSites()}
 async function detectSite(id){toast('플랫폼 감지중...');const r=await api('/sites/detect/'+id,'POST');if(r&&r.ok){toast('감지됨: '+(r.platform==='cafe24'?'Cafe24':'그누보드'));renderSites()}else toast('실패: '+(r&&r.error||''),'er')}
 async function learnSite(id){if(!confirm('실측 학습을 실행합니다.\n등록된 사이트 한 곳의 글쓰기 DOM과 폼을 확인해 저장하며 글은 제출하지 않습니다. 진행할까요?'))return;toast('🎓 비제출 실측 학습 중...(최대 60초)');const r=await api('/sites/learn/'+id,'POST');if(r&&r.ok&&r.learned){toast('🎓 실측 성공! 비제출 레시피 저장됨 ('+(r.learned.content_mode||'')+')');renderSites()}else if(r&&r.captcha){toast('🧩 CAPTCHA 감지 — 우회하지 않고 제외 상태를 저장했습니다','er');renderSites()}else if(r&&r.blocked){toast('⛔ 보안 차단 감지 — 우회하지 않고 측정 결과를 저장했습니다','er');renderSites()}else toast('실측 완료: '+((r&&(r.message||r.error))||'폼 미확정'),'er')}
 async function renderSites(){const sites=await api('/sites','GET');if(!Array.isArray(sites))return;
-$('siteTabCount').textContent=sites.length;
+// 탭 카운트는 '실시간 발행가능' 수로 설정(아래 pubs 계산 후)
 // 발행용 드롭다운: 실제 게시 성공 URL까지 검증된 허용 사이트만 표시
 const sources=['manual_admin','admin_bulk','legacy_admin','candidate_registered','verified_test'];
 const publishable=sites.filter(s=>!!s.permission&&sources.includes(s.registration_source)&&s.status!=='rejected'&&s.write_test_status==='passed'&&/^https?:\/\//.test(s.verified_post_url||''));
@@ -7126,12 +7126,11 @@ const isDead=s=>(s.status==='rejected'||s.status==='failed'||(s.permission===fal
 const pubs=sites.filter(isPub);
 const dead=sites.filter(s=>!isPub(s)&&isDead(s));
 const prog=sites.filter(s=>!isPub(s)&&!isDead(s));
+$('siteTabCount').textContent=pubs.length;   // 탭 카운트=실시간 발행가능 수(대표님 요청)
 const showProg=window._siteShowProg||false;
-const showDead=window._siteShowDead||false;
 let shown=pubs.slice();
-if(showProg)shown=shown.concat(prog);
-if(showDead)shown=shown.concat(dead);
-const toggle=`<div class="row" style="margin-bottom:6px;font-size:11px;color:var(--d);flex-wrap:wrap;gap:8px"><span style="color:var(--g)">🟢 발행가능 ${pubs.length}곳 표시 중</span>${prog.length?`<label style="display:flex;align-items:center;gap:4px"><input type="checkbox" style="width:auto" ${showProg?'checked':''} onclick="window._siteShowProg=this.checked;renderSites()">진행중 ${prog.length}곳 보기</label>`:''}<span style="flex:1"></span>${dead.length?`<label style="display:flex;align-items:center;gap:4px"><input type="checkbox" style="width:auto" ${showDead?'checked':''} onclick="window._siteShowDead=this.checked;renderSites()">안 되는 ${dead.length}곳 보기</label> <button class="btn btn-r btn-xs" onclick="purgeDeadSites()">🗑 안 되는 사이트 정리</button>`:''}</div>`;
+if(showProg)shown=shown.concat(prog);   // '안 되는(dead)'은 이 영역에 목록 노출하지 않음 — 발행가능/진행중만
+const toggle=`<div class="row" style="margin-bottom:6px;font-size:11px;color:var(--d);flex-wrap:wrap;gap:8px"><span style="color:var(--g)">🟢 발행가능 ${pubs.length}곳</span>${prog.length?`<label style="display:flex;align-items:center;gap:4px"><input type="checkbox" style="width:auto" ${showProg?'checked':''} onclick="window._siteShowProg=this.checked;renderSites()">진행중 ${prog.length}곳 보기</label>`:''}<span style="flex:1"></span>${dead.length?`<span style="color:var(--d)">안 되는 ${dead.length}곳</span> <button class="btn btn-r btn-xs" onclick="purgeDeadSites()">🗑 정리</button>`:''}</div>`;
 if(!shown.length){$('siteList').innerHTML=toggle+'<p style="color:var(--d);padding:30px;text-align:center">발행가능 사이트가 아직 없습니다'+(prog.length?' (진행중 '+prog.length+'곳 — 위에서 보기)':'')+'</p>';return}
 $('siteList').innerHTML=toggle+'<table><thead><tr><th><input type="checkbox" id="allCb" onclick="document.querySelectorAll(\'.cb\').forEach(c=>c.checked=this.checked)"></th><th>이름</th><th>허용</th><th>URL</th><th>게시판</th><th>오늘</th><th>상태</th><th>동작</th></tr></thead><tbody>'+shown.map(siteRow).join('')+'</tbody></table>';
 checked.forEach(id=>{const c=document.querySelector(`.cb[data-id="${id}"]`);if(c)c.checked=true})}
