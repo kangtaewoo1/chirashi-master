@@ -2943,6 +2943,23 @@ def _site_permanent_block(s):
         return f'연속 실패 {s.get("fail_streak")}회'
     return ''
 
+# 오류/안내 페이지·데모/샘플 사이트 판정 키워드(사이트 이름·게시판명 기준, 네트워크 호출 없음)
+ERROR_PAGE_HINTS=('오류안내','오류 안내','에러페이지','에러 페이지','페이지를 찾을 수 없','존재하지 않는',
+                  '삭제된 페이지','접근할 수 없','잘못된 접근','not found','error page','forbidden','access denied')
+DEMO_HOST_HINTS=('demo.','sample.','example.','sandbox.')   # 서브도메인 라벨(데모/샘플)
+DEMO_HOST_EXACT=('demo.webtro.kr','demo.sir.kr','webtro.kr','www.webtro.kr','g5.demo.sir.kr')
+
+def _is_error_or_demo_site(s):
+    """실제 발행 대상이 아닌 사이트(오류안내 페이지·데모/샘플 사이트) 판정. 사유 반환(아니면 '')."""
+    dom=_domain_of(str(s.get('site_url') or '')).lower()
+    if dom in DEMO_HOST_EXACT or dom.startswith(DEMO_HOST_HINTS):
+        return f'데모/샘플 사이트({dom})'
+    raw=(str(s.get('name') or '')+' '+str(s.get('board_name') or '')).lower()
+    for k in ERROR_PAGE_HINTS:
+        if k.lower() in raw:
+            return f'오류/안내 페이지({k})'
+    return ''
+
 def reconcile_sites():
     """사이트 목록 상시 최신화: 발행이 막힌 사이트를 자동 탈락(permission 해제)시킨다.
        - 실제게시 검증 완료(verified_post_url 있음) 사이트는 보호(오탈락 방지).
@@ -2952,6 +2969,13 @@ def reconcile_sites():
         sites=load_sites()
         for s in sites:
             if s.get('status')=='rejected': continue
+            # 오류안내/데모 사이트는 검증됨 여부와 무관하게 즉시 영구 탈락(헛발행 방지).
+            edr=_is_error_or_demo_site(s)
+            if edr:
+                s.update({'status':'rejected','permission':False,'write_test_status':'failed',
+                          'verified_post_url':'','auto_drop_reason':edr,'auto_dropped_at':now})
+                changed+=1; dropped_doms.append(_domain_of(s.get('site_url','')))
+                continue
             # 실게시 검증된 사이트는 일시 실패로 함부로 탈락시키지 않는다
             if str(s.get('verified_post_url') or '').startswith(('http://','https://')):
                 # 단, 검증됐어도 연속 실패가 크게 쌓이면(서버 사망 등) 발행만 잠근다
@@ -3126,6 +3150,9 @@ def is_autopostable(site):
     # 로그인 필요 사이트인데 로그인 정보(mb_id)가 없으면 발행 제외 — 가입 미완료 사이트가
     # 발행 시도돼 failed 나는 것 방지(대표님 지시 2026-09-06). 비회원 글쓰기(login_required=False)는 영향 없음.
     if site.get('login_required') and not str(site.get('mb_id') or '').strip():
+        return False
+    # 오류안내/데모 사이트는 검증됐어도 발행 대상에서 즉시 제외(reconcile이 곧 영구 탈락 처리).
+    if _is_error_or_demo_site(site):
         return False
     return (is_permitted(site)
             and site.get('status')!='rejected'
