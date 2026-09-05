@@ -6290,28 +6290,12 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 <div id="p-disco" class="panel">
 <div class="note">🔎 Brave 검색 결과 중 실제 페이지 접속 성공 → HTML 제목 숫자 8개 이상 → 게시판 글쓰기 제목·본문 폼 확인까지 모두 통과한 사이트만 후보에 추가합니다. CAPTCHA·광고 금지 여부는 현재 후보 등록 조건에서 제외합니다.</div>
 <div id="dcSummary" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px"></div>
-<div class="card"><h3>후보 수집</h3>
-<div class="row"><button class="btn btn-p" onclick="discoverNow()">Brave 검색 실행 (5키워드)</button>
-<button class="btn btn-d" onclick="screenNow()">미검수 일괄 검수</button>
-<button class="btn btn-d" onclick="if(confirm('모든 후보를 다시 검수할까요?'))rescreenAll()">전체 재검수</button>
+<div class="card"><h3>후보 수집 <span style="font-size:11px;color:var(--g);font-weight:400">🟢 완전자동 작동 중 — 발굴·검수·가입·발행이 24시간 자동으로 돕니다</span></h3>
+<div class="row">
 <button class="btn btn-g" onclick="location='/api/candidates/export'">엑셀 내보내기</button>
 <span style="flex:1"></span>
 <button class="btn btn-r btn-xs" onclick="if(confirm('탈락 후보만 삭제할까요?'))clearRejected()">탈락 정리</button></div>
-<div class="row" style="margin-top:8px;padding-top:8px;border-top:1px solid var(--bd)">
-<button class="btn btn-p" id="allInOneBtn" onclick="runAllInOne()" style="font-weight:700">⚡ 올인원 실행 (발굴→가입→발행→등록)</button>
-<span style="flex:1"></span></div>
-<div class="row" style="margin-top:6px;align-items:center;gap:6px">
-<button class="btn btn-g" id="karaokeSchedBtn" onclick="setupKaraokeSchedule()" style="font-weight:700">🎤 노래방 스케줄 켜기 (검증사이트 자동발행)</button>
-<label style="font-size:11px;color:var(--d)">매일 <input type="time" id="karTime" value="10:00" style="width:auto"> · 사이트당 <input type="number" id="karCount" value="1" min="1" max="10" style="width:48px">건</label>
-<span style="flex:1"></span><span id="karStatus" style="font-size:11px;color:var(--d)"></span></div>
-<div style="font-size:10px;color:var(--y);margin:2px 0">노래방 키워드(지역+업종)를 발행 풀에 넣고, 실게시 검증된 사이트 전체에 매일 자동발행 예약을 겁니다. 각 사이트 하루한도/간격은 사이트 설정값을 따릅니다.</div>
-<div class="row" style="margin-top:6px">
-<button class="btn btn-v" id="pipeRunBtn" onclick="pipelineRun()">🤖 완전 자동 파이프라인 실행 (가입→실발행→등록)</button>
-<label style="display:flex;align-items:center;gap:4px;font-size:11px">개수 <input type="number" id="pipeBatch" value="1" min="1" max="20" style="width:52px"></label>
-<span style="flex:1"></span><span id="pipeStatus" style="font-size:11px;color:var(--d)"></span></div>
-<div style="font-size:10px;color:var(--y);margin:4px 0">⚠️ 실제 게시판에 글 1건을 올려 검증합니다(되돌리기 어려움). 로그인 필요 사이트는 자동 회원가입(2captcha)까지 시도합니다.</div>
-<div id="pipeLog" style="display:none;max-height:220px;overflow-y:auto;background:#0a0a12;border:1px solid var(--bd);border-radius:6px;padding:8px;font-size:11px;line-height:1.5;font-family:monospace;margin-bottom:6px"></div>
-<div style="font-size:10px;color:var(--d);margin-bottom:6px">API 키가 없어도 아래에 URL을 직접 붙여넣으면 접속·글쓰기 가능 여부와 점수가 자동 검수됩니다.</div>
+<div style="font-size:10px;color:var(--d);margin:8px 0 4px">특정 사이트를 직접 넣고 싶을 때만 아래에 URL을 붙여넣으세요. 나머지는 자동입니다.</div>
 <textarea id="dcUrls" rows="3" placeholder="URL 직접 추가 (한 줄에 하나)&#10;https://example.kr/bbs/board.php?bo_table=promotion"></textarea>
 <div class="row" style="margin-top:6px"><button class="btn btn-v" onclick="addManual()">URL 추가 + 검수</button></div></div>
 <div class="card"><h3>후보 목록 (점수순 — 위에서부터 검토)</h3>
