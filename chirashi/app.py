@@ -4730,18 +4730,19 @@ def api_cand_approve(cid):
                   'mb_id':d.get('mb_id',''),'mb_pass':d.get('mb_pass',''),
                   'bo_table':(d.get('bo_table') or c.get('bo_table') or 'free'),
                   'name':(d.get('name') or c.get('domain','')),
-                  'permission':True,'permission_note':note,
+                  'permission':False,'permission_note':note,
                   'registration_source':'candidate_registered','daily_limit':3,'min_interval_minutes':60,
                   'permission_date':_kst_now().strftime('%Y-%m-%d'),
                   'has_captcha':bool(c.get('captcha')),
-                      'status':'idle','added':_kst_now().strftime('%m/%d %H:%M')})
+                  'write_test_status':'pending','verified_post_url':'',
+                      'status':'pending','added':_kst_now().strftime('%m/%d %H:%M')})
         save_sites(sites)
     with _cand_lock:
         cands=load_cands()
         for x in cands:
             if x.get('id')==cid: x['status']='approved'; x['approved_at']=_kst_now().strftime('%Y-%m-%d %H:%M')
         save_cands(cands)
-    add_log(f'[후보 등록] {c.get("domain")} → 사이트 목록 등록')
+    add_log(f'[후보 등록] {c.get("domain")} → 사이트 목록 등록 (발행잠금·실게시 테스트 통과 시 발행가능)','검수')
     return jsonify({'ok':True})
 
 @app.route('/api/candidates/verified',methods=['POST'])
@@ -5785,6 +5786,7 @@ def api_sites_bulk():
                       'permission':perm,'permission_note':'CSV 일괄등록',
                       'registration_source':'admin_bulk','daily_limit':3,'min_interval_minutes':60,
                       'permission_date':(datetime.now().strftime('%Y-%m-%d') if perm else ''),
+                      'write_test_status':'pending','verified_post_url':'',
                       'status':'idle','added':datetime.now().strftime('%m/%d %H:%M')})
         added+=1
     if new_sites:
@@ -6131,7 +6133,7 @@ input[type=checkbox]{accent-color:var(--p)}
 
 LOGIN_HTML=r'''<div style="display:flex;align-items:center;justify-content:center;min-height:100vh">
 <div style="background:var(--c);border:1px solid var(--b);border-radius:14px;padding:40px;width:340px;text-align:center">
-<h2 style="margin-bottom:4px;font-size:18px">찌라시 마스터 v6</h2>
+<h2 style="margin-bottom:4px;font-size:18px">찌라시 마스터 v6 <span style="font-size:10px;color:var(--d);font-weight:400">build 0905-작업분류·정리</span></h2>
 <p style="color:var(--d);font-size:12px;margin-bottom:24px">정직한 자동 발행 (회피코드 없음)</p>
 <form method="POST">
 {% if error %}<p style="color:var(--r);font-size:11px;margin-bottom:8px">{{ error }}</p>{% endif %}
@@ -6253,6 +6255,16 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 <div id="wlogBlock" style="margin:8px 0"></div>
 <div id="captchaTasks" style="margin:8px 0"></div>
 <div id="wlogTasks" style="margin:8px 0"></div>
+<div class="card" style="margin:10px 0"><div class="row" style="align-items:center"><h3 style="margin:0">📋 전체 작업 로그 (분류)</h3><span style="flex:1"></span>
+<span id="actFilter" style="font-size:11px">
+<button class="btn btn-p btn-xs actf on" data-c="" onclick="setActFilter(this)">전체</button>
+<button class="btn btn-d btn-xs actf" data-c="발굴" onclick="setActFilter(this)">발굴</button>
+<button class="btn btn-d btn-xs actf" data-c="검수" onclick="setActFilter(this)">검수</button>
+<button class="btn btn-d btn-xs actf" data-c="가입" onclick="setActFilter(this)">가입</button>
+<button class="btn btn-d btn-xs actf" data-c="발행" onclick="setActFilter(this)">발행</button>
+<button class="btn btn-d btn-xs actf" data-c="정리" onclick="setActFilter(this)">정리</button>
+</span></div>
+<div style="max-height:280px;overflow-y:auto;margin-top:6px" id="wlogActivity"></div></div>
 <div style="max-height:520px;overflow-y:auto" id="wlogList"></div></div></div>
 
 <div id="p-disco" class="panel">
@@ -6455,7 +6467,12 @@ $('histList').innerHTML='<table><thead><tr><th>시간</th><th>사이트</th><th>
 async function submitCaptcha(id){const el=$('cap_'+id);const value=(el&&el.value||'').trim();if(!value){toast('CAPTCHA 값을 입력하세요','er');return}const r=await api('/manual-checks/'+id+'/submit','POST',{value});if(r&&r.ok){toast('입력 완료 · 자동 발행을 계속합니다');renderCaptchaTasks()}else toast((r&&r.error)||'전달 실패','er')}
 async function cancelCaptcha(id){const r=await api('/manual-checks/'+id+'/cancel','POST',{});if(r&&r.ok){toast('CAPTCHA 작업 취소됨');renderCaptchaTasks()}}
 async function renderCaptchaTasks(){const box=$('captchaTasks');if(!box)return;const r=await api('/manual-checks','GET');if(!r||!r.ok)return;const waiting=(r.tasks||[]).filter(t=>['waiting_input','input_received','submitting'].includes(t.status));if(!waiting.length){box.innerHTML='';return}box.innerHTML=waiting.map(t=>'<div class="card" style="border-color:#a16207;background:#171205"><h3 style="color:var(--y)">🧩 '+esc(t.site_name)+' · CAPTCHA 입력 후 자동 발행</h3><div class="row">'+(t.image_data?'<img src="'+t.image_data+'" alt="CAPTCHA" style="max-width:240px;max-height:90px;background:#fff;border-radius:4px;padding:4px">':'<span style="color:var(--y)">이미지 캡처 실패 — 사이트 화면에서 CAPTCHA를 확인하세요.</span>')+'<input id="cap_'+esc(t.id)+'" autocomplete="off" placeholder="보이는 문자를 직접 입력" style="width:220px" '+(t.status!=='waiting_input'?'disabled':'')+'><button class="btn btn-g" onclick="submitCaptcha(\''+esc(t.id)+'\')" '+(t.status!=='waiting_input'?'disabled':'')+'>입력 후 자동 발행</button><button class="btn btn-r btn-xs" onclick="cancelCaptcha(\''+esc(t.id)+'\')">취소</button></div><div style="color:var(--d);font-size:10px;margin-top:6px">'+esc(t.message||'')+' · 만료 '+esc(t.expires_at||'')+'</div></div>').join('')}
-async function renderWorkerLog(){const roomSel=$('wlogRoom');if(!roomSel.dataset.loaded){const rooms=await api('/workrooms','GET');if(Array.isArray(rooms)){roomSel.innerHTML='<option value="">전체 작업실</option>'+rooms.map(r=>'<option value="'+esc(r.id)+'">'+esc(r.name)+'</option>').join('');roomSel.dataset.loaded='1'}}const rid=roomSel.value;const r=await api('/worker-log'+(rid?'?workroom_id='+encodeURIComponent(rid):''),'GET');if(!r||!r.ok)return;const w=r.workers||{};$('wlogWorker').textContent='워커 '+(w.active?(w.paused?'일시정지':'실행 중'):'정지')+' · 큐 '+(w.queued||0)+' · 성공 '+(w.success||0)+' · 실패 '+(w.fail||0)+' · 스킵 '+(w.skipped||0);$('wlogBlock').innerHTML=r.publishable_count?'<div class="note" style="border-color:#166534;color:var(--g)">발행 가능 검증 사이트 '+r.publishable_count+'곳</div>':'<div class="note" style="border-color:#991b1b;color:var(--r)">⛔ 현재 발행 가능 사이트 0곳'+((r.captcha_sites||[]).length?' · CAPTCHA 감지: '+esc(r.captcha_sites.join(', ')):'')+' — CAPTCHA를 우회하지 않으며 사람이 처리하고 실게시 재검증하기 전까지 자동 발행하지 않습니다.</div>';const sm={preparing:'준비',running:'글 생성 중',done:'준비 완료',failed:'준비 실패'};$('wlogTasks').innerHTML=(r.tasks||[]).length?'<table><thead><tr><th>작업실</th><th>시작</th><th>준비 진행</th><th>큐 등록</th><th>대기 필요</th><th>상태</th></tr></thead><tbody>'+r.tasks.map(t=>'<tr><td><b>'+esc(t.workroom_name||'직접 입력')+'</b></td><td>'+esc(t.created_at||'')+'</td><td>'+esc(t.done||0)+'/'+esc(t.total||0)+'</td><td>'+esc(t.queued||0)+'</td><td>'+esc(t.remaining||0)+'</td><td><span class="st st-'+(t.status==='done'?'ok':t.status==='failed'?'f':'y')+'">'+esc(sm[t.status]||t.status||'')+'</span> '+esc(t.error||'')+'</td></tr>').join('')+'</tbody></table>':'<p style="color:var(--d);padding:12px">선택한 작업실의 준비 작업이 없습니다.</p>';const h=r.history||[];$('wlogList').innerHTML=h.length?'<table><thead><tr><th>작업실</th><th>시간</th><th>키워드</th><th>사이트</th><th>상태</th><th>결과 URL</th><th>메시지</th></tr></thead><tbody>'+h.map(x=>'<tr><td><b>'+esc(x.workroom_name||'직접 입력')+'</b></td><td>'+esc((x.time||'').slice(5,16))+'</td><td>'+esc(x.region||'')+' / '+esc(x.service||'')+'</td><td>'+esc(x.site_name||'')+'</td><td><span class="st st-'+(x.status==='done'?'ok':x.status==='failed'?'f':x.status==='skipped'?'y':'i')+'">'+esc(x.status||'')+'</span></td><td>'+(x.result_url?'<a href="'+esc(x.result_url)+'" target="_blank" style="color:var(--p)">열기</a>':'-')+'</td><td style="color:var(--d)">'+esc(x.fail_reason_ko||x.message||'')+'</td></tr>').join('')+'</tbody></table>':'<p style="color:var(--d);padding:30px;text-align:center">아직 이 작업실의 워커 발행 이력이 없습니다.</p>'}
+async function renderWorkerLog(){const roomSel=$('wlogRoom');if(!roomSel.dataset.loaded){const rooms=await api('/workrooms','GET');if(Array.isArray(rooms)){roomSel.innerHTML='<option value="">전체 작업실</option>'+rooms.map(r=>'<option value="'+esc(r.id)+'">'+esc(r.name)+'</option>').join('');roomSel.dataset.loaded='1'}}const rid=roomSel.value;const r=await api('/worker-log'+(rid?'?workroom_id='+encodeURIComponent(rid):''),'GET');if(!r||!r.ok)return;const w=r.workers||{};$('wlogWorker').textContent='워커 '+(w.active?(w.paused?'일시정지':'실행 중'):'정지')+' · 큐 '+(w.queued||0)+' · 성공 '+(w.success||0)+' · 실패 '+(w.fail||0)+' · 스킵 '+(w.skipped||0);$('wlogBlock').innerHTML=r.publishable_count?'<div class="note" style="border-color:#166534;color:var(--g)">발행 가능 검증 사이트 '+r.publishable_count+'곳</div>':'<div class="note" style="border-color:#991b1b;color:var(--r)">⛔ 현재 발행 가능 사이트 0곳'+((r.captcha_sites||[]).length?' · CAPTCHA 감지: '+esc(r.captcha_sites.join(', ')):'')+' — CAPTCHA를 우회하지 않으며 사람이 처리하고 실게시 재검증하기 전까지 자동 발행하지 않습니다.</div>';const sm={preparing:'준비',running:'글 생성 중',done:'준비 완료',failed:'준비 실패'};$('wlogTasks').innerHTML=(r.tasks||[]).length?'<table><thead><tr><th>작업실</th><th>시작</th><th>준비 진행</th><th>큐 등록</th><th>대기 필요</th><th>상태</th></tr></thead><tbody>'+r.tasks.map(t=>'<tr><td><b>'+esc(t.workroom_name||'직접 입력')+'</b></td><td>'+esc(t.created_at||'')+'</td><td>'+esc(t.done||0)+'/'+esc(t.total||0)+'</td><td>'+esc(t.queued||0)+'</td><td>'+esc(t.remaining||0)+'</td><td><span class="st st-'+(t.status==='done'?'ok':t.status==='failed'?'f':'y')+'">'+esc(sm[t.status]||t.status||'')+'</span> '+esc(t.error||'')+'</td></tr>').join('')+'</tbody></table>':'<p style="color:var(--d);padding:12px">선택한 작업실의 준비 작업이 없습니다.</p>';const h=r.history||[];$('wlogList').innerHTML=h.length?'<table><thead><tr><th>작업실</th><th>시간</th><th>키워드</th><th>사이트</th><th>상태</th><th>결과 URL</th><th>메시지</th></tr></thead><tbody>'+h.map(x=>'<tr><td><b>'+esc(x.workroom_name||'직접 입력')+'</b></td><td>'+esc((x.time||'').slice(5,16))+'</td><td>'+esc(x.region||'')+' / '+esc(x.service||'')+'</td><td>'+esc(x.site_name||'')+'</td><td><span class="st st-'+(x.status==='done'?'ok':x.status==='failed'?'f':x.status==='skipped'?'y':'i')+'">'+esc(x.status||'')+'</span></td><td>'+(x.result_url?'<a href="'+esc(x.result_url)+'" target="_blank" style="color:var(--p)">열기</a>':'-')+'</td><td style="color:var(--d)">'+esc(x.fail_reason_ko||x.message||'')+'</td></tr>').join('')+'</tbody></table>':'<p style="color:var(--d);padding:30px;text-align:center">아직 이 작업실의 워커 발행 이력이 없습니다.</p>';window._actLog=r.activity||[];renderActivity()}
+let _actFilter='';
+function setActFilter(btn){document.querySelectorAll('.actf').forEach(b=>b.classList.remove('on'));btn.classList.add('on');_actFilter=btn.dataset.c||'';renderActivity()}
+function renderActivity(){const box=$('wlogActivity');if(!box)return;const logs=(window._actLog||[]).filter(x=>!_actFilter||(x.cat||'')===_actFilter);
+  const color={'발굴':'var(--p)','검수':'var(--v)','가입':'var(--y)','발행':'var(--g)','정리':'var(--r)','파이프라인':'var(--t)','기타':'var(--d)'};
+  box.innerHTML=logs.length?'<table><thead><tr><th style="width:70px">종류</th><th style="width:70px">시간</th><th>내용</th></tr></thead><tbody>'+logs.map(x=>{const c=x.cat||'기타';return '<tr><td><span class="st" style="background:'+((color[c]||'var(--d)')+'22')+';color:'+(color[c]||'var(--d)')+'">'+esc(c)+'</span></td><td style="color:var(--d)">'+esc(x.time||'')+'</td><td>'+esc(x.msg||'')+'</td></tr>'}).join('')+'</tbody></table>':'<p style="color:var(--d);padding:20px;text-align:center">'+(_actFilter?_actFilter+' 로그 없음':'작업 로그 없음')+'</p>'}
 let _editId=null;
 async function runDiag(){$('diagOut').innerHTML='<p style="color:var(--d);padding:14px">🩺 진단 중... 크롬을 실제로 띄워보는 중이라 최대 60초 걸립니다.</p>';const r=await api('/diag','GET');if(!r){$('diagOut').innerHTML='<p style="color:var(--r)">진단 실패</p>';return}
 const rows=(r.steps||[]).map(s=>`<tr><td>${s.ok?'<span style="color:var(--g)">✅</span>':'<span style="color:var(--r)">❌</span>'}</td><td><b>${esc(s.name)}</b></td><td style="color:var(--d)">${esc(s.detail)}</td></tr>`).join('');
@@ -6867,10 +6884,23 @@ const showAll=window._siteShowAll||false;
 const isDead=s=>(s.status==='rejected'||s.status==='failed'||s.permission===false&&['manual_admin','admin_bulk','legacy_admin','candidate_registered','verified_test'].indexOf(s.registration_source)>=0);
 const shown=showAll?sites:sites.filter(s=>!isDead(s));
 const hiddenN=sites.length-shown.length;
-const toggle=`<div class="row" style="margin-bottom:6px;font-size:11px;color:var(--d)"><label style="display:flex;align-items:center;gap:5px"><input type="checkbox" style="width:auto" ${showAll?'checked':''} onclick="window._siteShowAll=this.checked;renderSites()">발행 불가 사이트도 보기</label><span style="flex:1"></span>${hiddenN>0?`<span style="color:var(--y)">발행 불가 ${hiddenN}곳 숨김</span>`:'<span style="color:var(--g)">발행 가능한 사이트만 표시 중</span>'}</div>`;
+const toggle=`<div class="row" style="margin-bottom:6px;font-size:11px;color:var(--d)"><label style="display:flex;align-items:center;gap:5px"><input type="checkbox" style="width:auto" ${showAll?'checked':''} onclick="window._siteShowAll=this.checked;renderSites()">발행 불가 사이트도 보기</label><span style="flex:1"></span>${hiddenN>0?`<span style="color:var(--y)">발행 불가 ${hiddenN}곳 숨김</span> <button class="btn btn-r btn-xs" onclick="purgeDeadSites()">🗑 안 되는 사이트 정리</button>`:'<span style="color:var(--g)">발행 가능한 사이트만 표시 중</span>'}</div>`;
 if(!shown.length){$('siteList').innerHTML=toggle+'<p style="color:var(--d);padding:30px;text-align:center">표시할 사이트가 없습니다'+(hiddenN>0?' (발행 불가 '+hiddenN+'곳 숨김 — 위 체크박스로 보기)':'')+'</p>';return}
 $('siteList').innerHTML=toggle+'<table><thead><tr><th><input type="checkbox" id="allCb" onclick="document.querySelectorAll(\'.cb\').forEach(c=>c.checked=this.checked)"></th><th>이름</th><th>허용</th><th>URL</th><th>게시판</th><th>오늘</th><th>상태</th><th>동작</th></tr></thead><tbody>'+shown.map(siteRow).join('')+'</tbody></table>';
 checked.forEach(id=>{const c=document.querySelector(`.cb[data-id="${id}"]`);if(c)c.checked=true})}
+
+async function purgeDeadSites(){
+  const dry=await api('/sites/purge','POST',{});
+  if(!dry){return}
+  if(!dry.ok){toast(dry.error||'정리 실패','er');return}
+  const del=dry.dead_sites||[];const keep=dry.keep||0;
+  if(!del.length){toast('삭제할 안 되는 사이트가 없습니다','ok');return}
+  const names=del.map(x=>'· '+(x.name||x.url||'')+' ('+(x.reason||'')+')').join('\n');
+  if(!confirm('안 되는 사이트 '+del.length+'곳을 삭제합니다.\n(발행 가능 '+keep+'곳은 유지)\n\n'+names+'\n\n삭제하시겠습니까?'))return;
+  const res=await api('/sites/purge','POST',{confirm:true});
+  if(res&&res.ok){toast(('삭제 '+(res.deleted||del.length)+'곳 완료 · 유지 '+(res.keep||keep)+'곳'),'ok');renderSites()}
+  else{toast((res&&res.error)||'삭제 실패','er')}
+}
 
 // ---- 통계/진행률 폴링 ----
 async function poll(){const r=await api('/workers/stats','GET');if(!r)return;
