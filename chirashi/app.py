@@ -1465,6 +1465,8 @@ def _page_is_blocked(d):
 def classify_fail(msg):
     """발행 실패 메시지를 사람이 읽을 수 있는 원인으로 분류. (코드, 한글, 일시적여부)"""
     ms=str(msg or ''); low=ms.lower()
+    if '도배방지' in ms or '너무 빠' in ms:
+        return 'flood','도배방지 간격대기',True   # 일시적 → 학습된 간격 뒤 자동 재시도
     if '캡차' in ms or 'captcha' in low or '보안 인증' in ms:
         return 'captcha','캡차/보안인증 감지',False
     if any(k in ms for k in ['타임아웃','시간 초과']) or any(k in low for k in
@@ -1592,9 +1594,29 @@ def get_driver():
         _drivers[tid]=d; return d
 
 def dismiss_alerts(d):
+    """alert 팝업을 닫으면서 텍스트를 캡처(d._last_alerts에 누적) — 도배방지 등 규칙 학습용."""
+    texts=[]
     for _ in range(3):
-        try: d.switch_to.alert.accept(); time.sleep(0.2)
+        try:
+            a=d.switch_to.alert; texts.append(a.text or ''); a.accept(); time.sleep(0.2)
         except: break
+    if texts:
+        try: d._last_alerts=(getattr(d,'_last_alerts',[]) or [])[-4:]+texts
+        except Exception: pass
+    return texts
+
+def _flood_wait_seconds(text):
+    """도배방지/재작성 제한 알림 문구에서 대기 시간(초)을 추출. 도배 신호가 없으면 0.
+       예: '너무 빠른 시간...', '도배방지...', '10초 후에 다시', '3분 후 작성 가능'."""
+    t=str(text or '')
+    if not any(k in t for k in ('도배','너무 빠','잠시 후','초 후','초가','초 뒤','분 후','분 뒤',
+                                 '다시 등록','다시 작성','다시 쓰','시간이 지나','시간이 경과','제한')):
+        return 0
+    mm=re.search(r'(\d+)\s*분',t)
+    if mm: return min(3600,int(mm.group(1))*60)
+    ss=re.search(r'(\d+)\s*초',t)
+    if ss: return min(3600,int(ss.group(1)))
+    return 60   # 시간 명시 없으면 안전하게 60초
 
 def html_to_plain(content):
     """HTML 모드가 없는 게시판에 넣을 읽기 쉬운 일반 텍스트."""
@@ -2012,6 +2034,21 @@ def gnuboard_post(site, title, content_html, skip_login=False):
         return False,'캡차 불일치 — 재시도 필요'
     if any(k in body for k in ['권한이 없','권한 없','로그인이 필요','게시가 금지','차단']):
         return False,'게시 권한 없음/로그인 필요 — 계정·게시판 권한 확인'
+    # 3.5) 도배방지/재작성 제한: 알림·본문에서 대기시간(초)을 파싱해 사이트별로 학습하고,
+    #      이후 발행 간격을 그 룰에 맞춰 자동 조정한다(under_min_interval이 flood_sec 반영).
+    _fa=' '.join(getattr(d,'_last_alerts',[]) or [])
+    _fw=max(_flood_wait_seconds(_fa), _flood_wait_seconds(body))
+    if _fw>0:
+        try:
+            sid=site.get('id')
+            if sid and not str(sid).startswith('cand_'):
+                _cur=int((_fresh_site(site) or {}).get('flood_sec',0) or 0)
+                set_site_flag(sid, flood_sec=max(_cur,_fw), flood_learned_at=datetime.now().strftime('%Y-%m-%d %H:%M'))
+            site['flood_sec']=max(int(site.get('flood_sec',0) or 0),_fw)
+        except Exception: pass
+        finish_captcha_task(captcha_tid,False,f'도배방지 {_fw}초')
+        add_log(f'[도배방지 학습] {site.get("name") or base} — {_fw}초 간격 학습(다음부터 자동 대기)')
+        return False,f'도배방지 — {_fw}초 후 재시도(간격 학습됨)'
     # 4) 최후 검증: 느린 서버가 제출 후 뷰로 리다이렉트하는 데 시간이 걸려 위 URL/본문
     #    판정을 놓쳤을 수 있다. 게시판 목록을 다시 읽어 방금 올린 제목이 실제로
     #    등록됐는지 확인한다(오탐으로 인한 재시도→중복발행 방지).
@@ -2939,8 +2976,14 @@ def site_min_interval(site):
         default=int(load_config().get('min_interval_minutes',1) or 0)
     except Exception:
         default=1
-    try: return max(0,int(site.get('min_interval_minutes',default) or 0))
-    except Exception: return default
+    try: base=max(0,int(site.get('min_interval_minutes',default) or 0))
+    except Exception: base=default
+    # 학습된 도배방지 간격(flood_sec)이 있으면 그만큼(분 올림)을 최소로 보장 — 사이트 규칙 자동 준수.
+    try:
+        fs=int(site.get('flood_sec',0) or 0)
+        if fs>0: base=max(base,(fs+59)//60)
+    except Exception: pass
+    return base
 
 def _fresh_site(site):
     return next((s for s in load_sites() if s.get('id')==site.get('id')),site)
