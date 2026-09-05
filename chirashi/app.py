@@ -556,7 +556,8 @@ def load_config():
        'twocaptcha_price_recaptcha_usd':0.003,'twocaptcha_price_image_usd':0.0005,
        'brave_price_per_query_usd':0.005,  # Pro 플랜 기준 쿼리당 $0.005(설정 탭에서 변경 가능)
        'auto_pipeline_enabled':True,'auto_pipeline_batch':10,
-       'min_interval_minutes':180}   # 발행 안전한도: daily_limit(위)=하루3건 + 최소간격 180분
+       'min_interval_minutes':180,   # 발행 안전한도: daily_limit(위)=하루3건 + 최소간격 180분
+       'publish_loop_enabled':True,'publish_interval_sec':300}   # 24시간 상시발행 루프(5분 주기 큐 보충)
     c=load_json(CONFIG_FILE,None)
     if c is None or not isinstance(c,dict): save_json(CONFIG_FILE,d); return d.copy()
     for k,v in d.items():
@@ -568,6 +569,8 @@ def load_config():
         c['auto_pipeline_enabled']=True
         c.setdefault('daily_limit',3)
         c.setdefault('min_interval_minutes',180)
+        c.setdefault('publish_loop_enabled',True)
+        c.setdefault('publish_interval_sec',300)
         c['autofull_migrated']=True
         try: save_json(CONFIG_FILE,c)
         except Exception: pass
@@ -4148,6 +4151,45 @@ def _promoted_site_id(cand):
         if _domain_of(s.get('site_url',''))==dom: return s.get('id')
     return None
 
+def publish_loop():
+    """24시간 상시발행: 발행가능 사이트 중 하루한도·간격을 통과한 곳에 키워드 풀 기반 글을 큐잉한다.
+       실제 발행은 worker_loop이 하며, 발행 직전 한도·간격·publishable을 다시 확인한다(이중 안전).
+       publish_loop_enabled(설정)로 즉시 끄고, publish_interval_sec로 주기 조절 가능."""
+    while True:
+        try:
+            cfg=load_config()
+            interval=int(cfg.get('publish_interval_sec',300) or 300)
+            if not cfg.get('publish_loop_enabled'):
+                time.sleep(interval); continue
+            sites=[s for s in load_sites() if is_publishable(s)]
+            if not sites:
+                time.sleep(interval); continue
+            # 큐가 이미 충분히 차 있으면 과잉 큐잉 방지(발행가능 사이트 수 이상 대기중이면 스킵)
+            if post_queue.qsize() >= max(2,len(sites)):
+                time.sleep(interval); continue
+            pool=load_keywords()
+            if not pool:
+                add_log('[상시발행] 키워드 풀이 비어 대기 — 키워드 탭에서 조합을 추가하세요')
+                time.sleep(interval); continue
+            queued=0
+            for s in sites:
+                if not under_daily_limit(s,cfg): continue
+                ok,_=under_min_interval(s)
+                if not ok: continue
+                kw=pick_keywords(pool,cfg)   # 기존 키워드 선택 로직 재사용(지역/서비스/브랜드 dict)
+                try:
+                    n=enqueue_generated([s],kw,cfg,{'region':kw.get('지역',''),'service':kw.get('서비스','')})[0]
+                    queued+=n
+                except Exception as e:
+                    add_log(f'[상시발행 오류] {str(e)[:80]}')
+                if not wk_active: start_workers(cfg.get('workers',2))
+            if queued:
+                add_log(f'[상시발행] {queued}건 큐 등록 (발행가능 {len(sites)}곳 중 한도·간격 통과분)')
+        except Exception as e:
+            add_log(f'[상시발행 루프 오류] {str(e)[:100]}')
+        try: time.sleep(int(load_config().get('publish_interval_sec',300) or 300))
+        except Exception: time.sleep(300)
+
 def discover_loop():
     """24시간 자동 발굴 — 목표치까지 천천히 채우고 남는 시간엔 검수."""
     while True:
@@ -6986,7 +7028,7 @@ def main():
         print('⏰ 스케줄러 시작 (KST 기준)')
     except Exception as e: print('스케줄러 시작 실패:',e)
     # 지연 재시도 루프 / 텔레그램 명령 수신 / 발행글 생존 검증
-    for fn,nm in [(retry_loop,'RETRY'),(telegram_loop,'TG'),(verify_loop,'VERIFY'),(member_scheduler_loop,'MSCHED'),(discover_loop,'DISCO')]:
+    for fn,nm in [(retry_loop,'RETRY'),(telegram_loop,'TG'),(verify_loop,'VERIFY'),(member_scheduler_loop,'MSCHED'),(discover_loop,'DISCO'),(publish_loop,'PUBLISH')]:
         try: threading.Thread(target=fn,name=nm,daemon=True).start()
         except Exception as e: print(f'{nm} 시작 실패:',e)
     print('🔁 재시도·📱텔레그램·🔎검증 스레드 시작')
