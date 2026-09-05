@@ -543,7 +543,7 @@ def load_config():
        'openai_admin_key':'','openai_monthly_budget_usd':20.0,
        'openai_input_price_per_million':0.15,'openai_cached_input_price_per_million':0.075,
        'openai_output_price_per_million':0.60,
-       'workers':2,'password':'admin1234','post_delay':30,'daily_limit':3,
+       'workers':2,'password':'admin1234','post_delay':30,'daily_limit':0,
        'use_gpt':False,'telegram_token':'','telegram_chat_id':'',
        'notify_done':False,'notify_fail':True,'update_token':'',
        'telegram_control':False,'backup_time':'','verify_enabled':True,'mix_keywords':True,
@@ -556,7 +556,7 @@ def load_config():
        'twocaptcha_price_recaptcha_usd':0.003,'twocaptcha_price_image_usd':0.0005,
        'brave_price_per_query_usd':0.005,  # Pro 플랜 기준 쿼리당 $0.005(설정 탭에서 변경 가능)
        'auto_pipeline_enabled':True,'auto_pipeline_batch':10,
-       'min_interval_minutes':180,   # 발행 안전한도: daily_limit(위)=하루3건 + 최소간격 180분
+       'min_interval_minutes':1,   # 발행 간격(분): 1=사실상 무간격, daily_limit=0=하루 무제한(대표님 요청)
        'publish_loop_enabled':True,'publish_interval_sec':300,   # 24시간 상시발행 루프(5분 주기 큐 보충)
        'discover_interval_sec':600,   # 발굴 주기 10분(크레딧 절약). 목표 도달 시 자동 중단
        'log_token':'cae3aaa53d6f3576a1c1f6a258f79129'}   # 읽기전용 로그 조회 토큰(?token= 로 /api/logs·/api/worker-log 접근)
@@ -569,13 +569,28 @@ def load_config():
     if not c.get('autofull_migrated'):
         c['discover_enabled']=True
         c['auto_pipeline_enabled']=True
-        c.setdefault('daily_limit',3)
-        c.setdefault('min_interval_minutes',180)
+        c.setdefault('daily_limit',0)
+        c.setdefault('min_interval_minutes',1)
         c.setdefault('publish_loop_enabled',True)
         c.setdefault('publish_interval_sec',300)
         c.setdefault('discover_interval_sec',600)
         c.setdefault('log_token','cae3aaa53d6f3576a1c1f6a258f79129')
         c['autofull_migrated']=True
+        try: save_json(CONFIG_FILE,c)
+        except Exception: pass
+    # 1회 마이그레이션: 발행 간격 1분 · 하루 무제한(daily_limit=0)로 전환(대표님 요청).
+    # 기존 config·모든 사이트를 강제로 1/0으로 맞춘다. 이후 개별 조정은 자유.
+    if not c.get('interval1_unlimited_migrated'):
+        c['min_interval_minutes']=1
+        c['daily_limit']=0
+        try:
+            _ss=load_sites(); _ch=False
+            for _s in _ss:
+                if _s.get('min_interval_minutes')!=1: _s['min_interval_minutes']=1; _ch=True
+                if _s.get('daily_limit')!=0: _s['daily_limit']=0; _ch=True
+            if _ch: save_sites(_ss)
+        except Exception: pass
+        c['interval1_unlimited_migrated']=True
         try: save_json(CONFIG_FILE,c)
         except Exception: pass
     return c
@@ -2853,15 +2868,15 @@ def recover_queue():
     return n
 
 def site_daily_limit(site,cfg):
-    try: return max(0,int(site.get('daily_limit',cfg.get('daily_limit',3)) or 0))
-    except Exception: return 3
+    try: return max(0,int(site.get('daily_limit',cfg.get('daily_limit',0)) or 0))
+    except Exception: return 0
 
 def site_min_interval(site):
-    # 사이트별 값 없으면 config 기본(min_interval_minutes, 없으면 180) 사용 — site_daily_limit과 동일 패턴
+    # 사이트별 값 없으면 config 기본(min_interval_minutes, 없으면 1) 사용 — site_daily_limit과 동일 패턴
     try:
-        default=int(load_config().get('min_interval_minutes',180) or 0)
+        default=int(load_config().get('min_interval_minutes',1) or 0)
     except Exception:
-        default=180
+        default=1
     try: return max(0,int(site.get('min_interval_minutes',default) or 0))
     except Exception: return default
 
@@ -4064,7 +4079,7 @@ def _promote_candidate_to_site(cand, result_url, write_url='', bo='', permission
         if created:
             site={'id':secrets.token_hex(6),'site_url':base,'platform':cand.get('platform','gnuboard'),
                   'mb_id':'','mb_pass':'','bo_table':bo,'name':cand.get('board_name') or domain,
-                  'daily_limit':3,'min_interval_minutes':60,'status':'idle',
+                  'daily_limit':0,'min_interval_minutes':1,'status':'idle',
                   'added':_kst_now().strftime('%m/%d %H:%M')}
             sites.append(site)
         site.update({'bo_table':bo,'write_url':write_url,'verified_post_url':result_url,
@@ -4216,7 +4231,8 @@ def _promoted_site_id(cand):
     return None
 
 def collect_all_keywords():
-    """상시발행용 키워드 통합 — 전역 풀(keywords.json) + 모든 작업실(workrooms.json)의 키워드를 합친다.
+    """상시발행용 키워드 통합 — 전역 풀(keywords.json) + 모든 작업실(workrooms.json)
+       + 모든 회원(고객, members.json)의 전용 키워드를 합친다.
        반환: [{'지역','서비스','브랜드'}, ...]. 대표님이 어디에 넣든 상시발행이 쓸 수 있게."""
     pool=list(load_keywords() or [])   # 이미 dict 리스트
     try:
@@ -4227,6 +4243,15 @@ def collect_all_keywords():
                     pool.append({'지역':p[0],'서비스':p[1],'브랜드':p[2]})
                 elif len(p)>=1 and p[0]:
                     pool.append({'지역':p[0],'서비스':(p[1] if len(p)>1 else ''),'브랜드':(p[2] if len(p)>2 else '')})
+    except Exception:
+        pass
+    # 회원(고객) 전용 키워드도 상시발행 풀에 합친다 — 회원관리에 넣은 키워드가 24시간 발행에 안 쓰이던 문제 해결.
+    # members.json의 keywords는 이미 {'지역','서비스','브랜드'} dict 리스트(회원 저장 시 파싱됨).
+    try:
+        for m in (load_members() or []):
+            for kw in (m.get('keywords') or []):
+                if isinstance(kw,dict) and (kw.get('지역') or kw.get('서비스')):
+                    pool.append({'지역':kw.get('지역',''),'서비스':kw.get('서비스',''),'브랜드':kw.get('브랜드','')})
     except Exception:
         pass
     return pool
@@ -4883,7 +4908,7 @@ def api_cand_approve(cid):
                   'bo_table':(d.get('bo_table') or c.get('bo_table') or 'free'),
                   'name':(d.get('name') or c.get('domain','')),
                   'permission':False,'permission_note':note,
-                  'registration_source':'candidate_registered','daily_limit':3,'min_interval_minutes':60,
+                  'registration_source':'candidate_registered','daily_limit':0,'min_interval_minutes':1,
                   'permission_date':_kst_now().strftime('%Y-%m-%d'),
                   'has_captcha':bool(c.get('captcha')),
                   'write_test_status':'pending','verified_post_url':'',
@@ -4943,7 +4968,7 @@ def api_cand_verified():
         if created:
             site={'id':secrets.token_hex(6),'site_url':base,'platform':d.get('platform','gnuboard'),
                   'mb_id':'','mb_pass':'','bo_table':bo,'name':d.get('name') or domain,
-                  'daily_limit':3,'min_interval_minutes':60,'status':'idle','added':_kst_now().strftime('%m/%d %H:%M')}
+                  'daily_limit':0,'min_interval_minutes':1,'status':'idle','added':_kst_now().strftime('%m/%d %H:%M')}
             sites.append(site)
         site.update({'bo_table':bo,'write_url':write_url,'verified_post_url':result_url,
                      'write_test_status':'passed','verified_at':now,'capabilities':caps,
@@ -5440,8 +5465,8 @@ def api_sites():
               'bo_table':d.get('bo_table','').strip() or 'm8_qna','name':d.get('name',''),
               'permission':bool(d.get('permission',False)),
               'registration_source':'manual_admin',
-              'daily_limit':max(0,int(d.get('daily_limit',3) or 0)),
-              'min_interval_minutes':max(0,int(d.get('min_interval_minutes',60) or 0)),
+              'daily_limit':max(0,int(d.get('daily_limit',0) or 0)),
+              'min_interval_minutes':max(0,int(d.get('min_interval_minutes',1) or 0)),
               'permission_note':(d.get('permission_note','') or '').strip(),
               'permission_date':(datetime.now().strftime('%Y-%m-%d') if d.get('permission') else ''),
               'status':'idle','added':datetime.now().strftime('%m/%d %H:%M')}
@@ -5473,8 +5498,8 @@ def api_sites_limits():
     """사이트 목록에서 하루 발행 한도와 최소 간격만 안전하게 즉시 수정한다."""
     d=request.get_json(silent=True) or {}; sid=str(d.get('id','')).strip()
     try:
-        daily=max(0,min(10000,int(d.get('daily_limit',3))))
-        interval=max(0,min(10080,int(d.get('min_interval_minutes',60))))
+        daily=max(0,min(10000,int(d.get('daily_limit',0))))
+        interval=max(0,min(10080,int(d.get('min_interval_minutes',1))))
     except (TypeError,ValueError):
         return jsonify({'ok':False,'error':'건수와 간격은 0 이상의 숫자로 입력하세요'}),400
     found=False
@@ -5936,7 +5961,7 @@ def api_sites_bulk():
         new_sites.append({'id':secrets.token_hex(6),'site_url':url.rstrip('/'),'platform':'auto',
                       'mb_id':mid,'mb_pass':mpw,'bo_table':bo or 'free','name':nm,
                       'permission':perm,'permission_note':'CSV 일괄등록',
-                      'registration_source':'admin_bulk','daily_limit':3,'min_interval_minutes':60,
+                      'registration_source':'admin_bulk','daily_limit':0,'min_interval_minutes':1,
                       'permission_date':(datetime.now().strftime('%Y-%m-%d') if perm else ''),
                       'write_test_status':'pending','verified_post_url':'',
                       'status':'idle','added':datetime.now().strftime('%m/%d %H:%M')})
@@ -6825,10 +6850,10 @@ async function delMember(id){if(!confirm('회원을 삭제할까요? (정산 기
 async function togglePay(id,paid){await api('/members/pay','POST',{id:id,paid:paid});renderMembers()}
 async function addSite(){const d={site_url:$('sUrl').value.trim(),platform:$('sPlat').value,name:$('sName').value.trim(),bo_table:$('sBo').value.trim(),mb_id:$('sId').value.trim(),mb_pass:$('sPw').value,permission:$('sPerm').checked,permission_note:$('sPermNote').value.trim(),daily_limit:Math.max(0,parseInt($('sDaily').value)||0),min_interval_minutes:Math.max(0,parseInt($('sInterval').value)||0)};if(!d.site_url){toast('URL 입력','er');return}if(_editId)d.id=_editId;const r=await api('/sites','POST',d);if(r&&r.ok){toast(_editId?'수정됨':(d.permission?'추가됨 (홍보 허용)':'추가됨 (미검증 — 발행 제외)'));cancelEdit();renderSites()}}
 async function editSite(id){const sites=await api('/sites','GET');if(!Array.isArray(sites))return;const s=sites.find(x=>x.id===id);if(!s){toast('사이트 없음','er');return}
-$('sUrl').value=s.site_url||'';$('sPlat').value=s.platform||'auto';$('sName').value=s.name||'';$('sBo').value=s.bo_table||'';$('sId').value=s.mb_id||'';$('sPw').value='';$('sPw').placeholder=s.login_saved?'저장됨 · 변경시에만 입력':'비밀번호';$('sPerm').checked=!!s.permission;$('sPermNote').value=s.permission_note||'';$('sDaily').value=(s.daily_limit==null?3:s.daily_limit);$('sInterval').value=(s.min_interval_minutes==null?60:s.min_interval_minutes);
+$('sUrl').value=s.site_url||'';$('sPlat').value=s.platform||'auto';$('sName').value=s.name||'';$('sBo').value=s.bo_table||'';$('sId').value=s.mb_id||'';$('sPw').value='';$('sPw').placeholder=s.login_saved?'저장됨 · 변경시에만 입력':'비밀번호';$('sPerm').checked=!!s.permission;$('sPermNote').value=s.permission_note||'';$('sDaily').value=(s.daily_limit==null?0:s.daily_limit);$('sInterval').value=(s.min_interval_minutes==null?1:s.min_interval_minutes);
 _editId=id;$('addBtn').textContent='수정 저장';$('addBtn').classList.add('btn-y');$('editCancel').style.display='';
 $('sUrl').scrollIntoView({behavior:'smooth',block:'center'});toast('편집 모드 — 값을 고치고 "수정 저장"')}
-function cancelEdit(){_editId=null;['sUrl','sName','sBo','sId','sPw','sPermNote'].forEach(i=>$(i).value='');$('sDaily').value=3;$('sInterval').value=60;$('sPerm').checked=false;$('sPlat').value='auto';$('addBtn').textContent='추가';$('addBtn').classList.remove('btn-y');$('editCancel').style.display='none'}
+function cancelEdit(){_editId=null;['sUrl','sName','sBo','sId','sPw','sPermNote'].forEach(i=>$(i).value='');$('sDaily').value=0;$('sInterval').value=1;$('sPerm').checked=false;$('sPlat').value='auto';$('addBtn').textContent='추가';$('addBtn').classList.remove('btn-y');$('editCancel').style.display='none'}
 async function prepareSignup(id){
 if(!confirm('사이트 조건에 맞는 가입용 아이디·비밀번호를 생성해 암호화 저장합니다.\nCAPTCHA와 이메일 인증, 최종 가입은 직접 진행합니다. 계속할까요?'))return;
 const r=await api('/sites/signup-prepare/'+id,'POST',{});if(!r||!r.ok){toast((r&&r.error)||'생성 실패','er');return}
@@ -6999,7 +7024,7 @@ const pltag='<span style="font-size:9px;color:'+plcolor+'" title="발행 방식"
 const ss=s.signup_status||'';const signup=ss==='complete'?'<span class="st st-ok">가입완료·로그인저장</span>':(ss==='rejected'?'<span class="st st-f" title="'+esc(s.signup_reject_reason||'')+'">가입 제외 · 이메일인증</span>':(ss==='prepared'?'<span class="st st-y">가입정보만 준비됨</span>':(ss?'<span class="st st-y">가입 '+esc(ss)+'</span>':'')));const pv=s.signup_profile_version?'<span class="st st-i" title="최근측정 '+esc(s.signup_profile_measured_at||'')+'">가입학습 v'+s.signup_profile_version+(s.signup_profile_changed?' 변경':'')+'</span>':'';
 const allLabel=ss==='rejected'?'가입 제외':(ss==='complete'?'✓ 로그인 저장됨':(['prepared','captcha_wait','email_wait'].includes(ss)?'실제 가입완료 확인':'올인원 가입'));const allClass=(ss==='rejected'||ss==='complete')?'btn-d':(['prepared','captcha_wait','email_wait'].includes(ss)?'btn-g':'btn-v');
 const menu=`<details style="display:inline-block;position:relative"><summary class="btn btn-d btn-xs" style="list-style:none;cursor:pointer">관리 ▾</summary><div style="position:absolute;right:0;z-index:20;background:#101a2c;border:1px solid #33425f;border-radius:8px;padding:7px;min-width:125px;display:grid;gap:5px;box-shadow:0 8px 24px #0008"><button class="btn btn-p btn-xs" onclick="editSite('${esc(s.id)}')">편집</button><button class="btn ${allClass} btn-xs" onclick="signupAll('${esc(s.id)}','${esc(ss)}')">${allLabel}</button><button class="btn btn-r btn-xs" onclick="delSite('${esc(s.id)}')">삭제</button></div></details>`;
-return `<tr data-id="${esc(s.id)}" style="${lb}"><td><input type="checkbox" class="cb" data-id="${esc(s.id)}"></td><td>${hdot}<b>${nm}</b><br>${signup} ${pv}</td><td>${perm}</td><td style="min-width:240px;max-width:340px"><a href="${esc(s.site_url||'#')}" target="_blank" rel="noopener" title="${esc(s.site_url||'')}" style="display:block;color:var(--p);word-break:break-all;line-height:1.45">${esc(s.site_url||'-')}</a><a href="${esc(s.site_url||'#')}" target="_blank" rel="noopener" class="btn btn-p btn-xs" style="display:inline-block;margin-top:5px">🔗 링크 열기</a></td><td style="color:var(--p)">${esc(s.bo_table||'')}<br>${pltag}</td><td style="color:var(--d);white-space:nowrap"><div>${today}/<input id="limD_${esc(s.id)}" type="number" min="0" max="10000" value="${s.daily_limit==null?3:s.daily_limit}" style="width:58px;padding:3px 5px">건</div><div style="margin-top:3px"><input id="limM_${esc(s.id)}" type="number" min="0" max="10080" value="${s.min_interval_minutes==null?60:s.min_interval_minutes}" style="width:58px;padding:3px 5px">분 <button class="btn btn-p btn-xs" onclick="saveSiteLimits('${esc(s.id)}')">저장</button></div></td><td><span class="st st-${st}" title="${esc(s.technical_block_reason||s.verification_fail_reason||'')}">${esc(s.status||'idle')}</span>${s.technical_block_reason?'<br><span style="color:var(--r);font-size:9px">'+esc(s.technical_block_reason)+'</span>':''}</td><td style="white-space:nowrap">${menu}</td></tr>`}
+return `<tr data-id="${esc(s.id)}" style="${lb}"><td><input type="checkbox" class="cb" data-id="${esc(s.id)}"></td><td>${hdot}<b>${nm}</b><br>${signup} ${pv}</td><td>${perm}</td><td style="min-width:240px;max-width:340px"><a href="${esc(s.site_url||'#')}" target="_blank" rel="noopener" title="${esc(s.site_url||'')}" style="display:block;color:var(--p);word-break:break-all;line-height:1.45">${esc(s.site_url||'-')}</a><a href="${esc(s.site_url||'#')}" target="_blank" rel="noopener" class="btn btn-p btn-xs" style="display:inline-block;margin-top:5px">🔗 링크 열기</a></td><td style="color:var(--p)">${esc(s.bo_table||'')}<br>${pltag}</td><td style="color:var(--d);white-space:nowrap"><div>${today}/<input id="limD_${esc(s.id)}" type="number" min="0" max="10000" value="${s.daily_limit==null?0:s.daily_limit}" style="width:58px;padding:3px 5px">건</div><div style="margin-top:3px"><input id="limM_${esc(s.id)}" type="number" min="0" max="10080" value="${s.min_interval_minutes==null?1:s.min_interval_minutes}" style="width:58px;padding:3px 5px">분 <button class="btn btn-p btn-xs" onclick="saveSiteLimits('${esc(s.id)}')">저장</button></div></td><td><span class="st st-${st}" title="${esc(s.technical_block_reason||s.verification_fail_reason||'')}">${esc(s.status||'idle')}</span>${s.technical_block_reason?'<br><span style="color:var(--r);font-size:9px">'+esc(s.technical_block_reason)+'</span>':''}</td><td style="white-space:nowrap">${menu}</td></tr>`}
 async function healthSite(id){toast('점검중...');const r=await api('/sites/health/'+id,'POST');if(r&&r.ok){const h=r.health;const pn=h.platform==='cafe24'?'Cafe24':'그누보드';toast((h.ok?'✅ 정상':'⚠️ 확인필요')+` [${pn}] 접속:${h.reachable?'O':'X'} 로그인폼:${h.login_form?'O':'X'} 글쓰기:${h.write_page?'O':'X'}`,h.ok?'ok':'er');renderSites()}else toast('실패','er')}
 async function dryRun(id){toast('🧪 드라이런 실행중... (글은 올리지 않습니다, 최대 60초)');const r=await api('/sites/dryrun/'+id,'POST');if(!r){toast('실패','er');return}
 const rows=(r.steps||[]).map(s=>`<tr><td>${s.ok?'<span style="color:var(--g)">✅</span>':'<span style="color:var(--r)">❌</span>'}</td><td><b>${esc(s.name)}</b></td><td style="color:var(--d)">${esc(s.detail)}</td></tr>`).join('');
