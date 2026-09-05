@@ -6161,7 +6161,7 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 <div class="stats" id="live"><span>큐:<b id="q">0</b></span><span>성공:<b id="ok" style="color:var(--g)">0</b></span><span>실패:<b id="fl" style="color:var(--r)">0</b></span><span>스킵:<b id="sk" style="color:var(--y)">0</b></span><span>워커:<b id="ws" style="color:{{'var(--g)' if wk_on else 'var(--d)'}}">{{'ON' if wk_on else 'OFF'}}</b></span><span style="margin-left:10px;padding-left:10px;border-left:1px solid var(--b)">🎯 발행가능 <b id="siteGoal" style="color:var(--p)">-</b></span></div>
 <a href="/logout" class="btn-xs" style="background:var(--b);color:var(--d);text-decoration:none">로그아웃</a></header>
 
-<div class="tabs"><button class="tab on" onclick="T('gen')">글 생성</button><button class="tab" onclick="T('wlog')">워커 실행로그</button><button class="tab" onclick="T('images')">이미지 저장</button><button class="tab" onclick="T('sites')">사이트 (<span id="siteTabCount">{{sites|length}}</span>)</button><button class="tab" onclick="T('res')">결과</button><button class="tab" onclick="T('disco')">발굴</button><button id="tab-mem" class="tab" onclick="T('mem')" style="display:none">회원·정산</button><button class="tab" onclick="T('stats')">통계</button><button class="tab" onclick="T('cost')">API 비용</button><button class="tab" onclick="T('set')">설정</button></div>
+<div class="tabs"><button class="tab on" onclick="T('gen')">글 생성</button><button class="tab" onclick="T('kw')">키워드</button><button class="tab" onclick="T('wlog')">워커 실행로그</button><button class="tab" onclick="T('images')">이미지 저장</button><button class="tab" onclick="T('sites')">사이트 (<span id="siteTabCount">{{sites|length}}</span>)</button><button class="tab" onclick="T('res')">결과</button><button class="tab" onclick="T('disco')">발굴</button><button id="tab-mem" class="tab" onclick="T('mem')" style="display:none">회원·정산</button><button class="tab" onclick="T('stats')">통계</button><button class="tab" onclick="T('cost')">API 비용</button><button class="tab" onclick="T('set')">설정</button></div>
 <div class="wrap"><div id="toasts"></div>
 <div id="pvOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:500;padding:20px" onclick="if(event.target===this)closePreview()">
 <div style="max-width:820px;margin:0 auto;background:#fff;color:#222;border-radius:10px;max-height:90vh;overflow:auto">
@@ -6175,6 +6175,17 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 <div class="prog"><div id="progBar"></div></div>
 <div style="font-size:10px;color:var(--d);margin-top:5px" id="progText">0 / 0</div></div>
 
+
+<div class="card"><h3>생성 결과</h3>
+<div class="row"><input type="text" id="gTitle" placeholder="제목" style="font-weight:600"></div>
+<textarea id="gContent" rows="10" placeholder="리치HTML 본문..."></textarea>
+<div class="row" style="margin-top:6px"><span style="color:var(--d);font-size:10px" id="gLen">0자</span><span style="flex:1"></span>
+<button class="btn btn-d" onclick="previewPost()">미리보기</button>
+<button class="btn btn-g" onclick="postSel()">선택 사이트 발행</button>
+<button class="btn btn-y" onclick="postAll()">전체 사이트 발행</button></div></div></div>
+
+<div id="p-kw" class="panel">
+<div class="note">🗂 여기에 키워드 조합을 넣으면 24시간 자동 발행에 반영됩니다. 대표님이 관리할 것은 <b style="color:var(--p)">키워드</b>와 <b style="color:var(--p)">이미지</b>뿐입니다.</div>
 <div class="card" style="border-color:#334155"><h3>🗂 키워드 작업실 — 키워드 묶음별 독립 저장</h3>
 <div class="row">
 <select id="wrSelect" onchange="showWorkroom()" style="min-width:180px"><option value="">작업실 선택</option></select>
@@ -6220,14 +6231,7 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 <input type="number" id="poolN" value="1" min="1" max="50" style="width:70px" title="랜덤 뽑을 개수">
 <button class="btn btn-g" onclick="genRandom()">랜덤 생성+발행</button>
 <span style="color:var(--d);font-size:10px">풀에서 N개 랜덤 추출 → 허용 사이트 발행</span></div></div>
-
-<div class="card"><h3>생성 결과</h3>
-<div class="row"><input type="text" id="gTitle" placeholder="제목" style="font-weight:600"></div>
-<textarea id="gContent" rows="10" placeholder="리치HTML 본문..."></textarea>
-<div class="row" style="margin-top:6px"><span style="color:var(--d);font-size:10px" id="gLen">0자</span><span style="flex:1"></span>
-<button class="btn btn-d" onclick="previewPost()">미리보기</button>
-<button class="btn btn-g" onclick="postSel()">선택 사이트 발행</button>
-<button class="btn btn-y" onclick="postAll()">전체 사이트 발행</button></div></div></div>
+</div>
 
 <div id="p-images" class="panel"><div class="card"><h3>이미지 파일 저장</h3>
 <div style="font-size:10px;color:var(--d);margin-bottom:8px">JPG·PNG·GIF·WEBP, 파일당 최대 10MB. 저장된 이미지는 파일 첨부란이 있는 게시판에 최대 2개까지 자동으로 들어갑니다.</div>
@@ -6458,7 +6462,7 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 
 <script>
 const $=id=>document.getElementById(id);
-function T(n){document.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));document.querySelectorAll('.panel').forEach(p=>p.classList.remove('on'));document.querySelector(`[onclick="T('${n}')"]`).classList.add('on');$('p-'+n).classList.add('on');if(n==='res')renderHistory();if(n==='wlog'){renderWorkerLog();renderCaptchaTasks()}if(n==='stats')renderStats();if(n==='cost'){loadUsageDashboard();startUsageAuto()}else{stopUsageAuto()}if(n==='set'){loadCfgUI();loadRegionTool()}if(n==='gen'){loadPool();loadImages();loadWorkrooms();loadRegionTool()}if(n==='mem'){renderMembers();if(!document.querySelector('.mSite'))fillSiteBox([])}if(n==='disco')renderCands()}
+function T(n){document.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));document.querySelectorAll('.panel').forEach(p=>p.classList.remove('on'));document.querySelector(`[onclick="T('${n}')"]`).classList.add('on');$('p-'+n).classList.add('on');if(n==='res')renderHistory();if(n==='wlog'){renderWorkerLog();renderCaptchaTasks()}if(n==='stats')renderStats();if(n==='cost'){loadUsageDashboard();startUsageAuto()}else{stopUsageAuto()}if(n==='set'){loadCfgUI();loadRegionTool()}if(n==='gen'){loadPool();loadImages();loadRegionTool()}if(n==='kw'){loadWorkrooms();loadRegionTool()}if(n==='mem'){renderMembers();if(!document.querySelector('.mSite'))fillSiteBox([])}if(n==='disco')renderCands()}
 function toast(m,c='ok'){const d=$('toasts');const e=document.createElement('div');e.className='toast toast-'+c;e.textContent=m;d.appendChild(e);setTimeout(()=>e.remove(),2500)}
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
 async function api(p,m,b){try{const o={method:m,headers:{'Content-Type':'application/json'}};if(b)o.body=JSON.stringify(b);const r=await fetch('/api'+p,o);if(r.status===401){location='/login';return null}return await r.json()}catch(e){toast(e.message,'er');return null}}
