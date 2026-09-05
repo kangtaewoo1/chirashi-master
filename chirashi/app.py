@@ -4355,6 +4355,7 @@ def _workroom_combos(room):
     return combos
 
 _WR_SLOTS={}   # slot_index -> Thread (작업실 발행 슬롯 워커 = 동시 크롬)
+_MEM_WARN=['']   # VPS 메모리 축소 경고 중복 방지용(마지막 경고 상태)
 
 def _publish_one_combo(kw, wname, rid, cfg):
     """한 조합(kw)을 '발행가능 사이트 전체'에 각각 유니크 글로 발행(현재 스레드의 크롬 사용).
@@ -4450,6 +4451,21 @@ def publish_loop():
                 rooms=[r for r in (load_json(WORKROOMS_FILE,[]) or []) if _workroom_combos(r)]
                 cap=max(1,int(cfg.get('workroom_workers',3) or 3))
                 need=max(1,min(cap,max(1,len(rooms))))   # 작업실 없으면 1(통합풀), 있으면 min(상한,작업실수)
+                # VPS 보호: 가용 메모리가 부족하면 동시 워커(크롬) 수를 자동 축소한다.
+                # 크롬 1개당 ~450MB로 잡고 여유 500MB를 남긴다. 원하는 수보다 줄면 업그레이드 권장.
+                try:
+                    mt=open('/proc/meminfo').read()
+                    avail=int(re.search(r'MemAvailable:\s+(\d+)',mt).group(1))//1024   # MB
+                    mem_cap=max(1,(avail-500)//450)
+                    if mem_cap<need:
+                        if _MEM_WARN[0]!=f'{need}->{mem_cap}':
+                            add_log(f'[VPS 경고] 메모리 부족(가용 {avail}MB) — 동시 발행 워커 {need}→{mem_cap}개로 자동 축소. 처리량을 위해 VPS 업그레이드(RAM 증설)를 권장합니다.','정리')
+                            _MEM_WARN[0]=f'{need}->{mem_cap}'
+                        need=mem_cap
+                    else:
+                        _MEM_WARN[0]=''
+                except Exception:
+                    pass   # /proc 없는 환경(로컬 등)은 건너뜀
                 for slot in list(_WR_SLOTS.keys()):
                     t=_WR_SLOTS.get(slot)
                     if (not t) or (not t.is_alive()) or slot>=need:
