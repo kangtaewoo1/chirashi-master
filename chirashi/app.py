@@ -1787,7 +1787,7 @@ def _verify_post_by_title(d, bbs, bo, title):
         time.sleep(1.5)
     return None
 
-def gnuboard_post(site, title, content_html):
+def gnuboard_post(site, title, content_html, skip_login=False):
     from selenium.webdriver.common.by import By
     from selenium.webdriver.support.ui import WebDriverWait
     from selenium.webdriver.support import expected_conditions as EC
@@ -1801,8 +1801,8 @@ def gnuboard_post(site, title, content_html):
     mid=site.get('mb_id',''); mpw=site.get('mb_pass','')
     d=get_driver()
 
-    # 로그인
-    if mid:
+    # 로그인 (skip_login=True면 가입 직후 세션이 이미 로그인 상태 → 재로그인 건너뜀)
+    if mid and not skip_login:
         d.get(f'{bbs}/login.php'); time.sleep(2)
         # 단수 find_element는 칸이 없으면 예외로 전체 발행이 죽는다 → _safe_find로 방어.
         id_ok=False; pw_ok=False
@@ -2017,7 +2017,7 @@ def _click_first(d, selectors):
         except Exception: continue
     return False
 
-def cafe24_post(site, title, content_html):
+def cafe24_post(site, title, content_html, skip_login=False):
     """Cafe24 쇼핑몰 게시판 글쓰기. (게시판 구조가 사이트마다 달라 셀렉터 다중 폴백)"""
     from selenium.webdriver.common.by import By
     url=site.get('site_url','').rstrip('/')
@@ -2026,8 +2026,8 @@ def cafe24_post(site, title, content_html):
     mid=site.get('mb_id',''); mpw=site.get('mb_pass','')
     d=get_driver()
 
-    # 로그인 (Cafe24 회원 로그인 — 필드명 다양성 대응)
-    if mid:
+    # 로그인 (skip_login=True면 가입 직후 로그인 세션 재사용 → 재로그인 건너뜀)
+    if mid and not skip_login:
         d.get(base+'/member/login.html'); time.sleep(2)
         _fill_first(d,["input[name='member_id']","input[name='login_id']","input[name='id']",
                        "#member_id","#loginId","input#id"],mid)
@@ -2303,11 +2303,11 @@ def _fill_recipe_fields(d, rec, title, content):
         except Exception: pass
     time.sleep(3); dismiss_alerts(d)
 
-def _apply_recipe(d, site, rec, title, content):
-    """저장된 레시피로 발행(로그인→글쓰기→채우기→확인)."""
+def _apply_recipe(d, site, rec, title, content, skip_login=False):
+    """저장된 레시피로 발행(로그인→글쓰기→채우기→확인). skip_login=True면 재로그인 생략(가입 직후 세션)."""
     from selenium.webdriver.common.by import By
     mid=site.get('mb_id',''); mpw=site.get('mb_pass','')
-    if mid:
+    if mid and not skip_login:
         base=re.match(r'(https?://[^/]+)',rec.get('write_url','') or ''); base=base.group(1) if base else ''
         if rec.get('login_url') and rec.get('id_sel') and rec.get('pw_sel'):
             d.get(rec['login_url']); time.sleep(1.5)
@@ -2542,13 +2542,14 @@ def analyze_site_logic(site):
     result['ok']=True; step('판정',True,'DOM 실측 완료 · 제출 없이 레시피 저장 가능')
     return result,rec
 
-def discover_and_post(site, title, content):
-    """DOM을 훑어 셀렉터를 스스로 찾아 발행. 성공 시 (ok,msg,레시피) 반환."""
+def discover_and_post(site, title, content, skip_login=False):
+    """DOM을 훑어 셀렉터를 스스로 찾아 발행. 성공 시 (ok,msg,레시피) 반환.
+       skip_login=True면 가입 직후 로그인 세션 재사용(재로그인 생략)."""
     d=get_driver()
     url=site.get('site_url','').rstrip('/'); m=re.match(r'(https?://[^/]+)',url); base=m.group(1) if m else url
     rec={'platform':resolve_platform(site),'learned_at':datetime.now().strftime('%Y-%m-%d %H:%M')}
     # 로그인: 플랫폼별 신뢰 셀렉터 우선, 실패 시 자동 탐색
-    if site.get('mb_id'):
+    if site.get('mb_id') and not skip_login:
         lu=_platform_login(d,base,site)
         if lu: rec['login_url']=lu
         else:
@@ -2739,13 +2740,14 @@ def set_site_flag(site_id, **fields):
             if s.get('id')==site_id: s.update(fields)
         save_sites(sites)
 
-def do_post(site, title, content_html):
-    """발행 라우팅(하이브리드+자가학습): 학습레시피→플랫폼기본→자동학습."""
+def do_post(site, title, content_html, skip_login=False):
+    """발행 라우팅(하이브리드+자가학습): 학습레시피→플랫폼기본→자동학습.
+       skip_login=True: 가입 직후 이미 로그인된 세션에서 재로그인 없이 바로 글쓰기(비표준 로그인폼 구제)."""
     rec=site.get('learned')
     # 1) 저장된 학습 레시피 우선
     if rec and rec.get('write_url') and rec.get('subject_sel') and rec.get('content_sel'):
         try:
-            ok,msg=_apply_recipe(get_driver(),site,rec,title,content_html)
+            ok,msg=_apply_recipe(get_driver(),site,rec,title,content_html,skip_login=skip_login)
             if ok: return True,msg
             add_log(f'[학습레시피 실패→폴백] {site.get("name","")}')
         except Exception as e:
@@ -2754,13 +2756,13 @@ def do_post(site, title, content_html):
     plat=resolve_platform(site)
     if plat=='kboard':
         try:
-            ok,msg,newrec=discover_and_post(site,title,content_html)
+            ok,msg,newrec=discover_and_post(site,title,content_html,skip_login=skip_login)
             if ok and newrec: save_learned(site.get('id'),newrec)
             return ok,msg
         except Exception as e:
             return False,'KBoard 발행 오류: '+str(e)[:120]
     try:
-        ok,msg=(cafe24_post if plat=='cafe24' else gnuboard_post)(site,title,content_html)
+        ok,msg=(cafe24_post if plat=='cafe24' else gnuboard_post)(site,title,content_html,skip_login=skip_login)
     except Exception as e:
         ok,msg=False,str(e)
     if ok: return True,msg
@@ -2768,7 +2770,7 @@ def do_post(site, title, content_html):
     reason,_,_=classify_fail(msg)
     if reason in ('board','other') or rec is not None:
         try:
-            ok2,msg2,newrec=discover_and_post(site,title,content_html)
+            ok2,msg2,newrec=discover_and_post(site,title,content_html,skip_login=skip_login)
             if ok2 and newrec:
                 save_learned(site.get('id'),newrec)
                 add_log(f'[자동학습 성공] {site.get("name","")} — 셀렉터 저장됨')
@@ -4201,18 +4203,19 @@ def auto_pipeline_once(limit=5):
         tmp={'id':'cand_'+c.get('id',''),'site_url':base,'platform':c.get('platform','gnuboard'),
              'bo_table':c.get('bo_table') or 'free','name':name,'mb_id':'','mb_pass':''}
         try:
+            _just_signed=False
             # 1) 로그인 필요(=write_form 미확인)면 자동가입 먼저
             if c.get('login_required') or not c.get('write_form'):
                 ok_su,msg_su=auto_signup(tmp,submit=True)
-                if ok_su: signed+=1
+                if ok_su: signed+=1; _just_signed=True
                 else:
                     _cand_set(c['id'],status='rejected',reject_reason=f'자동가입 실패: {msg_su[:80]}')
                     results.append({'name':name,'stage':'signup','ok':False,'msg':msg_su})
                     continue  # done 증가·드라이버 리셋은 finally에서 처리
-            # 2) 실제 글 1건 발행 (기존 do_post; false-negative 수정 반영됨) — 스케줄/작업실 랜덤 키워드
+            # 2) 실제 글 1건 발행 (스케줄/작업실 랜덤 키워드). 방금 가입했으면 로그인된 세션 재사용.
             kw=_test_kw()
             html,title=generate_article(kw,cfg,unique=True)
-            ok,msg=do_post(tmp,title,html)
+            ok,msg=do_post(tmp,title,html,skip_login=_just_signed)
             # 검수는 비회원 글쓰기로 봤지만 실제 write.php가 로그인으로 튕기는 게시판이 있다.
             # 이 경우 자동가입 후 1회 재시도(gjsec처럼 login_required 오판된 케이스 구제).
             if (not ok) and (not tmp.get('mb_id')) and re.search(r'(로그인이 필요|로그인 실패|로그인 화면|권한이 없|권한 없)',str(msg)):
@@ -4220,9 +4223,9 @@ def auto_pipeline_once(limit=5):
                 add_log(f'[파이프라인] {name} 로그인필요 → 자동가입 시도')
                 ok_su,msg_su=auto_signup(tmp,submit=True)
                 if ok_su:
-                    signed+=1; add_log(f'[파이프라인] {name} 자동가입 성공 → 재발행')
-                    reset_driver(); time.sleep(1)
-                    ok,msg=do_post(tmp,title,html)
+                    signed+=1; add_log(f'[파이프라인] {name} 자동가입 성공 → 세션 재사용 재발행')
+                    # reset_driver 하지 않음 — 가입 직후 로그인된 세션을 그대로 써서 발행(비표준 로그인폼 구제)
+                    ok,msg=do_post(tmp,title,html,skip_login=True)
                 else:
                     add_log(f'[파이프라인] {name} 자동가입 실패: {str(msg_su)[:80]}')
                     msg=f'{msg} · 자동가입 실패: {str(msg_su)[:60]}'
@@ -4276,7 +4279,11 @@ def auto_pipeline_once(limit=5):
             fresh=next((x for x in load_sites() if x.get('id')==s.get('id')),s)
             kw=_test_kw()
             html,title=generate_article(kw,cfg,unique=True)
-            ok,msg=do_post(fresh,title,html)
+            # 가입 직후 로그인된 세션 그대로 발행(재로그인 생략) — 비표준 로그인폼 사이트 구제
+            ok,msg=do_post(fresh,title,html,skip_login=True)
+            if (not ok) and re.search(r'(로그인|login)',str(msg)):
+                # 세션이 안 잡힌 예외 → 정식 로그인으로 1회 폴백
+                ok,msg=do_post(fresh,title,html,skip_login=False)
             result_url=msg if (ok and str(msg).startswith(('http://','https://'))) else ''
             if ok and result_url:
                 set_site_flag(s.get('id'),write_test_status='passed',verified_post_url=result_url,
