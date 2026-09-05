@@ -4110,11 +4110,15 @@ def auto_pipeline_once(limit=5):
                 c['signup_retry_date']=today_s; revived+=1
         if revived:
             save_cands(cands); add_log(f'[자동가입 재시도] 이전 실패 게시판 {revived}곳 재시도 대상 복원')
-    # 대상: 검수완료(ready) + 아직 사이트 미등록 + 자동탈락 아님 + '실제 글쓰기 경로'가 있는 것만.
-    # (114/맵 등 전화번호·디렉토리 사이트는 write_form도 bo_table도 없어 가입/발행이 불가 → 제외)
+    # 대상: 검수완료(ready) + 아직 사이트 미등록 + 자동탈락 아님 + '글쓰기 가능성'이 있는 것.
+    # (114/맵 등 전화번호·디렉토리 사이트는 게시판이 아니라 제외. 그 외 게시판형 후보는
+    #  글쓰기폼 미확인이라도 일단 자동가입→발행 시도해 되는지 판별한다 — 방치 없이 되거나 탈락)
     def _has_write_path(c):
         if c.get('write_form'): return True
-        return c.get('platform') in ('gnuboard','cafe24') and bool((c.get('bo_table') or '').strip())
+        if c.get('platform') in ('gnuboard','cafe24','kboard') and bool((c.get('bo_table') or '').strip()): return True
+        # URL이 게시판 경로면 bo_table 미추출이어도 시도 대상 (write.php/board.php/bbs 등)
+        u=(c.get('url') or '').lower()
+        return bool(re.search(r'(bbs/|board\.php|write\.php|bo_table=|/board/|board_no=|kboard)', u))
     pend=[c for c in cands
           if c.get('screened') and c.get('status')=='ready'
           and not c.get('parked') and not c.get('illegal') and not c.get('ad_banned')
