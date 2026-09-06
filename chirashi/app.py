@@ -1526,9 +1526,9 @@ def _captcha_image_data(d):
     except Exception:
         pass
 
-    # 7) ★src URL 직접 fetch 폴백: <img id="captcha_img" src="/exec/front/board/captcha?...">
-    #    (Cafe24 등) 스샷이 타이밍/렌더로 실패해도, 브라우저 쿠키로 그 src를 fetch해 base64로 받는다.
-    #    recaptcha/hcaptcha는 제외(이미지캡차 아님).
+    # 7) ★src URL 직접 fetch 폴백(서버측 requests): <img id="captcha_img" src="/exec/front/board/captcha?...">
+    #    스샷이 타이밍/렌더로 실패해도, 브라우저 쿠키를 requests에 그대로 실어 그 src를 받아온다.
+    #    (in-browser fetch는 async 콜백이 hang하는 경우가 있어 서버측 requests로 안정화 — 대표님 rental-zon)
     try:
         srcs=d.execute_script("""
             var out=[];
@@ -1536,27 +1536,33 @@ def _captcha_image_data(d):
             var seen={};
             sels.forEach(function(s){
                 document.querySelectorAll(s).forEach(function(im){
-                    var u=im.getAttribute('src')||'';
+                    var u=im.currentSrc||im.src||im.getAttribute('src')||'';
                     if(u && !seen[u] && !/recaptcha|hcaptcha|gstatic|dot\\.gif/i.test(u)){ seen[u]=1; out.push(u); }
                 });
             });
             return out;
         """) or []
-        try: d.set_script_timeout(10)
-        except Exception: pass
-        for u in srcs[:4]:
+        if srcs:
+            import requests as _rq, base64 as _b64
+            from urllib.parse import urljoin as _uj
+            sess=_rq.Session()
             try:
-                # 브라우저 컨텍스트에서 fetch(같은 쿠키/세션) → base64 data-URI
-                data=d.execute_async_script("""
-                    var url=arguments[0], cb=arguments[arguments.length-1];
-                    fetch(url,{credentials:'include',cache:'no-store'}).then(function(r){return r.blob();})
-                      .then(function(b){var fr=new FileReader();fr.onloadend=function(){cb(fr.result);};fr.readAsDataURL(b);})
-                      .catch(function(){cb('');});
-                """, u)
-                if data and isinstance(data,str) and data.startswith('data:image') and len(data)>200:
-                    return data
-            except Exception:
-                continue
+                cur=d.current_url or ''
+                sess.headers.update({'User-Agent':d.execute_script("return navigator.userAgent")or _HTTP_UA,
+                                     'Referer':cur})
+                for ck in d.get_cookies():
+                    try: sess.cookies.set(ck.get('name'),ck.get('value'),domain=ck.get('domain'))
+                    except Exception: pass
+            except Exception: cur=''
+            for u in srcs[:4]:
+                try:
+                    au=u if u.startswith('http') else _uj(cur or (d.current_url or ''),u)
+                    rr=sess.get(au,timeout=12,verify=False)
+                    if rr.status_code<400 and rr.content and len(rr.content)>200:
+                        ct=(rr.headers.get('Content-Type') or 'image/png').split(';')[0]
+                        if ct.startswith('image') or True:
+                            return 'data:'+ct+';base64,'+_b64.b64encode(rr.content).decode()
+                except Exception: continue
     except Exception:
         pass
 
