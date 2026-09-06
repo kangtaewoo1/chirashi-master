@@ -930,6 +930,24 @@ def generate_rich_html(keywords, cfg):
     price_box=(f'<div style="border:1px solid {c2};background:#f4faf6;border-radius:10px;padding:18px 20px;margin:24px 0;">'
         f'<p style="font-weight:bold;color:{c1};font-size:16px;margin:0 0 10px;">✅ {r} {s} 이용 안내</p>'
         f'<ul style="margin:0;padding:0;list-style:none;font-size:14px;color:#333;">{benefits}</ul></div>')
+    # 서비스 비교 테이블 (일반 vs 프리미엄) — 어두운 헤더
+    _crows=[('시설 수준','보통','최고급'),('스태프 서비스','기본','맞춤 VIP'),('프리미엄석','보통','완벽 보장'),
+            ('이벤트 혜택','없음','상시 제공'),('예약 편의','대기 가능','우선 예약'),('분위기','일반','프라이빗 고급')]
+    random.shuffle(_crows); _crows=_crows[:random.randint(4,5)]
+    compare_table=(f'<table style="width:100%;border-collapse:collapse;margin:14px 0;font-size:14px;">'
+        f'<thead><tr style="background:{c1};color:#fff;"><th style="padding:11px;text-align:left;">항목</th>'
+        f'<th style="padding:11px;">일반</th><th style="padding:11px;color:#ffe082;">프리미엄</th></tr></thead><tbody>'
+        +''.join(f'<tr style="border-bottom:1px solid #e6ebf2;"><td style="padding:10px 11px;color:#555;">{_a}</td>'
+                 f'<td style="padding:10px 11px;text-align:center;color:#999;">{_bc}</td>'
+                 f'<td style="padding:10px 11px;text-align:center;font-weight:bold;color:{c2};">{_cc}</td></tr>' for _a,_bc,_cc in _crows)
+        +'</tbody></table>')
+    # 이용 흐름 STEP (컬러 바)
+    _steps=[('전화 예약','원하는 날짜와 시간을 말씀해 주세요. 당일 예약도 환영합니다.'),
+            ('방문 및 안내','방문 시 스태프가 친절하게 안내해 드립니다.'),
+            ('맞춤 서비스','선호에 맞춰 최상의 경험을 제공합니다.'),
+            ('만족스러운 마무리','다음 방문 시 좋은 혜택과 멤버십 안내를 받으실 수 있습니다.')]
+    steps_html=''.join(f'<div style="background:{c2};color:#fff;text-align:center;padding:8px;font-weight:bold;border-radius:5px;margin:14px 0 6px;letter-spacing:1px;">STEP {_i+1}</div>'
+        f'<p style="font-size:14px;margin:0 0 4px;line-height:1.7;"><b style="color:{c1};">{_t}</b> — {_ds}</p>' for _i,(_t,_ds) in enumerate(_steps))
     # 중간 콘텐츠 블록 — 순서를 매번 섞어 변형 폭 확대(중복 방지)
     blocks=[
         SEC('⭐',f'{r} {s} 주요 특징')+f'<ul style="font-size:15px;padding:0;list-style:none;color:#444;">{feats}</ul>',
@@ -945,13 +963,17 @@ def generate_rich_html(keywords, cfg):
         + f'<p style="font-size:16px;margin:16px 0;line-height:1.95;">{intro}</p>'
         + f'<p style="font-size:15px;margin:14px 0;line-height:1.95;color:#333;">{para2}</p>'
         + price_box
+        + SEC('📊',f'{r} {s} 서비스 비교') + compare_table
         + ''.join(blocks)
+        + SEC('🧭',f'{r} {s} 이용 흐름') + steps_html
         + SEC('#️⃣','핵심 키워드')
         + f'<div style="margin:12px 0 6px;line-height:2.4;">{hashtags}</div>'
-        + f'<div style="margin:38px 0 8px;padding:24px;background:linear-gradient(135deg,#f8f9fa,#eef2f7);border-radius:12px;text-align:center;border-top:4px solid {c1};">'
-          f'<p style="font-size:18px;font-weight:bold;color:{c1};margin:0;">📞 {r} {s} 문의 · 예약</p>'
-          f'<p style="font-size:26px;font-weight:bold;color:{c2};margin:12px 0;">{p}</p>'
-          f'<p style="font-size:14px;color:#666;margin:0;">{b} · 믿을 수 있는 {r} {s} 정보</p></div>')
+        + f'<div style="margin:38px 0 8px;padding:24px;background:#1f2733;color:#e8edf4;border-radius:12px;text-align:center;">'
+          f'<p style="font-size:17px;font-weight:bold;color:#fff;margin:0 0 14px;">🎁 {r} {s} 예약 혜택</p>'
+          f'<div style="display:inline-grid;gap:6px;text-align:center;font-size:14px;color:#cbd5e1;margin-bottom:14px;">'
+          f'<div>일반 예약</div><div style="color:{c2};font-size:18px;">⚡</div><div>당일 예약</div>'
+          f'<div style="color:{c2};font-size:18px;">⚡</div><div style="font-weight:bold;color:#ffe082;">VIP 서비스</div></div>'
+          f'<p style="font-size:24px;font-weight:bold;color:#fff;margin:0;background:#0f1621;padding:12px;border-radius:8px;">📞 {p}</p></div>')
     return html, title
 
 # ==================== GPT 본문 생성 (선택) ====================
