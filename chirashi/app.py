@@ -5419,8 +5419,10 @@ def robots():
 @app.before_request
 def chk():
     # 토큰 조회/관리: 올바른 ?token= 이면 UA·로그인 통과.
-    #  /api/logs·/api/worker-log = 읽기전용 로그. /api/sites·/api/candidates = 사이트/후보 관리(대표님 대행 등록용).
-    if request.path in ('/api/logs','/api/worker-log','/api/sites','/api/candidates'):
+    #  /api/logs·/api/worker-log = 읽기전용 로그. /api/sites·/api/candidates = 사이트/후보 관리.
+    #  /api/test/* = 발행 테스트 트리거(등록 사이트에 실제 글1건 발행해 검증).
+    _p=request.path
+    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/candidates') or _p.startswith('/api/test/'):
         tok=(request.args.get('token') or '').strip()
         cfgtok=(load_config().get('log_token') or '').strip()
         if cfgtok and tok==cfgtok:
