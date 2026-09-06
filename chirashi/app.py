@@ -5094,8 +5094,10 @@ def auto_pipeline_once(limit=5):
     # 쿨다운: 최근 20분 내 시도한 후보는 제외 → 한 사이트(예: 김정은)가 실패/hang해도
     # 곧바로 다시 잡혀 루프를 독점하지 않게. 다른 후보에게 순서가 돌아간다.
     _cool=time.time()-1200
+    # ★status 'ready'뿐 아니라 'approved'(대표님이 UI에서 승인한 후보)도 전환 대상에 포함.
+    #   (approved 후보 14곳이 파이프라인이 ready만 봐서 방치되던 문제 — 대표님 "사이트 안 늚")
     pend=[c for c in cands
-          if c.get('screened') and c.get('status')=='ready'
+          if c.get('screened') and c.get('status') in ('ready','approved')
           and not c.get('parked') and not c.get('illegal') and not c.get('ad_banned')
           and (c.get('domain') or '').lower() not in site_domains
           and c.get('reachable') and _has_write_path(c)
