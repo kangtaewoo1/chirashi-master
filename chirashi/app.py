@@ -1052,7 +1052,8 @@ def generate_post_gpt(keywords, cfg):
     _rawph=pick_phone(cfg); p=format_phone(_rawph)
     key=cfg.get('openai_key',''); model=cfg.get('model') or 'gpt-4o-mini'
     if not key: raise RuntimeError('openai_key 없음')
-    imgs=pick_images(1); c1,c2=random.sample(COLORS,2)   # 게시물당 이미지는 항상 정확히 1개
+    imgs=pick_images(1)                                   # 게시물당 이미지는 항상 정확히 1개
+    c1=c2=random.choice(COLORS)                           # 강조색 하나로 통일(디자인 틀과 동일 색)
     sys_p=("너는 한국어 정보형 랜딩페이지와 지역 안내 글을 작성하는 전문 카피라이터다. "
            "세 개의 키워드 중 키워드1을 문서 전체의 명확한 메인 주제로 삼고, 키워드2와 키워드3은 "
            "메인 주제를 설명하는 보조 문맥으로만 사용한다. 읽기 쉬운 장문 콘텐츠를 쓰되 키워드 도배, "
@@ -1068,8 +1069,12 @@ def generate_post_gpt(keywords, cfg):
            f"정보 카드 4개 → 이용 팁 → FAQ 5개 → 핵심 정리 → 문의 CTA 순서로 한다.\n"
            f"6. <h2> 5~7개, 세부 항목은 <h3>과 <p>, 특징은 <ul><li>, FAQ는 <dl><dt><dd>를 사용한다. "
            f"정보 카드 4개는 테두리와 여백을 준 <div>로 만든다. 모바일에서도 읽기 쉬운 인라인 스타일을 사용한다.\n"
-           f"7. 전화번호 {p}는 본문 중간에 반복하지 말고 마지막 문의 CTA에 1회만 넣는다.\n"
-           f"8. 실제로 주어지지 않은 주소·가격·운영시간·후기·보장 표현은 단정하지 않는다. 매번 문장과 항목 순서를 다르게 한다.")
+           f"7. 색상은 강조색 '{c1}' 하나만 사용한다. 모든 <h2>는 "
+           f"style=\"font-size:22px;font-weight:800;margin:36px 0 14px;padding-bottom:8px;border-bottom:2px solid {c1};color:{c1};\" "
+           f"로, <h3>는 color:{c1} 로 지정한다. 다른 색은 쓰지 않는다(본문 글자색 제외).\n"
+           f"8. 전화번호나 문의 CTA 박스는 본문에 넣지 않는다(문서 맨 끝에 시스템이 따로 붙인다). "
+           f"전화번호 {p}도 본문에 쓰지 않는다.\n"
+           f"9. 실제로 주어지지 않은 주소·가격·운영시간·후기·보장 표현은 단정하지 않는다. 매번 문장과 항목 순서를 다르게 한다.")
     resp=_rq.post("https://api.openai.com/v1/chat/completions",
         headers={"Authorization":f"Bearer {key}","Content-Type":"application/json"},
         json={"model":model,"temperature":0.85,"max_tokens":3800,
@@ -1081,12 +1086,33 @@ def generate_post_gpt(keywords, cfg):
     body=payload['choices'][0]['message']['content'].strip()
     if body.startswith('```'): body=re.sub(r'^```[a-zA-Z]*\n?|```$','',body).strip()
     title,_=build_title(r,s,b,cfg,_rawph)
-    header=(f'<h1 style="font-size:22px;font-weight:bold;color:#222;margin:0 0 16px;">{title}</h1>'
-            f'<div style="text-align:center;margin:20px 0;"><img src="{imgs[0]}" alt="{r}" style="max-width:100%;border-radius:8px;" loading="lazy"/></div>')
-    cta=(f'<div style="margin:36px 0;padding:20px;background:#f8f9fa;border-radius:8px;text-align:center;">'
-         f'<p style="font-size:18px;font-weight:bold;color:{c1};">{r} {s} 문의·예약</p>'
-         f'<p style="font-size:24px;font-weight:bold;color:{c2};margin:10px 0;">{p}</p>'
-         f'<p style="font-size:14px;color:#666;">{b}</p></div>')
+    # 대표님 지시(2026-09-07): GPT 본문을 '예쁜 디자인 틀'로 감싼다.
+    #  단일 강조색 + 카테고리 라벨 + 큰 H1/언더라인 바 + (본문 h2로 만든) 목차 + 다크 CTA + 업데이트 날짜.
+    AC=c1                                  # 강조색 하나로 통일
+    _upd=_kst_now().strftime('%Y년 %m월')
+    # 본문의 <h2> 제목들을 뽑아 상단 목차(TOC) 구성 — 없으면 목차 생략
+    _h2s=[re.sub(r'<[^>]+>','',h).strip() for h in re.findall(r'<h2[^>]*>(.*?)</h2>',body,re.S|re.I)]
+    _h2s=[h for h in _h2s if h][:5]
+    toc_box=''
+    if len(_h2s)>=2:
+        _items=''.join(
+            f'<li style="padding:8px 0;border-bottom:1px solid #e0e0e0;">'
+            f'<span style="color:{AC};font-weight:700;margin-right:10px;">{i+1:02d}</span>'
+            f'<span style="color:#222;">{h}</span></li>' for i,h in enumerate(_h2s))
+        toc_box=(f'<div style="background:#F7F7F5;border:1px solid {AC};border-radius:10px;padding:20px 24px;margin:0 0 32px;">'
+            f'<p style="font-size:14px;font-weight:800;color:{AC};letter-spacing:2px;margin:0 0 12px;">목차</p>'
+            f'<ul style="list-style:none;padding:0;margin:0;font-size:15px;">{_items}</ul></div>')
+    _label=random.choice(['총정리','이용 안내','완벽 가이드','한눈에 정리','상세 안내'])
+    header=(f'<div style="font-size:12px;font-weight:700;letter-spacing:5px;color:{AC};margin-bottom:12px;">{_label} · {r} {s}</div>'
+            f'<h1 style="font-size:32px;font-weight:800;line-height:1.3;margin:0 0 16px;color:#111;">{title}</h1>'
+            f'<div style="width:80px;height:4px;background:{AC};margin:0 0 28px;border-radius:2px;"></div>'
+            f'<div style="text-align:center;margin:0 0 28px;"><img src="{imgs[0]}" alt="{r}" style="max-width:100%;border-radius:8px;" loading="lazy"/></div>'
+            f'{toc_box}')
+    cta=(f'<div style="margin:38px 0 8px;padding:24px;background:#1f2733;color:#e8edf4;border-radius:12px;text-align:center;">'
+         f'<p style="font-size:17px;font-weight:bold;color:#fff;margin:0 0 12px;">📞 {r} {s} 문의·예약</p>'
+         f'<p style="font-size:24px;font-weight:bold;color:#fff;margin:0;background:#0f1621;padding:12px;border-radius:8px;">{p}</p>'
+         f'<p style="font-size:14px;color:#cbd5e1;margin:12px 0 0;">{b}</p></div>'
+         f'<p style="font-size:12px;color:#999;text-align:right;margin:16px 0 8px;">최신 업데이트 · {_upd} 기준</p>')
     return header+body+cta, title
 
 def _gen_once(keywords, cfg):
@@ -1766,8 +1792,15 @@ def enable_html_mode(d):
     #   smarteditor2(네이버 SE2, oEditors.SET_IR)·XpressEngine(XE) 에디터는 HTML 콘텐츠를 렌더한다.
     try:
         src=(d.page_source or '').lower()
-        # smarteditor2: oEditors 전역 + se2 위지윅 iframe이 있으면 HTML 렌더 에디터로 확정
-        if "typeof oeditors" in src or 'oeditors.geteditorbyidorname' in src or 'se2_input_wysiwyg' in src:
+        # smarteditor2(네이버 SE2): 아래 중 하나라도 있으면 HTML 렌더 에디터로 확정.
+        #  ※ 스킨마다 표기가 달라(oEditors=[]·oEditors.getById·plugin/editor/smarteditor2·
+        #    class="smarteditor2"·se2_input_wysiwyg 등) 넓게 감지한다.
+        #    실제 발행도 oEditors.getById['wr_content'].exec('SET_IR',...)로 HTML을 넣으므로
+        #    이 신호가 있으면 HTML이 그대로 렌더된다.
+        if any(k in src for k in (
+                'smarteditor2','se2_input_wysiwyg','plugin/editor/smarteditor2',
+                'oeditors.getbyid','oeditors.geteditorbyidorname','typeof oeditors',
+                "oeditors = [", 'oeditors=[', 'class="smarteditor2"')):
             return True
         # XpressEngine 에디터(ckeditor/xpresseditor 등) — editor_sequence가 있는 XE 글쓰기
         if 'editor_sequence' in src and ('xpressengine' in src or '/modules/editor' in src or 'ckeditor' in src):
