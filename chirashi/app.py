@@ -3039,9 +3039,19 @@ def set_site_flag(site_id, **fields):
             if s.get('id')==site_id: s.update(fields)
         save_sites(sites)
 
+def _strip_non_bmp(s):
+    """ChromeDriver는 BMP(U+FFFF 이하) 밖 문자를 send_keys로 입력 못 한다
+       ('ChromeDriver only supports characters in the BMP'). 제목/본문의 이모지 등
+       비BMP 문자를 제거해 발행이 그 에러로 통째로 실패하는 것을 막는다.
+       (SEO 가치 없는 장식 이모지라 제거해도 무방 — 대표님 게시글 발행 안정화)."""
+    if not s: return s
+    return ''.join(ch for ch in str(s) if ord(ch) <= 0xFFFF)
+
 def do_post(site, title, content_html, skip_login=False):
     """발행 라우팅(하이브리드+자가학습): 학습레시피→플랫폼기본→자동학습.
        skip_login=True: 가입 직후 이미 로그인된 세션에서 재로그인 없이 바로 글쓰기(비표준 로그인폼 구제)."""
+    # 비BMP(이모지 등) 제거 — ChromeDriver send_keys가 못 다뤄 발행 전체가 실패하던 문제 방지.
+    title=_strip_non_bmp(title); content_html=_strip_non_bmp(content_html)
     rec=site.get('learned')
     # 1) 저장된 학습 레시피 우선
     if rec and rec.get('write_url') and rec.get('subject_sel') and rec.get('content_sel'):
