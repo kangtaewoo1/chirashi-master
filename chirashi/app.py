@@ -5418,9 +5418,9 @@ def robots():
 
 @app.before_request
 def chk():
-    # 읽기전용 로그 조회 토큰: /api/logs·/api/worker-log 에 올바른 ?token= 이면 UA·로그인 통과.
-    # (콘솔 없이 서버 상태를 원격 확인하기 위한 예외. 로그만 노출되며 쓰기·설정은 불가)
-    if request.path in ('/api/logs','/api/worker-log'):
+    # 토큰 조회/관리: 올바른 ?token= 이면 UA·로그인 통과.
+    #  /api/logs·/api/worker-log = 읽기전용 로그. /api/sites·/api/candidates = 사이트/후보 관리(대표님 대행 등록용).
+    if request.path in ('/api/logs','/api/worker-log','/api/sites','/api/candidates'):
         tok=(request.args.get('token') or '').strip()
         cfgtok=(load_config().get('log_token') or '').strip()
         if cfgtok and tok==cfgtok:
