@@ -4193,6 +4193,36 @@ def tempmail_wait_verify_link(token, timeout=120):
         time.sleep(4)
     return None
 
+def auto_signup_guarded(site, submit=True, timeout=100):
+    """auto_signup을 타임아웃 보호 하에 실행한다. 작업 스레드가 자기 드라이버로 가입을 수행하고,
+       timeout을 넘기면 메인이 그 드라이버를 강제 quit해서 hang된 selenium 호출을 예외로 끊는다.
+       → 한 사이트가 무한 hang해 전환루프가 영영 완료 안 되던 문제 해결(김정은산부인과 케이스)."""
+    import threading as _th
+    box={'done':False,'ret':(False,'타임아웃'),'wtid':None}
+    def _work():
+        box['wtid']=_th.current_thread().name
+        try:
+            box['ret']=auto_signup(site,submit=submit)
+        except Exception as e:
+            box['ret']=(False,f'가입 처리 예외: {str(e)[:80]}')
+        finally:
+            box['done']=True
+    t=_th.Thread(target=_work,name=f'SUWORK-{secrets.token_hex(3)}',daemon=True)
+    t.start(); t.join(timeout)
+    if not box['done']:
+        # 타임아웃 → 작업 스레드가 쓰던 드라이버를 quit해 hang을 깨운다(그 스레드는 예외로 종료)
+        wt=box.get('wtid')
+        try:
+            with _drv_lock:
+                dd=_drivers.pop(wt,None) if wt else None
+            if dd:
+                try: dd.quit()
+                except Exception: pass
+        except Exception: pass
+        add_log(f'[자동가입 타임아웃] {site.get("name") or site.get("site_url","")} — {timeout}초 초과, 드라이버 리셋 후 다음 후보로')
+        return False,f'자동가입 타임아웃({timeout}초 초과)'
+    return box['ret']
+
 def auto_signup(site, submit=True):
     """로그인 필요 사이트에 앱이 스스로 회원가입한다(2captcha로 캡차 해결).
        submit=False면 제출 직전까지만(폼 입력·캡차해결) 수행하고 실제 가입은 안 함(검증용).
@@ -4616,7 +4646,7 @@ def auto_pipeline_once(limit=5):
             _just_signed=False
             # 1) 로그인 필요(=write_form 미확인)면 자동가입 먼저
             if c.get('login_required') or not c.get('write_form'):
-                ok_su,msg_su=auto_signup(tmp,submit=True)
+                ok_su,msg_su=auto_signup_guarded(tmp,submit=True)
                 if ok_su: signed+=1; _just_signed=True
                 else:
                     _cand_set(c['id'],status='rejected',reject_reason=f'자동가입 실패: {msg_su[:80]}')
@@ -4632,7 +4662,7 @@ def auto_pipeline_once(limit=5):
             if (not ok) and (not tmp.get('mb_id')) and re.search(r'(로그인이 필요|로그인 실패|로그인 화면|권한이 없|권한 없)',str(msg)):
                 reset_driver(); time.sleep(1)
                 add_log(f'[파이프라인] {name} 로그인필요 → 자동가입 시도')
-                ok_su,msg_su=auto_signup(tmp,submit=True)
+                ok_su,msg_su=auto_signup_guarded(tmp,submit=True)
                 if ok_su:
                     signed+=1; add_log(f'[파이프라인] {name} 자동가입 성공 → 세션 재사용 재발행')
                     # reset_driver 하지 않음 — 가입 직후 로그인된 세션을 그대로 써서 발행(비표준 로그인폼 구제)
@@ -4679,7 +4709,7 @@ def auto_pipeline_once(limit=5):
     for s in prepared[:max(1,limit)]:
         nm=s.get('name') or (s.get('site_url','') or '')[:30]
         try:
-            ok_su,msg_su=auto_signup(s,submit=True)
+            ok_su,msg_su=auto_signup_guarded(s,submit=True)
             if not ok_su:
                 at=int(s.get('signup_complete_attempts',0) or 0)+1
                 if at>=3:
