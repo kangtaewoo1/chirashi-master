@@ -1328,6 +1328,21 @@ def _captcha_image_data(d):
 
     # 0) 그누보드 kcaptcha면 실이미지를 먼저 강제 로드(dot.gif 플레이스홀더 문제 해결)
     _kcaptcha_force_load(d)
+    # 0.5) ★캡차 이미지가 실제로 디코딩(naturalWidth>5)될 때까지 '대기만' 한다 — Cafe24 등 비동기 로드 대응.
+    #      스샷이 naturalWidth=0(로드 전)에 실패하던 문제 방지(대표님 rental-zon). src 재로드는 안 함
+    #      (재로드하면 새 캡차 생성돼 정답과 어긋남). scrollIntoView로 렌더 유도만. 최대 8초.
+    try:
+        for _ in range(16):
+            loaded=d.execute_script("""
+                var s=['img#captcha_img','img#captcha_image','img[id*="captcha"]','img[src*="captcha"]'];
+                for(var i=0;i<s.length;i++){var im=document.querySelector(s[i]);
+                  if(im){ try{im.scrollIntoView({block:'center'});}catch(e){}
+                          if((im.naturalWidth||0)>5) return true; } }
+                return false;
+            """)
+            if loaded: break
+            time.sleep(0.5)
+    except Exception: pass
 
     # 넓은 폴백(크기추정/data-URI)은 캡차 INPUT이 실제 있을 때만 → 로고·아이콘 오탐 방지
     has_captcha_input=False
