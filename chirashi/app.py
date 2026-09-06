@@ -4201,7 +4201,8 @@ def auto_signup(site, submit=True):
     from selenium.webdriver.common.by import By
     cfg=load_config()
     _snm=site.get('name') or site.get('site_url','')
-    add_log(f'[자동가입 시작] {_snm}')   # 어느 사이트를 처리 중인지 항상 로그(결과 없으면 처리중/예외 판별용)
+    _surl=site.get('site_url','') or ''
+    add_log(f'[자동가입 시작] {_snm} {_surl}'.rstrip())   # URL 포함 → 워커로그에서 클릭 가능
     # 1) 가입폼 측정(캐시 30분) — 이메일 인증 필요하면 즉시 제외
     try:
         profile=learn_signup_profile(site,force=False)
@@ -4560,11 +4561,15 @@ def auto_pipeline_once(limit=5):
         if _c.get('status') in ('ready','new') and any(k in str(_c.get('title') or '') for k in ERROR_PAGE_HINTS):
             try: _cand_set(_c['id'],status='rejected',reject_reason='오류안내 페이지'); _c['status']='rejected'
             except Exception: pass
+    # 쿨다운: 최근 20분 내 시도한 후보는 제외 → 한 사이트(예: 김정은)가 실패/hang해도
+    # 곧바로 다시 잡혀 루프를 독점하지 않게. 다른 후보에게 순서가 돌아간다.
+    _cool=time.time()-1200
     pend=[c for c in cands
           if c.get('screened') and c.get('status')=='ready'
           and not c.get('parked') and not c.get('illegal') and not c.get('ad_banned')
           and (c.get('domain') or '').lower() not in site_domains
-          and c.get('reachable') and _has_write_path(c)]
+          and c.get('reachable') and _has_write_path(c)
+          and float(c.get('last_pipeline_at',0) or 0) < _cool]
     # 진단: pend가 비면 각 조건이 몇 개를 걸렀는지 1줄로 남긴다(왜 '처리 0'인지 파악용).
     if not pend:
         _rdy=[c for c in cands if c.get('screened') and c.get('status')=='ready']
@@ -4599,6 +4604,10 @@ def auto_pipeline_once(limit=5):
     done=0; registered=0; signed=0; results=[]
     for c in pend:
         name=c.get('board_name') or c.get('domain') or c.get('url','')[:30]
+        # 쿨다운 기록: 이 후보를 방금 시도했음을 남겨, 실패/hang해도 다음 사이클에 곧바로 다시
+        # 잡아 루프를 독점하지 않게 한다(김정은처럼 한 사이트가 파이프라인을 막던 문제 해결).
+        try: _cand_set(c['id'], last_pipeline_at=time.time())
+        except Exception: pass
         # 임시 site dict(발행 함수는 site 형태를 기대) — 후보 정보로 구성
         m=re.match(r'(https?://[^/]+)',c.get('url','')); base=m.group(1) if m else c.get('url','')
         tmp={'id':'cand_'+c.get('id',''),'site_url':base,'platform':c.get('platform','gnuboard'),
@@ -4640,7 +4649,7 @@ def auto_pipeline_once(limit=5):
                     set_site_flag(_promoted_site_id(c),mb_id=tmp.get('mb_id'),mb_pass=tmp.get('mb_pass'))
                 registered+=1
                 results.append({'name':name,'stage':'post','ok':True,'url':result_url})
-                add_log(f'[발행가능 등록] {name} — 자동가입·실발행 검증 통과 → 발행가능으로 이동')  # 되는 곳 이동 로그
+                add_log(f'[발행가능 등록] {name} — 검증 통과 → 발행가능 {result_url}'.rstrip())  # URL 포함 → 클릭 가능
             elif ok:
                 _cand_set(c['id'],status='rejected',reject_reason='발행됨(결과 URL 확인 불가)')
                 results.append({'name':name,'stage':'post','ok':False,'msg':'결과 URL 없음'})
@@ -7305,9 +7314,16 @@ async function renderCaptchaTasks(){const box=$('captchaTasks');if(!box)return;c
 async function renderWorkerLog(){const roomSel=$('wlogRoom');if(!roomSel.dataset.loaded){const rooms=await api('/workrooms','GET');if(Array.isArray(rooms)){roomSel.innerHTML='<option value="">전체 작업실</option>'+rooms.map(r=>'<option value="'+esc(r.id)+'">'+esc(r.name)+'</option>').join('');roomSel.dataset.loaded='1'}}const rid=roomSel.value;const r=await api('/worker-log'+(rid?'?workroom_id='+encodeURIComponent(rid):''),'GET');if(!r||!r.ok)return;const w=r.workers||{};$('wlogWorker').textContent='워커 '+(w.active?(w.paused?'일시정지':'실행 중'):'정지')+' · 큐 '+(w.queued||0)+' · 성공 '+(w.success||0)+' · 실패 '+(w.fail||0)+' · 스킵 '+(w.skipped||0);$('wlogBlock').innerHTML=r.publishable_count?'<div class="note" style="border-color:#166534;color:var(--g)">발행 가능 검증 사이트 '+r.publishable_count+'곳</div>':'<div class="note" style="border-color:#991b1b;color:var(--r)">⛔ 현재 발행 가능 사이트 0곳'+((r.captcha_sites||[]).length?' · CAPTCHA 감지: '+esc(r.captcha_sites.join(', ')):'')+' — CAPTCHA를 우회하지 않으며 사람이 처리하고 실게시 재검증하기 전까지 자동 발행하지 않습니다.</div>';const sm={preparing:'준비',running:'글 생성 중',done:'준비 완료',failed:'준비 실패'};$('wlogTasks').innerHTML=(r.tasks||[]).length?'<table><thead><tr><th>작업실</th><th>시작</th><th>준비 진행</th><th>큐 등록</th><th>대기 필요</th><th>상태</th></tr></thead><tbody>'+r.tasks.map(t=>'<tr><td><b>'+esc(t.workroom_name||'직접 입력')+'</b></td><td>'+esc(t.created_at||'')+'</td><td>'+esc(t.done||0)+'/'+esc(t.total||0)+'</td><td>'+esc(t.queued||0)+'</td><td>'+esc(t.remaining||0)+'</td><td><span class="st st-'+(t.status==='done'?'ok':t.status==='failed'?'f':'y')+'">'+esc(sm[t.status]||t.status||'')+'</span> '+esc(t.error||'')+'</td></tr>').join('')+'</tbody></table>':'<p style="color:var(--d);padding:12px">선택한 작업실의 준비 작업이 없습니다.</p>';const h=r.history||[];$('wlogList').innerHTML=h.length?'<table><thead><tr><th>작업실</th><th>시간</th><th>키워드</th><th>사이트</th><th>상태</th><th>결과 URL</th><th>메시지</th></tr></thead><tbody>'+h.map(x=>'<tr><td><b>'+esc(x.workroom_name||'직접 입력')+'</b></td><td>'+esc((x.time||'').slice(5,16))+'</td><td>'+esc(x.region||'')+' / '+esc(x.service||'')+'</td><td>'+esc(x.site_name||'')+'</td><td><span class="st st-'+(x.status==='done'?'ok':x.status==='failed'?'f':x.status==='skipped'?'y':'i')+'">'+esc(x.status||'')+'</span></td><td>'+(x.result_url?'<a href="'+esc(x.result_url)+'" target="_blank" style="color:var(--p)">열기</a>':'-')+'</td><td style="color:var(--d)">'+esc(x.fail_reason_ko||x.message||'')+'</td></tr>').join('')+'</tbody></table>':'<p style="color:var(--d);padding:30px;text-align:center">아직 이 작업실의 워커 발행 이력이 없습니다.</p>';window._actLog=r.activity||[];renderActivity()}
 let _actFilter='';
 function setActFilter(btn){document.querySelectorAll('.actf').forEach(b=>b.classList.remove('on'));btn.classList.add('on');_actFilter=btn.dataset.c||'';renderActivity()}
+function linkifyLog(msg){
+  // esc로 XSS 방지 후, 텍스트 내 http(s) URL을 클릭 가능한 링크로 변환
+  var e=esc(msg||'');
+  return e.replace(/(https?:\/\/[^\s"'<>]+)/g, function(u){
+    return '<a href="'+u+'" target="_blank" rel="noopener" style="color:var(--p);word-break:break-all">'+u+'</a>';
+  });
+}
 function renderActivity(){const box=$('wlogActivity');if(!box)return;const logs=(window._actLog||[]).filter(x=>!_actFilter||(x.cat||'')===_actFilter);
   const color={'발굴':'var(--p)','검수':'var(--v)','가입':'var(--y)','발행':'var(--g)','정리':'var(--r)','파이프라인':'var(--t)','기타':'var(--d)'};
-  box.innerHTML=logs.length?'<table><thead><tr><th style="width:70px">종류</th><th style="width:70px">시간</th><th>내용</th></tr></thead><tbody>'+logs.map(x=>{const c=x.cat||'기타';return '<tr><td><span class="st" style="background:'+((color[c]||'var(--d)')+'22')+';color:'+(color[c]||'var(--d)')+'">'+esc(c)+'</span></td><td style="color:var(--d)">'+esc(x.time||'')+'</td><td>'+esc(x.msg||'')+'</td></tr>'}).join('')+'</tbody></table>':'<p style="color:var(--d);padding:20px;text-align:center">'+(_actFilter?_actFilter+' 로그 없음':'작업 로그 없음')+'</p>'}
+  box.innerHTML=logs.length?'<table><thead><tr><th style="width:70px">종류</th><th style="width:70px">시간</th><th>내용</th></tr></thead><tbody>'+logs.map(x=>{const c=x.cat||'기타';return '<tr><td><span class="st" style="background:'+((color[c]||'var(--d)')+'22')+';color:'+(color[c]||'var(--d)')+'">'+esc(c)+'</span></td><td style="color:var(--d)">'+esc(x.time||'')+'</td><td>'+linkifyLog(x.msg||'')+'</td></tr>'}).join('')+'</tbody></table>':'<p style="color:var(--d);padding:20px;text-align:center">'+(_actFilter?_actFilter+' 로그 없음':'작업 로그 없음')+'</p>'}
 let _editId=null;
 async function runDiag(){$('diagOut').innerHTML='<p style="color:var(--d);padding:14px">🩺 진단 중... 크롬을 실제로 띄워보는 중이라 최대 60초 걸립니다.</p>';const r=await api('/diag','GET');if(!r){$('diagOut').innerHTML='<p style="color:var(--r)">진단 실패</p>';return}
 const rows=(r.steps||[]).map(s=>`<tr><td>${s.ok?'<span style="color:var(--g)">✅</span>':'<span style="color:var(--r)">❌</span>'}</td><td><b>${esc(s.name)}</b></td><td style="color:var(--d)">${esc(s.detail)}</td></tr>`).join('');
