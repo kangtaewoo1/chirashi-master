@@ -7430,45 +7430,54 @@ def api_usage():
                     'usdkrw':_usd_krw(cfg),  # USD→KRW 실시간 환율(원화 표시용)
                     'note':'금액은 관리자키 실측(OpenAI)을 제외하면 설정 단가 기준 추정치입니다. 횟수는 정확합니다.'})
 
+def _run_write_test(sid):
+    """발행 테스트를 '끝까지' 수행하고 결과를 사이트에 기록. (백그라운드 스레드에서 실행 —
+       느린 게시판(Cafe24+Turnstile 등)이 100초 넘어 Cloudflare 524로 요청이 끊겨도
+       발행이 중간에 죽지 않도록. 대표님 rental-zon: 캡차까지 풀렸는데 524로 중단되던 문제 해결)."""
+    site=next((s for s in load_sites() if s.get('id')==sid),None)
+    if not site: return
+    try:
+        cfg=load_config()
+        set_site_flag(sid,status='testing',write_test_started_at=_kst_now().strftime('%Y-%m-%d %H:%M'))
+        html,title=generate_article({'지역':'테스트','서비스':'테스트'},cfg)
+        ok,msg=do_post(site,title,html)
+        finalize_post(site,ok,fail_reason=('' if ok else str(msg)))
+        result_url=msg if ok and str(msg).startswith(('http://','https://')) else ''
+        now=_kst_now().strftime('%Y-%m-%d %H:%M')
+        if ok and result_url:
+            set_site_flag(sid,status='done',write_test_status='passed',verified_at=now,
+                          verified_post_url=result_url,last_structure_check=now,last_fail_reason='')
+            add_log(f'[발행테스트 성공] {site.get("name") or site.get("site_url","")} → {result_url}')
+        elif ok:
+            # 성공했다지만 URL 확인 불가 — manual_admin은 삭제 안 하고 상태만 표시.
+            set_site_flag(sid,status='failed',write_test_status='failed',
+                          verification_fail_reason='결과 URL/게시물 검색 결과 없음',last_fail_reason='결과 URL 없음')
+            add_log(f'[발행테스트] {site.get("name")}: 성공응답이나 결과 URL 없음')
+        else:
+            set_site_flag(sid,status='failed',write_test_status='failed',last_fail_reason=str(msg)[:200])
+            add_log(f'[발행테스트 실패] {site.get("name")}: {str(msg)[:80]}')
+    except Exception as e:
+        set_site_flag(sid,status='failed',last_fail_reason=f'테스트 예외: {str(e)[:150]}')
+        add_log(f'[발행테스트 오류] {str(e)[:80]}')
+
 @app.route('/api/test/<sid>',methods=['POST'])
 def api_test(sid):
     site=next((s for s in load_sites() if s.get('id')==sid),None)
     if not site: return jsonify({'ok':False,'error':'사이트 없음'})
     if not is_permitted(site):
         return jsonify({'ok':False,'error':'미허용 도메인 — 테스트도 실제 발행이므로 홍보 허용(✔) 설정 후 이용하세요'})
-    try:
-        cfg=load_config()
-        if not under_daily_limit(site,cfg):
-            return jsonify({'ok':False,'error':'사이트 일일 발행 한도에 도달했습니다'})
-        interval_ok,remain=under_min_interval(site)
-        if not interval_ok:
-            return jsonify({'ok':False,'error':f'사이트 최소 발행 간격 미충족 ({max(1,(remain+59)//60)}분 남음)'})
-        html,title=generate_article({'지역':'테스트','서비스':'테스트'},cfg)
-        ok,msg=do_post(site,title,html)
-        finalize_post(site,ok,fail_reason=('' if ok else str(msg)))
-        result_url=msg if ok and str(msg).startswith(('http://','https://')) else ''
-        if ok and result_url:
-            set_site_flag(sid,write_test_status='passed',verified_at=_kst_now().strftime('%Y-%m-%d %H:%M'),
-                          verified_post_url=result_url,last_structure_check=_kst_now().strftime('%Y-%m-%d %H:%M'))
-        elif ok:
-            # 성공 응답처럼 보여도 결과 URL을 확인할 수 없으면 발행 가능 사이트에서 제외한다.
-            now=_kst_now().strftime('%Y-%m-%d %H:%M')
-            set_site_flag(sid,status='rejected',permission=False,write_test_status='failed',
-                          verification_fail_reason='결과 URL/게시물 검색 결과 없음',
-                          verified_post_url='',last_structure_check=now)
-            domain=_domain_of(site.get('site_url',''))
-            with _cand_lock:
-                cands=load_cands()
-                for c in cands:
-                    if c.get('domain','').lower()==domain:
-                        c.update({'status':'rejected','reject_reason':'결과 URL/게시물 검색 결과 없음',
-                                  'write_test_status':'failed','verified_at':now,'verified_post_url':''})
-                save_cands(cands)
-            return jsonify({'ok':False,'rejected':True,'error':'결과 URL/게시물 검색 결과 없음',
-                            'platform':resolve_platform(site)}),409
-        return jsonify({'ok':ok,'message':msg,'platform':resolve_platform(site)})
-    except Exception as e:
-        return jsonify({'ok':False,'error':str(e)})
+    cfg=load_config()
+    if not under_daily_limit(site,cfg):
+        return jsonify({'ok':False,'error':'사이트 일일 발행 한도에 도달했습니다'})
+    interval_ok,remain=under_min_interval(site)
+    if not interval_ok:
+        return jsonify({'ok':False,'error':f'사이트 최소 발행 간격 미충족 ({max(1,(remain+59)//60)}분 남음)'})
+    # ★비동기 실행: 발행을 백그라운드 스레드에서 끝까지 수행하고 즉시 응답(524 회피).
+    #   결과는 사이트 상태(write_test_status·verified_post_url·last_fail_reason)로 확인.
+    if str(site.get('status'))=='testing':
+        return jsonify({'ok':True,'async':True,'message':'이미 테스트 진행 중입니다 — 잠시 후 사이트 상태 확인'})
+    threading.Thread(target=_run_write_test,args=(sid,),daemon=True).start()
+    return jsonify({'ok':True,'async':True,'message':'발행 테스트를 백그라운드에서 시작했습니다 — 1~2분 후 사이트 목록/상태에서 결과 확인'})
 
 # ---- 사이트 대량등록 (CSV: url,이름,게시판,아이디,비번,허용) ----
 @app.route('/api/sites/bulk',methods=['POST'])
