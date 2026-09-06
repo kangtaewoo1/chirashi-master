@@ -2745,12 +2745,36 @@ def cafe24_post(site, title, content_html, skip_login=False):
         success,msg,answer,info=solve_captcha_with_2captcha(d,site,_cap,cfg)
         if success:
             from selenium.webdriver.common.by import By
-            for sel in ["input[name='captcha_key']","#captcha_key","input[name='wr_key']","input[name*='captcha']","input[id*='captcha']"]:
+            _entered=False
+            # Cafe24 캡차 입력칸 폭넓게(캡차 img가 captcha_img면 input은 captcha_key인 경우 多)
+            for sel in ["#captcha_key","input[name='captcha_key']","input[name='secText']",
+                        "input[name='captcha']","input[name='captchaText']","input[name='wr_key']",
+                        "input[name*='captcha']","input[id*='captcha']","input[name*='secText']",
+                        "input[name*='security']","input[name*='보안']"]:
                 try:
-                    inp=d.find_element(By.CSS_SELECTOR,sel)
-                    if inp and inp.is_displayed():
-                        inp.clear(); inp.send_keys(answer); add_log(f'[2captcha] {msg}'); time.sleep(1); break
+                    for inp in d.find_elements(By.CSS_SELECTOR,sel):
+                        if inp.is_displayed():
+                            inp.clear(); inp.send_keys(answer); _entered=True; break
+                    if _entered: break
                 except: pass
+            # 셀렉터로 못 넣었으면 JS로 캡차성 input 전부 채움(마지막 안전망)
+            if not _entered:
+                try:
+                    _entered=bool(d.execute_script("""
+                        var v=arguments[0], done=false;
+                        document.querySelectorAll("input[type='text'],input:not([type])").forEach(function(el){
+                            var n=((el.name||'')+' '+(el.id||'')+' '+(el.placeholder||'')).toLowerCase();
+                            if(/captcha|보안|자동등록|sectext|security/.test(n) && el.offsetParent!==null){
+                                el.value=v; el.dispatchEvent(new Event('input',{bubbles:true})); done=true;
+                            }
+                        });
+                        return done;
+                    """, answer))
+                except Exception: pass
+            add_log(f'[2captcha] {msg} · 캡차입력={"성공" if _entered else "칸못찾음"}')
+            if not _entered:
+                return False,'캡차 해결됐으나 입력칸을 못 찾음 — Cafe24 캡차 input 확인'
+            time.sleep(1)
         else:
             # 2captcha 자동 해결 실패 시 사용자 에러 반환
             add_log(f'[2captcha] 자동 해결 실패: {msg} → Cafe24 자동발행 불가')
@@ -2788,21 +2812,42 @@ def cafe24_post(site, title, content_html, skip_login=False):
     _,missing=fill_required_post_fields(d,site)
     if missing: return False,'필수항목 설정 필요: '+', '.join(missing[:6])
 
-    # 등록
-    if not _click_first(d,["a.btnSubmit","#btnSubmit","button.btnSubmit","a.btnEm.btnStrong",
-                           "input[type='submit']","button[type='submit']","a[onclick*='submit']"]):
-        try: d.find_element(By.CSS_SELECTOR,'form').submit()
+    # 등록 — Cafe24 등록 버튼(a.btnSubmit 등)·글쓰기 폼 제출. board.write.php/exec 액션 폼 우선.
+    _sub=_click_first(d,["a.btnSubmit","#btnSubmit","button.btnSubmit","a.btnEm.btnStrong",
+                           ".ec-base-button a.btnStrong","a[href*='javascript'][class*='Submit']",
+                           "input[type='submit']","button[type='submit']","a[onclick*='submit']"])
+    if not _sub:
+        try:
+            d.execute_script("""
+                var f=document.querySelector("form[action*='write'],form[action*='board'],form[name='boardWriteForm']")
+                     ||(document.querySelector("input[name='subject'],#subject")||{}).form
+                     ||document.querySelector('form');
+                if(f){ if(typeof f.requestSubmit==='function')f.requestSubmit(); else f.submit(); }
+            """)
         except Exception: pass
     time.sleep(3); dismiss_alerts(d)
-    curl=d.current_url
+    curl=d.current_url or ''
+    # 알림 문구도 수집(제출 막혔을 때 원인)
+    _al=' '.join(getattr(d,'_last_alerts',[]) or [])
     if any(k in curl for k in ['read.html','list.html','article','board_no','view.html']) and 'write.html' not in curl:
+        add_log(f'[Cafe24등록] 성공 → {curl[:50]}')
         return True,(curl or '등록 완료')
     try: body=d.find_element(By.TAG_NAME,'body').text[:1500]
     except Exception: body=''
-    if any(k in body for k in ['등록되었습니다','등록 완료','승인 대기','승인대기','작성되었습니다']):
+    blob=_al+' '+body
+    if any(k in blob for k in ['등록되었습니다','등록 완료','작성되었습니다','정상적으로 등록']):
+        add_log('[Cafe24등록] 성공(문구 확인)')
         return True,'등록됨'
-    if any(k in body for k in ['로그인','권한이 없','권한 없','금지','차단','스팸']):
+    if any(k in blob for k in ['승인 대기','승인대기','관리자 확인']):
+        return True,'등록됨(승인 대기)'
+    # 실패 원인 로그(제출 후 어디에 있는지·알림)
+    add_log(f'[Cafe24등록] 확인불가 — url={curl[:40]} 알림={_al[:40]}')
+    if any(k in blob for k in ['자동등록방지','보안문자','캡차','captcha','일치하지']):
+        return False,'캡차 불일치 — 재시도 필요'
+    if any(k in blob for k in ['로그인','권한이 없','권한 없','금지','차단','스팸']):
         return False,'Cafe24 게시 권한 없음/로그인 필요 — 계정·게시판 권한 확인'
+    if any(k in blob for k in ['필수','입력해','선택해']):
+        return False,f'Cafe24 필수항목 미입력 — {_al[:40] or body[:40]}'
     return False,'Cafe24 등록 확인 불가 — 게시판 설정/에디터 셀렉터 확인'
 
 # ==================== 플랫폼 자동 감지 + 발행 디스패처 ====================
