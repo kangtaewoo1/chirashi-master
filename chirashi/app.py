@@ -1599,9 +1599,65 @@ def solve_captcha_with_2captcha(d,site,cap_type,cfg,timeout=300):
                 try: os.unlink(temp_path)
                 except: pass
         
+        # Cloudflare Turnstile (Cafe24 veritas-hub 챌린지 등) 처리
+        # — 2captcha가 토큰을 풀고, 그 토큰을 '브라우저 안'에서 페이지 콜백으로 제출한다.
+        #   (순수 API로 /validate에 넣으면 토큰 푼 IP≠제출 IP라 403. 브라우저 컨텍스트에서
+        #    같은 세션·IP로 제출해야 통과. 발굴/검증 단계라 느려도 무방 — 대표님 지시.)
+        elif cap_type=='turnstile':
+            try: src=d.page_source or ''
+            except Exception: src=''
+            # sitekey: cf-turnstile data-sitekey 또는 0x로 시작하는 위젯키
+            sitekey=None
+            mk=re.search(r'data-sitekey=["\']([A-Za-z0-9_\-]{15,})["\']',src)
+            if mk: sitekey=mk.group(1)
+            if not sitekey:
+                mk=re.search(r'(0x[A-Za-z0-9_]{18,})',src)
+                if mk: sitekey=mk.group(1)
+            if not sitekey:
+                return False,'turnstile sitekey를 찾을 수 없음','',{}
+            try: page_url=d.current_url
+            except Exception: page_url=''
+            try:
+                result=solver.turnstile(sitekey=sitekey,url=page_url)
+                token=result.get('code') if isinstance(result,dict) else str(result)
+            except Exception as e:
+                return False,f'turnstile 해결 실패: {str(e)[:80]}','',{}
+            if not token:
+                return False,'turnstile 토큰 없음','',{}
+            # 브라우저 안에서 페이지 콜백으로 토큰 제출(같은 IP/세션 → /validate 통과).
+            #  1) 표준 위젯 hidden input(cf-turnstile-response)에 토큰 주입
+            #  2) 페이지가 정의한 콜백(javascriptCallback 등) 호출 — Cafe24 challenge가 /validate fetch 수행
+            injected=False
+            try:
+                injected=bool(d.execute_script("""
+                    var tok=arguments[0], done=false;
+                    // 1) hidden response input들 채우기
+                    var names=['cf-turnstile-response','g-recaptcha-response'];
+                    names.forEach(function(n){
+                        document.querySelectorAll('[name="'+n+'"],#'+n).forEach(function(el){el.value=tok;});
+                    });
+                    // 2) 알려진 콜백 후보 호출(Cafe24 veritas: javascriptCallback)
+                    var cbs=['javascriptCallback','onTurnstileSuccess','turnstileCallback','tsCallback'];
+                    for(var i=0;i<cbs.length;i++){
+                        try{ if(typeof window[cbs[i]]==='function'){ window[cbs[i]](tok); done=true; break; } }catch(e){}
+                    }
+                    // 3) turnstile 렌더 콜백(data-callback 지정된 함수명)
+                    if(!done){
+                        var el=document.querySelector('.cf-turnstile[data-callback]');
+                        if(el){ var fn=el.getAttribute('data-callback'); if(fn&&typeof window[fn]==='function'){window[fn](tok);done=true;} }
+                    }
+                    return done;
+                """, token))
+            except Exception: pass
+            _record_captcha_usage('turnstile',True,cfg)
+            if injected:
+                return True,'turnstile 해결 완료(콜백 제출)',token,{'type':'turnstile','token':token}
+            # 콜백을 못 찾았어도 토큰은 넣었으니 폼 제출 시 검증되게 True로 진행
+            return True,'turnstile 토큰 주입(콜백 미발견)',token,{'type':'turnstile','token':token}
+
         else:
             return False,f'지원하지 않는 captcha 타입: {cap_type}','',{}
-            
+
     except ImportError:
         return False,'2captcha 라이브러리 미설치','',{}
     except Exception as e:
@@ -2562,10 +2618,30 @@ def cafe24_post(site, title, content_html, skip_login=False):
                     return
             except Exception: return
             time.sleep(0.5)
+    def _pass_turnstile_if_present():
+        """현재 페이지가 Cloudflare Turnstile 챌린지(veritas-hub 등)면 2captcha로 풀고
+           브라우저 콜백으로 제출 → 원래 페이지로 복귀 대기. 통과/무챌린지면 True."""
+        try:
+            cur=(d.current_url or '').lower(); psrc=(d.page_source or '')
+        except Exception:
+            cur=''; psrc=''
+        if not ('turnstile' in psrc.lower() or 'veritas-hub' in cur or '사람인지' in psrc or '간단한 확인' in psrc):
+            return True
+        cfg=load_config()
+        ok,msg,tok,info=solve_captcha_with_2captcha(d,site,'turnstile',cfg)
+        add_log(f'[Turnstile] {msg}')
+        if not ok: return False
+        for _ in range(40):   # /validate→redirect 복귀 대기(최대 20초)
+            try:
+                c=(d.current_url or '').lower()
+                if 'veritas-hub' not in c and 'challenge' not in c: return True
+            except Exception: pass
+            time.sleep(0.5)
+        return True
 
     # 로그인 (skip_login=True면 가입 직후 로그인 세션 재사용 → 재로그인 건너뜀)
     if mid and not skip_login:
-        d.get(base+'/member/login.html'); time.sleep(2); _wait_cf(15)
+        d.get(base+'/member/login.html'); time.sleep(2); _wait_cf(15); _pass_turnstile_if_present()
         _fill_first(d,["input[name='member_id']","input[name='login_id']","input[name='id']",
                        "#member_id","#loginId","input#id"],mid)
         _fill_first(d,["input[name='member_passwd']","input[name='passwd']","input[name='password']",
@@ -2589,12 +2665,14 @@ def cafe24_post(site, title, content_html, skip_login=False):
     opened=False
     for wu in write_urls:
         try:
-            d.get(wu); time.sleep(2); _wait_cf(15); dismiss_alerts(d)   # CF 챌린지 통과 대기
+            d.get(wu); time.sleep(2); _wait_cf(15)
+            _pass_turnstile_if_present()   # Turnstile 챌린지면 풀고 복귀
+            dismiss_alerts(d)
             if d.find_elements(By.CSS_SELECTOR,"input[name='subject'],#subject,input[name='title'],input[name='board_subject']"):
                 opened=True; break
         except Exception: continue
     if not opened:
-        return False,'Cafe24 글쓰기 페이지 못찾음 — 게시판번호(board_no)/로그인 확인'
+        return False,'Cafe24 글쓰기 페이지 못찾음 — Turnstile/로그인/게시판번호 확인'
 
     # CF 챌린지가 이미 통과됐으므로, 그래도 남은 진짜 차단(403 등)만 중단
     if _page_is_blocked(d): return False,'보안 차단 페이지(403 등) — 즉시 중단'
