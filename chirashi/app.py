@@ -4676,18 +4676,24 @@ def auto_pipeline_once(limit=5):
              'bo_table':c.get('bo_table') or 'free','name':name,'mb_id':'','mb_pass':''}
         try:
             _just_signed=False
-            # 1) 로그인 필요(=write_form 미확인)면 자동가입 먼저
-            if c.get('login_required') or not c.get('write_form'):
+            kw=_test_kw()
+            html,title=generate_article(kw,cfg,unique=True)
+            # 대표님 파이프라인 순서:
+            #  ① 접속은 검수/발굴 단계에서 이미 확인(reachable) → 여기선 통과한 것만 옴
+            #  ② 먼저 '비회원 글쓰기'로 바로 발행 시도 — 로그인 명백히 필요한 게 아니면 가입 없이 시도.
+            #  ③ 로그인 필요로 튕기면 그때 자동가입 → 세션 재사용 재발행.
+            #  ④ 자동가입은 auto_signup 내부에서 '이메일 없이 먼저, 안 되면 인증' 순서로 처리.
+            _login_first = bool(c.get('login_required')) and not c.get('write_form')
+            if _login_first:
+                # 게시판 자체가 로그인 필수로 판명된 곳만 가입 먼저(비회원 글쓰기 자리 없음)
                 ok_su,msg_su=auto_signup_guarded(tmp,submit=True)
                 if ok_su: signed+=1; _just_signed=True
                 else:
                     _cand_set(c['id'],status='rejected',reject_reason=f'자동가입 실패: {msg_su[:80]}')
                     results.append({'name':name,'stage':'signup','ok':False,'msg':msg_su})
-                    add_log(f'[자동가입 실패] {name} — {str(msg_su)[:90]}')  # 어느 사이트가 왜 실패했는지 로그로 남김
-                    continue  # done 증가·드라이버 리셋은 finally에서 처리
-            # 2) 실제 글 1건 발행 (스케줄/작업실 랜덤 키워드). 방금 가입했으면 로그인된 세션 재사용.
-            kw=_test_kw()
-            html,title=generate_article(kw,cfg,unique=True)
+                    add_log(f'[자동가입 실패] {name} — {str(msg_su)[:90]}')
+                    continue
+            # 발행 시도(②: 비회원 우선, 또는 방금 가입한 세션으로)
             ok,msg=do_post(tmp,title,html,skip_login=_just_signed)
             # 검수는 비회원 글쓰기로 봤지만 실제 write.php가 로그인으로 튕기는 게시판이 있다.
             # 이 경우 자동가입 후 1회 재시도(gjsec처럼 login_required 오판된 케이스 구제).
