@@ -89,15 +89,30 @@ def load_image_urls():
     d=load_json(IMAGES_FILE,[])
     return [u.strip() for u in d if isinstance(u,str) and u.strip().startswith('http')]
 def save_image_urls(urls): save_json(IMAGES_FILE,urls)
+def _public_base_url():
+    """게시글에 삽입할 이미지의 절대 URL 기준 도메인.
+       설정 public_base_url이 있으면 그걸, 없으면 google.twseo.kr(운영 도메인)."""
+    b=(load_config().get('public_base_url') or '').strip().rstrip('/')
+    return b or 'https://google.twseo.kr'
+
+def _abs_media_url(u):
+    """상대 /media/... 경로를 외부 게시판에서도 로드되도록 절대 URL로 변환.
+       (외부 게시판에 <img src='/media/..'>가 들어가면 그 게시판 도메인 기준으로
+        풀려 깨진다 — 이미지는 우리 서버에 있으므로 절대 URL이어야 한다.)"""
+    u=str(u or '').strip()
+    if u.startswith('http://') or u.startswith('https://'): return u
+    if u.startswith('/'): return _public_base_url()+u
+    return u
+
 def _workroom_image_urls(workroom_id):
-    """작업실 전용 이미지 풀 = 그 작업실 image_urls(외부 URL) + 그 작업실 업로드파일 URL."""
+    """작업실 전용 이미지 풀 = 그 작업실 image_urls(외부 URL) + 그 작업실 업로드파일(절대 URL)."""
     wid=str(workroom_id or '').strip()
     if not wid: return []
     room=next((r for r in (load_json(WORKROOMS_FILE,[]) or []) if str(r.get('id'))==wid),None)
     urls=[]
     if room:
         urls+=[u.strip() for u in (room.get('image_urls') or []) if isinstance(u,str) and u.strip().startswith('http')]
-    urls+=[x['url'] for x in uploaded_images(wid)]   # 작업실 업로드 파일(상대경로 /media/wr_.../)
+    urls+=[_abs_media_url(x['url']) for x in uploaded_images(wid)]   # 업로드 파일 → 절대 URL
     return list(dict.fromkeys(urls))
 
 def pick_images(n, workroom_id=None):
@@ -592,6 +607,8 @@ def load_config():
        # 유니크 발급하고 IMAP으로 인증메일을 읽는다(일회용 도메인 차단 게시판도 통과). App Password 사용.
        'imap_email':'','imap_password':'','imap_host':'imap.gmail.com',
        'twocaptcha_api_key':'','twocaptcha_enabled':False,
+       'http_publish_enabled':False,  # browserless 초고속 발행(requests). 안전검증 완료 후 켠다(중복발행 방지 수정 중).
+       'public_base_url':'https://google.twseo.kr',  # 업로드 이미지 절대 URL 기준 도메인(외부 게시판 로드용)
        'twocaptcha_price_recaptcha_usd':0.003,'twocaptcha_price_image_usd':0.0005,
        'brave_price_per_query_usd':0.005,  # Pro 플랜 기준 쿼리당 $0.005(설정 탭에서 변경 가능)
        'auto_pipeline_enabled':True,'auto_pipeline_batch':10,
@@ -2046,6 +2063,159 @@ def _verify_post_by_title(d, bbs, bo, title):
         time.sleep(1.5)
     return None
 
+# ==================== browserless 초고속 발행 (requests, 셀레늄 없이) ====================
+# 대표님 지시(2026-09-07): 지오알엔디 등 느린 게시판이 셀레늄 발행(100초+) 때문에
+#   관리자서버 Cloudflare 524에 걸린다. 대상 게시판들은 Cloudflare가 없으므로(Apache/nginx)
+#   requests로 직접 GET폼→캡차풀이→POST write_update.php 하면 ~2~3초에 발행된다.
+#   비회원 글쓰기(로그인 불필요) 그누보드가 대상. 실패 시 셀레늄으로 폴백.
+_HTTP_UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+
+def _solve_kcaptcha_bytes(img_bytes, cfg):
+    """kcaptcha 이미지 바이트를 2captcha로 풀어 답(숫자)을 반환. 실패 시 ''."""
+    api_key=(cfg.get('twocaptcha_api_key') or '').strip()
+    if not api_key or not cfg.get('twocaptcha_enabled'): return ''
+    import tempfile
+    try:
+        from twocaptcha import TwoCaptcha
+    except ImportError:
+        return ''
+    tp=None
+    try:
+        with tempfile.NamedTemporaryFile(suffix='.jpg',delete=False) as f:
+            f.write(img_bytes); tp=f.name
+        res=TwoCaptcha(api_key).normal(tp)
+        ans=(res.get('code') if isinstance(res,dict) else str(res)) or ''
+        # 2captcha는 답을 반환하면(맞든 틀리든) 과금되므로 비용은 여기서 기록한다.
+        if ans: _record_captcha_usage('kcaptcha',True,cfg)
+        return ans
+    except Exception:
+        return ''
+    finally:
+        if tp:
+            try: os.unlink(tp)
+            except Exception: pass
+
+def gnuboard_post_http(site, title, content_html):
+    """requests 기반 초고속 그누보드 발행(비회원 글쓰기). 성공: (True, 글URL).
+       불가/폴백 필요: (None, 사유) → 호출측이 셀레늄으로 폴백. 실패: (False, 사유)."""
+    import requests as _rq
+    try:
+        import urllib3; urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    except Exception: pass
+    cfg=load_config()
+    url=site.get('site_url','').rstrip('/')
+    m=re.match(r'(https?://[^/]+)',url); base=m.group(1) if m else url
+    bbs=base+'/bbs'
+    bo=site.get('bo_table','free')
+    # 로그인 필요 사이트(mb_id 저장됨)는 requests 로그인까지 필요 → 일단 셀레늄 폴백.
+    if str(site.get('mb_id') or '').strip():
+        return None,'로그인 사이트 — 셀레늄 폴백'
+    s=_rq.Session(); s.headers.update({'User-Agent':_HTTP_UA})
+    try:
+        r=s.get(f'{bbs}/write.php',params={'bo_table':bo},timeout=15,verify=False)
+    except Exception as e:
+        return None,f'폼 GET 실패({str(e)[:40]}) — 폴백'
+    if r.status_code>=400:
+        return None,f'폼 GET {r.status_code} — 폴백'
+    html=r.text or ''
+    low=html.lower()
+    # 로그인 게이트/회원전용이면 폴백(비회원 글쓰기 폼이 아님)
+    if ('mb_password' in low and 'login' in low and 'wr_subject' not in low) or ('name="wr_subject"' not in low):
+        return None,'비회원 글쓰기 폼 아님 — 폴백'
+    # 폼의 write_update 액션 확인
+    if 'write_update.php' not in low:
+        return None,'write_update 액션 없음 — 폴백'
+    # ── 폼 필드 수집 ──
+    def _hidden(name,default=''):
+        mm=re.search(r'<input[^>]*name=["\']'+re.escape(name)+r'["\'][^>]*value=["\']([^"\']*)["\']',html,re.I)
+        if mm: return mm.group(1)
+        mm=re.search(r'<input[^>]*value=["\']([^"\']*)["\'][^>]*name=["\']'+re.escape(name)+r'["\']',html,re.I)
+        return mm.group(1) if mm else default
+    data={
+        'uid':_hidden('uid'), 'w':_hidden('w',''), 'bo_table':bo, 'wr_id':_hidden('wr_id','0'),
+        'sca':'','sfl':'','stx':'','spt':'','sst':'','sod':'','page':'',
+        'wr_name':(str(site.get('writer_name') or '').strip() or (cfg.get('brand') or '게시자').strip()),
+        'wr_password':((cfg.get('guest_post_password') or '').strip() or secrets.token_hex(4)),
+        'wr_email':_brand_email(cfg,site),
+        'wr_homepage':(cfg.get('landing_url') or '').strip(),
+        'wr_subject':_strip_non_bmp(title),
+        'wr_content':_strip_non_bmp(content_html),
+    }
+    # w_time(스팸방지 타임스탬프)이 폼에 있으면 그대로 전달
+    wt=_hidden('w_time','');
+    if wt: data['w_time']=wt
+    # html 렌더 필드: 값이 이미 html*면 그대로, 아니면 html1(HTML 렌더)
+    hv=_hidden('html','')
+    data['html']= hv if re.match(r'^html',hv or '',re.I) else 'html1'
+    # 링크 필드(있으면 영상/랜딩)
+    if re.search(r'name=["\']wr_link1["\']',html,re.I):
+        data['wr_link1']=(cfg.get('video_url') or cfg.get('landing_url') or '').strip()
+    # ── 캡차 ──
+    capm=re.search(r'g5_captcha_url\s*=\s*["\']([^"\']+)["\']',html)
+    needs_cap=bool(capm) or ('captcha_key' in low) or ('kcaptcha' in low)
+    cap_base=(capm.group(1) if capm else (base+'/plugin/kcaptcha')) if needs_cap else ''
+    def _fetch_captcha_answer():
+        """세션에 정답 심기 → 이미지 GET → 2captcha 풀이. (답, 사유). 실패시 ('',사유)."""
+        try:
+            s.post(cap_base+'/kcaptcha_session.php',timeout=12,verify=False)
+            ci=s.get(cap_base+f'/kcaptcha_image.php?t={int(time.time()*1000)}',timeout=12,verify=False)
+            if not (ci.status_code<400 and ci.content and len(ci.content)>200):
+                return '','캡차 이미지 수신 실패'
+            ans=_solve_kcaptcha_bytes(ci.content,cfg)
+            return (ans,'') if ans else ('','2captcha 풀이 실패')
+        except Exception as e:
+            return '',f'캡차 처리 오류({str(e)[:30]})'
+    # ── 캡차 오답 시 새 이미지로 재시도(최대 3회) — 한 번 OCR 오답으로 글 날리지 않게(리뷰 지시) ──
+    CAP_TRIES=3 if needs_cap else 1
+    last_reason='HTTP 발행 확인 불가'
+    for attempt in range(CAP_TRIES):
+        if needs_cap:
+            ans,why=_fetch_captcha_answer()
+            if not ans:
+                last_reason=why
+                if attempt+1<CAP_TRIES: time.sleep(1); continue
+                return (None,why+' — 폴백') if '이미지' in why or '오류' in why else (False,why)
+            data['captcha_key']=ans
+            # uid/w_time이 회전하는 스킨 대비: 캡차 재시도마다 폼을 다시 읽어 최신 토큰 반영
+            if attempt>0:
+                try:
+                    rr=s.get(f'{bbs}/write.php',params={'bo_table':bo},timeout=12,verify=False)
+                    h2=rr.text or ''
+                    for fld in ('uid','w_time','w','wr_id'):
+                        m2=re.search(r'<input[^>]*name=["\']'+fld+r'["\'][^>]*value=["\']([^"\']*)["\']',h2,re.I)
+                        if m2: data[fld]=m2.group(1)
+                except Exception: pass
+        # ── 제출 ──
+        try:
+            pr=s.post(f'{bbs}/write_update.php',data=data,timeout=20,verify=False,
+                      headers={'Referer':f'{bbs}/write.php?bo_table={bo}'},allow_redirects=True)
+        except Exception as e:
+            return None,f'POST 실패({str(e)[:40]}) — 폴백'
+        fin=pr.url or ''; body=pr.text or ''
+        # 성공 판정: 최종 URL이 글보기(wr_id=)면 성공 (2captcha 비용은 풀이 시 이미 기록됨)
+        if re.search(r'wr_id=(\d+)',fin) and 'write_update' not in fin:
+            return True,fin
+        if re.search(r'wr_id=\d+',body) and ('board.php' in body or 'view' in body.lower()):
+            mm=re.search(r'(https?://[^"\']*board\.php\?[^"\']*wr_id=\d+)',body)
+            if mm:
+                return True,mm.group(1)
+        # 알림·에러 문구
+        alerts=re.findall(r"alert\(['\"]([^'\"]+)['\"]\)",body)
+        blob=' '.join(alerts)+' '+re.sub(r'<[^>]+>',' ',body)[:1500]
+        cap_miss=any(k in blob for k in ['자동등록방지 숫자가 일치','숫자가 일치하지','보안문자가 일치','자동등록방지 숫자를 다시','입력 글자가 틀'])
+        if cap_miss:
+            last_reason='캡차 불일치(2captcha 오답)'
+            if attempt+1<CAP_TRIES: time.sleep(1); continue   # 새 캡차로 재시도
+            return False,last_reason+f' — {CAP_TRIES}회 실패'
+        if '내용을 입력' in blob: return False,'본문 미입력'
+        if '금지단어' in blob: return False,'금지단어 차단'
+        if any(k in blob for k in ['권한이 없','로그인','회원만']): return None,'권한/로그인 필요 — 폴백'
+        if any(k in blob for k in ['등록되었','작성되었','완료']):
+            return True,f'{base}/bbs/board.php?bo_table={bo}'
+        # 판정 불가 → 셀레늄 폴백(HTTP가 못 뚫은 케이스)
+        return None,'HTTP 발행 확인 불가 — 폴백'
+    return None,last_reason+' — 폴백'
+
 def gnuboard_post(site, title, content_html, skip_login=False):
     from selenium.webdriver.common.by import By
     from selenium.webdriver.support.ui import WebDriverWait
@@ -3133,6 +3303,21 @@ def do_post(site, title, content_html, skip_login=False):
             return ok,msg
         except Exception as e:
             return False,'KBoard 발행 오류: '+str(e)[:120]
+    # 2-0) ★browserless 초고속 발행(requests) 우선 시도 — 그누보드 비회원 글쓰기.
+    #      성공(True)이면 바로 반환(~2~3초, 524 회피). None이면 셀레늄으로 폴백,
+    #      False(캡차오답·본문미입력 등 명확한 실패)면 셀레늄 재시도 대신 그대로 반환.
+    #      cafe24·skip_login(가입직후 세션)·학습레시피 케이스는 제외(위/아래에서 처리).
+    if plat!='cafe24' and not skip_login and (cfg_http:=load_config()).get('http_publish_enabled',True):
+        try:
+            hok,hmsg=gnuboard_post_http(site,title,content_html)
+        except Exception as e:
+            hok,hmsg=None,f'HTTP 예외({str(e)[:40]}) — 폴백'
+        if hok is True:
+            add_log(f'[browserless] 발행 성공 {site.get("name") or (site.get("site_url","") or "")[:24]}')
+            return True,hmsg
+        if hok is False:
+            return False,hmsg   # 명확한 실패(캡차오답 등) — 셀레늄으로 반복 시도하지 않음
+        # hok is None → 셀레늄 폴백으로 진행
     try:
         ok,msg=(cafe24_post if plat=='cafe24' else gnuboard_post)(site,title,content_html,skip_login=skip_login)
     except Exception as e:
@@ -5714,6 +5899,9 @@ def chk():
         cfgtok=(load_config().get('log_token') or '').strip()
         if cfgtok and tok==cfgtok:
             return  # 통과
+    # ★업로드 이미지(/media/)는 공개 — 외부 게시판이 게시글의 <img>를 로드해야 하므로
+    #   로그인·UA차단 없이 접근 가능해야 한다(안 그러면 로그인HTML을 받아 이미지가 깨짐 — 대표님 제보).
+    if request.path.startswith('/media/'): return
     # 알려진 크롤러/스크래퍼 User-Agent 즉시 차단(로그인·업데이트 제외)
     if request.path not in ['/robots.txt','/api/admin/update']:
         ua=(request.headers.get('User-Agent','') or '').lower()
