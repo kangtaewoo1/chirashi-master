@@ -4052,18 +4052,37 @@ def _http_json(url):
     except Exception:
         return 0, None
 
+def _gmail_dot_variant(local):
+    """지메일 아이디에 점(.)을 랜덤 삽입해 유니크 주소를 만든다. 지메일은 점을 무시하고 배달하므로
+       모두 같은 받은편지함으로 오지만, 게시판엔 서로 다른 정상 이메일로 보인다('+' 거부 회피).
+       예: 'aveydg1' → 'a.veyd.g1'. 글자 사이 위치를 랜덤 선택(최소 1개, 연속점·양끝점 금지)."""
+    if len(local)<2: return local
+    gaps=list(range(1,len(local)))          # 점을 넣을 수 있는 글자 사이 위치
+    random.shuffle(gaps)
+    k=random.randint(1,min(3,len(gaps)))    # 1~3개 점 삽입
+    picks=sorted(gaps[:k])
+    out=[]
+    for i,ch in enumerate(local):
+        if i in picks: out.append('.')
+        out.append(ch)
+    return ''.join(out)
+
 def tempmail_create():
-    """인증용 이메일 발급. IMAP(지메일 등) 설정 시 '내지메일+랜덤@도메인' 플러스주소로 유니크 발급하고
-       IMAP으로 수신(일회용 도메인 차단 게시판도 통과). 미설정 시 mail.tm→1secmail 임시메일.
+    """인증용 이메일 발급. IMAP(지메일 등) 설정 시 도트(.) 변형 유니크 주소로 발급하고
+       IMAP으로 수신(플러스주소 거부 게시판도 통과). 미설정 시 mail.tm→1secmail 임시메일.
        반환: (address, password, token). 태그: 'IMAP:<tag>' / 'MT:<t>' / '1S:<login>|<domain>'."""
     # 0) IMAP 실제메일(지메일 등) — 설정돼 있으면 최우선(진짜 도메인이라 수신율↑)
     try:
         _cfg=load_config(); _em=(_cfg.get('imap_email') or '').strip(); _pw=(_cfg.get('imap_password') or '').strip()
         if _em and _pw and '@' in _em:
             _local,_,_dom=_em.partition('@')
-            _tag='twseo'+secrets.token_hex(5)
-            add_log(f'[지메일 IMAP] {_em} 로 인증 (플러스주소 {_local}+{_tag}@{_dom} — 대표님 지메일로 실제 수신)')
-            return f'{_local}+{_tag}@{_dom}', '', 'IMAP:'+_tag
+            # 게시판이 '+플러스주소'를 거부/무발송하는 경우가 많아(실측: 인증메일 0통) 도트(.) 트릭 사용.
+            # 지메일은 아이디 중간 점을 무시하고 배달하지만, 게시판엔 정상 이메일로 보이고
+            # 인증메일의 TO 헤더엔 점 포함 원본 주소가 남아 매칭 가능하다.
+            _dotted=_gmail_dot_variant(_local)
+            _addr=f'{_dotted}@{_dom}'
+            add_log(f'[지메일 IMAP] {_em} 로 인증 (도트주소 {_addr} — 대표님 지메일로 실제 수신)')
+            return _addr, '', 'IMAP:'+_addr
         else:
             # ★진단: 지메일 설정이 비어 임시메일로 떨어짐 = 인증 게시판 전환율↓의 근본원인.
             add_log('[임시메일] ⚠ IMAP 미설정(지메일 계정/앱비번 비어있음) → mail.tm 임시메일 사용(차단률 높음). 설정탭에서 지메일 저장 필요')
@@ -4113,33 +4132,33 @@ def _imap_msg_text(msg):
     except Exception: pass
     return ' '.join(parts)
 
-def _imap_wait_verify(tag, timeout=120):
-    """지메일 등 IMAP 받은편지함에서 플러스주소(+tag)로 온 인증메일을 찾아 링크/코드 추출."""
+def _imap_wait_verify(addr, timeout=120):
+    """지메일 IMAP 받은편지함에서 도트주소(addr, 예: a.veyd.g1@gmail.com)로 온 인증메일을 찾아 링크/코드 추출.
+       지메일은 점을 무시하고 배달하므로 받은편지함은 하나지만, 게시판이 보낸 원본 주소(점 포함)는
+       To/Delivered-To 헤더에 남아 정확 매칭이 된다. UNSEEN을 훑어 헤더에 addr이 있는 메일을 찾는다."""
     import imaplib, email as _email
     cfg=load_config(); em=(cfg.get('imap_email') or '').strip(); pw=(cfg.get('imap_password') or '').strip()
     host=(cfg.get('imap_host') or 'imap.gmail.com').strip()
     if not em or not pw: return None
+    addr_l=str(addr).lower()
     deadline=time.time()+timeout
     while time.time()<deadline:
         try:
             M=imaplib.IMAP4_SSL(host); M.login(em,pw); M.select('INBOX')
             ids=[]
+            # 지메일 검색은 점을 정규화하므로 TO 검색으로 정확 매칭이 어렵다 → 최근 UNSEEN 전체를 훑는다.
             try:
-                typ,data=M.search(None,'TO',tag)   # +tag 주소로 온 메일
+                typ,data=M.search(None,'UNSEEN')
                 if data and data[0]: ids=data[0].split()
             except Exception: pass
-            if not ids:
-                try:
-                    typ,data=M.search(None,'UNSEEN')
-                    if data and data[0]: ids=data[0].split()
-                except Exception: pass
-            for mid in reversed(ids[-20:]):
+            for mid in reversed(ids[-30:]):
                 typ,md=M.fetch(mid,'(RFC822)')
                 if not md or not md[0]: continue
                 msg=_email.message_from_bytes(md[0][1])
-                hdr=(str(msg.get('To',''))+' '+str(msg.get('Delivered-To',''))+' '+str(msg.get('X-Original-To',''))).lower()
+                hdr=(str(msg.get('To',''))+' '+str(msg.get('Delivered-To',''))+' '+str(msg.get('X-Original-To',''))+' '+str(msg.get('Envelope-To',''))).lower()
+                # 헤더에 정확한 도트주소가 있어야 이 가입의 인증메일(다른 가입 메일과 혼선 방지)
+                if addr_l not in hdr: continue
                 body=_imap_msg_text(msg)
-                if tag.lower() not in hdr and tag.lower() not in body.lower(): continue
                 r=_extract_verify(body, body)
                 if r:
                     try: M.store(mid,'+FLAGS','\\Seen')
