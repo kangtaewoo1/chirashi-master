@@ -2192,29 +2192,60 @@ def gnuboard_post_http(site, title, content_html):
         except Exception as e:
             return None,f'POST 실패({str(e)[:40]}) — 폴백'
         fin=pr.url or ''; body=pr.text or ''
-        # 성공 판정: 최종 URL이 글보기(wr_id=)면 성공 (2captcha 비용은 풀이 시 이미 기록됨)
-        if re.search(r'wr_id=(\d+)',fin) and 'write_update' not in fin:
+        # ── 성공 판정 (리뷰 반영: 오탐·중복발행 방지) ──
+        # (1) 최종 리다이렉트 URL에 wr_id가 있으면 확실한 성공(board.php 없어도 됨).
+        mfin=re.search(r'[?&]wr_id=(\d+)',fin)
+        if mfin and 'write_update' not in fin:
             return True,fin
-        if re.search(r'wr_id=\d+',body) and ('board.php' in body or 'view' in body.lower()):
-            mm=re.search(r'(https?://[^"\']*board\.php\?[^"\']*wr_id=\d+)',body)
-            if mm:
-                return True,mm.group(1)
+        # (2) write_update가 성공 시 뿌리는 리다이렉트 타깃(location.replace/href, meta refresh)에서만
+        #     wr_id를 뽑는다. 페이지 아무 곳의 board.php?wr_id= (목록·최근글 링크)는 다른 글이라 오탐 → 제외.
+        mgo=re.search(r'''(?:location\.(?:replace|href)\s*=?\s*|url=)['"]([^'"]*[?&]wr_id=\d+[^'"]*)['"]''',body,re.I)
+        if mgo:
+            gu=mgo.group(1).replace('&amp;','&')
+            if not gu.startswith('http'): gu=urllib.parse.urljoin(f'{bbs}/',gu)
+            return True,gu
         # 알림·에러 문구
         alerts=re.findall(r"alert\(['\"]([^'\"]+)['\"]\)",body)
         blob=' '.join(alerts)+' '+re.sub(r'<[^>]+>',' ',body)[:1500]
+        # (3) 승인제 게시판: 승인대기/등록완료 문구는 '이미 등록됨'이므로 성공 처리(재시도 중복발행 방지).
+        if any(k in blob for k in ['승인 대기','승인대기','관리자 확인','등록되었습니다','등록 완료','작성되었습니다','작성 완료']):
+            return True,f'{base}/bbs/board.php?bo_table={bo}'
         cap_miss=any(k in blob for k in ['자동등록방지 숫자가 일치','숫자가 일치하지','보안문자가 일치','자동등록방지 숫자를 다시','입력 글자가 틀'])
         if cap_miss:
             last_reason='캡차 불일치(2captcha 오답)'
             if attempt+1<CAP_TRIES: time.sleep(1); continue   # 새 캡차로 재시도
-            return False,last_reason+f' — {CAP_TRIES}회 실패'
+            # HTTP 캡차 N회 실패 → 셀레늄 폴백(자체 캡차·학습 경로가 뚫을 수 있음). 아직 글 없음=중복 위험 없음.
+            return None,last_reason+f' — {CAP_TRIES}회 실패, 셀레늄 폴백'
         if '내용을 입력' in blob: return False,'본문 미입력'
         if '금지단어' in blob: return False,'금지단어 차단'
         if any(k in blob for k in ['권한이 없','로그인','회원만']): return None,'권한/로그인 필요 — 폴백'
-        if any(k in blob for k in ['등록되었','작성되었','완료']):
-            return True,f'{base}/bbs/board.php?bo_table={bo}'
-        # 판정 불가 → 셀레늄 폴백(HTTP가 못 뚫은 케이스)
+        # (4) URL/문구로 판정 불가 — 글이 실제로 올라갔는지 목록에서 확인(중복발행 방지의 핵심).
+        #     올라갔으면 True(셀레늄 재발행 안 함), 안 올라갔으면 None(안전 폴백 — 중복 위험 없음).
+        landed=_http_verify_title_on_board(s,bbs,bo,title)
+        if landed: return True,landed
         return None,'HTTP 발행 확인 불가 — 폴백'
     return None,last_reason+' — 폴백'
+
+def _http_verify_title_on_board(sess, bbs, bo, title):
+    """게시판 목록을 requests로 다시 읽어 방금 올린 제목이 실제로 등록됐는지 확인.
+       성공하면 그 글 URL, 아니면 ''. (do_post의 중복발행 방지 — 제출성공했는데 확인만 실패한 경우 구제)"""
+    def norm(x): return re.sub(r'[^0-9A-Za-z가-힣]','',str(x or '')).lower()
+    key=norm(title)
+    if len(key)<8: return ''
+    try:
+        r=sess.get(f'{bbs}/board.php',params={'bo_table':bo},timeout=15,verify=False)
+        html=r.text or ''
+    except Exception:
+        return ''
+    # wr_id 링크와 그 앵커 텍스트를 훑어 제목이 포함되는 행 찾기
+    for m in re.finditer(r'href=["\']([^"\']*[?&]wr_id=(\d+)[^"\']*)["\'][^>]*>(.*?)</a>',html,re.S|re.I):
+        href,wid,anchor=m.group(1),m.group(2),re.sub(r'<[^>]+>','',m.group(3))
+        at=norm(anchor)
+        if len(at)>=8 and (at in key or key in at):
+            u=href.replace('&amp;','&')
+            if not u.startswith('http'): u=urllib.parse.urljoin(f'{bbs}/',u)
+            return u
+    return ''
 
 def gnuboard_post(site, title, content_html, skip_login=False):
     from selenium.webdriver.common.by import By
