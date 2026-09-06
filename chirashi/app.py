@@ -565,6 +565,8 @@ def load_config():
        'vps_reserve_mb':350,'vps_mb_per_worker':300,   # 메모리 가드 민감도(낮출수록 워커 더 허용·OOM위험↑)
 
        'discover_interval_sec':600,   # 발굴 주기 10분(크레딧 절약). 목표 도달 시 자동 중단
+       'pipeline_interval_sec':120,   # 전환(후보→가입→발행테스트) 전용 루프 주기 — 발굴과 독립
+       'login_signup_per_cycle':2,    # 로그인 필요 게시판 자동가입은 주기당 소수만(비회원 우선·이메일인증 낭비 방지)
        'log_token':'cae3aaa53d6f3576a1c1f6a258f79129'}   # 읽기전용 로그 조회 토큰(?token= 로 /api/logs·/api/worker-log 접근)
     c=load_json(CONFIG_FILE,None)
     if c is None or not isinstance(c,dict): save_json(CONFIG_FILE,d); return d.copy()
@@ -4410,7 +4412,12 @@ def auto_pipeline_once(limit=5):
         no_cap = not c.get('captcha')                                  # 캡차 없으면 더 빠름
         return (1 if direct else 0, 1 if no_cap else 0, c.get('score',0))
     pend.sort(key=_prio, reverse=True)
-    pend=pend[:max(1,limit)]
+    # 비회원(로그인 불필요) 우선으로 배치를 채우고, 로그인 필요 게시판은 소수만 처리한다.
+    # (로그인 게시판은 이메일 인증 대기로 슬롯을 낭비 → 전환율 저하. 대표님 지시: 비회원 우선.)
+    _guest=[c for c in pend if c.get('write_form') and not c.get('login_required')]
+    _login=[c for c in pend if not (c.get('write_form') and not c.get('login_required'))]
+    _login_cap=int(cfg.get('login_signup_per_cycle',2) or 2)
+    pend=_guest[:max(1,limit)] + _login[:max(0,_login_cap)]
     done=0; registered=0; signed=0; results=[]
     for c in pend:
         name=c.get('board_name') or c.get('domain') or c.get('url','')[:30]
@@ -4726,20 +4733,27 @@ def discover_loop():
             else:
                 # 발굴 꺼져 있어도 미검수 후보는 계속 처리
                 if any(not c.get('screened') for c in load_cands()): screen_pending(10)
-            # 완전 자동 파이프라인: 검수완료 후보를 자동가입→실발행→자동등록까지 처리
-            if cfg.get('auto_pipeline_enabled'):
-                try:
-                    limit=int(cfg.get('auto_pipeline_batch',3) or 3)
-                    auto_pipeline_once(limit=limit)
-                except Exception as e:
-                    add_log(f'[자동파이프라인 오류] {str(e)[:100]}')
-            else:
-                # 파이프라인 꺼져 있어도 사이트 목록은 상시 최신화(막힌 곳 자동 탈락)
-                try: reconcile_sites()
-                except Exception as e: add_log(f'[자동정리 오류] {str(e)[:80]}')
+            # 사이트 목록 상시 최신화(막힌 곳 자동 탈락). 후보→가입→발행 '전환'은 별도 pipeline_loop이
+            # 독립적으로 돌린다(발굴이 루프를 독차지해 전환이 굶던 문제 해결 — 대표님 지시).
+            try: reconcile_sites()
+            except Exception as e: add_log(f'[자동정리 오류] {str(e)[:80]}')
         except Exception as e:
             add_log(f'[발굴 루프 오류] {str(e)[:100]}')
         time.sleep(int(load_config().get('discover_interval_sec',600) or 600))   # 10분마다 (크레딧 절약 — 하루에 몰아 안 쓰고 분산. 한도는 discover_once가 지킴)
+
+def pipeline_loop():
+    """전환 전용 루프: 발굴과 독립적으로 auto_pipeline_once를 돌려 후보→가입→발행테스트→등록을
+       꾸준히 처리한다(발굴이 루프를 독차지해 전환이 굶던 문제 해결). pipeline_interval_sec(기본 120초)."""
+    time.sleep(25)   # 부팅 직후 복구/발굴과 겹치지 않게 약간 지연
+    while True:
+        try:
+            cfg=load_config()
+            if cfg.get('auto_pipeline_enabled'):
+                auto_pipeline_once(limit=int(cfg.get('auto_pipeline_batch',3) or 3))
+        except Exception as e:
+            add_log(f'[전환루프 오류] {str(e)[:100]}')
+        try: time.sleep(int(load_config().get('pipeline_interval_sec',120) or 120))
+        except Exception: time.sleep(120)
 
 def member_paid_now(m):
     """이번 달 납부 완료 여부."""
@@ -7598,7 +7612,7 @@ def main():
         print('⏰ 스케줄러 시작 (KST 기준)')
     except Exception as e: print('스케줄러 시작 실패:',e)
     # 지연 재시도 루프 / 텔레그램 명령 수신 / 발행글 생존 검증
-    for fn,nm in [(retry_loop,'RETRY'),(telegram_loop,'TG'),(verify_loop,'VERIFY'),(member_scheduler_loop,'MSCHED'),(discover_loop,'DISCO'),(publish_loop,'PUBLISH')]:
+    for fn,nm in [(retry_loop,'RETRY'),(telegram_loop,'TG'),(verify_loop,'VERIFY'),(member_scheduler_loop,'MSCHED'),(discover_loop,'DISCO'),(pipeline_loop,'PIPELINE'),(publish_loop,'PUBLISH')]:
         try: threading.Thread(target=fn,name=nm,daemon=True).start()
         except Exception as e: print(f'{nm} 시작 실패:',e)
     print('🔁 재시도·📱텔레그램·🔎검증 스레드 시작')
