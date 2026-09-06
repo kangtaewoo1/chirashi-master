@@ -4481,8 +4481,11 @@ def auto_pipeline_once(limit=5):
     #  글쓰기폼 미확인이라도 일단 자동가입→발행 시도해 되는지 판별한다 — 방치 없이 되거나 탈락)
     def _has_write_path(c):
         if c.get('write_form'): return True
-        if c.get('platform') in ('gnuboard','cafe24','kboard') and bool((c.get('bo_table') or '').strip()): return True
-        # URL이 게시판 경로면 bo_table 미추출이어도 시도 대상 (write.php/board.php/bbs 등)
+        # 플랫폼(그누보드/카페24/kboard)이 확인되면 bo_table 미추출이어도 시도 — discover_write_page가
+        # 그 도메인에서 실제 게시판을 찾아 발행 시도(쌓인 후보 소진·대표님 지시). 없으면 자동 탈락.
+        if c.get('platform') in ('gnuboard','cafe24','kboard'): return True
+        # 홍보허용 흔적이 있거나 게시판형 URL이면 시도 대상
+        if c.get('promo_ok') or c.get('board_name'): return True
         u=(c.get('url') or '').lower()
         return bool(re.search(r'(bbs/|board\.php|write\.php|bo_table=|/board/|board_no=|kboard)', u))
     # 오류안내 페이지 제목 후보는 처리 전에 즉시 탈락(뚜뚜월드처럼 홈이 '오류안내 페이지' — 발행 무의미).
