@@ -3583,11 +3583,33 @@ CAFE24_FRAGMENTS=['board/free/list.html 홍보','board/free/write.html 비회원
                   'cafe24 자유게시판 업체등록 무료','cafe24 홍보게시판 010 문의','cafe24 게시판 광고 게시 가능',
                   'board list.html 자유 홍보 010','cafe24 자유게시판 링크 등록']
 
+# ★무인증(꿀사이트) 최우선 조각 — 실측상 유일하게 전환되는 유형.
+#  ① 비회원 글쓰기(가입 자체가 없음=인증 불필요) ② 그누보드 기본가입(이메일인증 기본 OFF)
+#  본인인증/실명인증 게시판은 auto_signup에서 조기 제외되므로 여기선 무인증 신호만 강하게 민다.
+NO_VERIFY_FRAGMENTS=[
+    # 가입 없이 바로 글쓰기 = 인증 원천 불필요 (최고 전환)
+    'bbs/write.php 비회원 글쓰기 홍보','bbs/board.php 비회원 글작성 가능','회원가입 없이 글쓰기 게시판',
+    'bbs/board.php 비회원도 글쓰기','누구나 글쓰기 게시판 로그인 없이','비회원 글쓰기 홍보게시판 그누보드',
+    'bbs/write.php bo_table=free 비회원 글쓰기','bbs/write.php bo_table=promotion 비회원 글쓰기',
+    # 가입은 하되 이메일/본인인증 없는 게시판 (그누보드 기본값)
+    'bbs/register.php 이메일 인증 없이 가입','그누보드 회원가입 인증없이 바로',
+    'bbs/board.php 가입 즉시 글쓰기 홍보','회원가입 바로 승인 글쓰기 게시판',
+    'bbs/board.php 자유가입 홍보 글쓰기','간편가입 홍보게시판 글쓰기 그누보드',
+    # 실제 홍보글(010)이 이미 올라와 있는 무관리 게시판 역추적 = 무인증·무검열 증거
+    'bbs/board.php 010 홍보 글 비회원','bbs/board.php 광고 글 등록 비회원 환영',
+]
+
 def _board_finder_queries(provider):
     """플랫폼(그누보드/카페24) 홍보·자유 게시판을 '찾기 위한' 검색어.
-       사용자의 지역×업종 목록(=경쟁사 검색)과 무관하게 항상 앞에 실행한다."""
+       사용자의 지역×업종 목록(=경쟁사 검색)과 무관하게 항상 앞에 실행한다.
+       ★무인증(비회원/기본가입) 게시판 조각을 맨 앞에 배치해 쿼리 한도 안에서 최우선 실행."""
     qs=[]
     if provider=='brave':
+        # 0) 무인증 최우선 — 실측상 유일 전환 유형(비회원/이메일인증 없는 가입)
+        for frag in NO_VERIFY_FRAGMENTS:
+            qs.append(frag)
+            for i in INTENT[:2]:
+                qs.append(f'{frag} {i}')
         # 그누보드: 평문 URL조각 + 홍보의도 (라이브 검증: 실제 홍보게시판 10/10 적중)
         for frag in BRAVE_URL_FRAGMENTS:
             qs.append(frag)
@@ -3604,7 +3626,11 @@ def _board_finder_queries(provider):
             for i in INTENT[:2]:
                 qs.append(f'{frag} {i}')
     else:
-        # Google: inurl: 연산자가 강력
+        # Google: inurl: 연산자가 강력 — 무인증(비회원 글쓰기) 신호를 맨 앞에.
+        qs.append('inurl:bbs/write.php 비회원 글쓰기')
+        qs.append('inurl:bbs/board.php 회원가입 없이 글쓰기')
+        qs.append('inurl:bbs/board.php 비회원 홍보 글쓰기')
+        qs.append('inurl:bbs/board.php 누구나 글쓰기 홍보')
         for p in GNU_PATTERNS+CAFE_PATTERNS:
             qs.append(p)
             for i in INTENT[:4]:
@@ -4036,7 +4062,11 @@ def tempmail_create():
         if _em and _pw and '@' in _em:
             _local,_,_dom=_em.partition('@')
             _tag='twseo'+secrets.token_hex(5)
+            add_log(f'[임시메일] IMAP({_em}) 플러스주소 발급 → {_local}+{_tag}@{_dom}')
             return f'{_local}+{_tag}@{_dom}', '', 'IMAP:'+_tag
+        else:
+            # ★진단: 지메일 설정이 비어 임시메일로 떨어짐 = 인증 게시판 전환율↓의 근본원인.
+            add_log('[임시메일] ⚠ IMAP 미설정(지메일 계정/앱비번 비어있음) → mail.tm 임시메일 사용(차단률 높음). 설정탭에서 지메일 저장 필요')
     except Exception: pass
     # 1) mail.tm 시도
     st, doms = _tempmail_req('/domains')
