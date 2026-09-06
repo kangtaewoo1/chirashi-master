@@ -4932,9 +4932,13 @@ def pipeline_loop():
         try:
             cfg=load_config()
             if cfg.get('auto_pipeline_enabled'):
-                auto_pipeline_once(limit=int(cfg.get('auto_pipeline_batch',3) or 3))
+                _t0=time.time()
+                add_log('[전환루프] 파이프라인 1회 시작')
+                r=auto_pipeline_once(limit=int(cfg.get('auto_pipeline_batch',3) or 3))
+                _el=int(time.time()-_t0)
+                add_log(f'[전환루프] 1회 완료 ({_el}초) — 처리 {r.get("processed",0) if isinstance(r,dict) else "?"} · 가입 {r.get("signed_up",0) if isinstance(r,dict) else "?"} · 등록 {r.get("registered",0) if isinstance(r,dict) else "?"}')
         except Exception as e:
-            add_log(f'[전환루프 오류] {str(e)[:100]}')
+            add_log(f'[전환루프 오류] {str(e)[:120]}')
         try: time.sleep(int(load_config().get('pipeline_interval_sec',120) or 120))
         except Exception: time.sleep(120)
 
