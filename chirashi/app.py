@@ -5815,17 +5815,26 @@ def api_images_upload():
     dest=_workroom_upload_dir(wid) if wid else UPLOAD_DIR
     files=request.files.getlist('files')
     if not files: return jsonify({'ok':False,'error':'이미지 파일을 선택하세요'}),400
-    saved=[]
+    saved=[]; too_big=False; bad_ext=False
     for f in files[:20]:
-        original=secure_filename(f.filename or '')
-        ext=Path(original).suffix.lower()
-        if ext not in IMAGE_EXTENSIONS: continue
+        raw=(f.filename or '')
+        # ★확장자는 '원본 파일명'에서 뽑는다. secure_filename은 한글 파일명(노래방.jpg 등)에서
+        #   확장자를 통째로 날려(→'jpg') 정상 이미지가 거부되던 버그 수정(대표님 제보 2026-09-07).
+        ext=Path(raw).suffix.lower()
+        if ext not in IMAGE_EXTENSIONS:
+            # MIME 타입으로 폴백(파일명에 확장자가 없거나 한글로 뭉개진 경우)
+            mime=(getattr(f,'mimetype','') or '').lower()
+            ext={'image/jpeg':'.jpg','image/png':'.png','image/gif':'.gif','image/webp':'.webp'}.get(mime,'')
+            if ext not in IMAGE_EXTENSIONS: bad_ext=True; continue
         f.stream.seek(0,2); size=f.stream.tell(); f.stream.seek(0)
-        if size<=0 or size>10*1024*1024: continue
-        stem=secure_filename(Path(original).stem)[:60] or 'image'
+        if size<=0 or size>10*1024*1024: too_big=True; continue
+        stem=secure_filename(Path(raw).stem)[:60] or 'image'   # 한글이면 비어 'image'로 폴백(정상)
         name=f'{datetime.now().strftime("%Y%m%d_%H%M%S")}_{secrets.token_hex(4)}_{stem}{ext}'
         f.save(dest/name); saved.append(name)
-    if not saved: return jsonify({'ok':False,'error':'JPG·PNG·GIF·WEBP만 가능하며 파일당 최대 10MB입니다'}),400
+    if not saved:
+        if too_big and not bad_ext:
+            return jsonify({'ok':False,'error':'파일이 너무 큽니다 (파일당 최대 10MB)'}),400
+        return jsonify({'ok':False,'error':'JPG·PNG·GIF·WEBP 이미지만 가능합니다 (파일당 최대 10MB)'}),400
     return jsonify({'ok':True,'count':len(saved),'files':saved})
 
 @app.route('/api/images/file',methods=['DELETE'])
