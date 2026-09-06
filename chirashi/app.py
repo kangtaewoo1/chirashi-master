@@ -3138,7 +3138,10 @@ def _site_permanent_block(s):
 
 # 오류/안내 페이지·데모/샘플 사이트 판정 키워드(사이트 이름·게시판명 기준, 네트워크 호출 없음)
 ERROR_PAGE_HINTS=('오류안내','오류 안내','에러페이지','에러 페이지','페이지를 찾을 수 없','존재하지 않는',
-                  '삭제된 페이지','접근할 수 없','잘못된 접근','not found','error page','forbidden','access denied')
+                  '삭제된 페이지','접근할 수 없','잘못된 접근','not found','error page','forbidden','access denied',
+                  # 대표님 지시: 글 없음/삭제/이동 안내가 뜨면 발행 무의미 → 즉시 탈락
+                  '글이 존재하지 않','존재하지 않습니다','삭제되었거나 이동','삭제 되었거나','게시물이 존재하지',
+                  '게시글이 존재하지','원본글이 존재하지','이미 삭제된','삭제된 게시')
 DEMO_HOST_HINTS=('demo.','sample.','example.','sandbox.')   # 서브도메인 라벨(데모/샘플)
 DEMO_HOST_EXACT=('demo.webtro.kr','demo.sir.kr','webtro.kr','www.webtro.kr','g5.demo.sir.kr')
 
