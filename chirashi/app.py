@@ -1389,6 +1389,10 @@ def _captcha_image_data(d):
         "img[src*='/kcaptcha/']", "img[src*='seccode']", "img[src*='securimage']",
         "img[src*='authimg']", "img[src*='boan']", "img[src*='=captcha']",
         "img[src*='image.php']", "img[src*='vcode']", "img[src*='chkcaptcha']",
+        # Cafe24 표준 캡차 (rental-zon 등): /exec/.../captcha, ec-base-captcha, #captchaImg
+        "img[src*='/captcha']", "img[src*='Captcha']", "img[src*='security_number']",
+        ".ec-base-captcha img", "#captchaImg", "img#captchaImg", ".captchaImg img",
+        "img[src*='exec/front'][src*='aptcha']", "span.captcha img", ".security img",
         # id/class/alt/title 기반
         "img[id*='captcha']:not([src*='dot.gif'])", "img[class*='captcha']",
         "img[alt='CAPTCHA']", "img[alt*='captcha']", "img[alt*='보안']",
