@@ -4143,6 +4143,27 @@ CAFE24_FRAGMENTS=['board/free/list.html 홍보','board/free/write.html 비회원
                   'cafe24 자유게시판 업체등록 무료','cafe24 홍보게시판 010 문의','cafe24 게시판 광고 게시 가능',
                   'board list.html 자유 홍보 010','cafe24 자유게시판 링크 등록']
 
+# ★Cafe24 게시판 '이름' × 업종 검색 (대표님 지시 2026-09-07):
+#  이런 사이트들은 URL이 /article/상품-qa/ 처럼 '게시판 이름'을 담는다. 그래서 구글/Brave에
+#  '상품 Q&A 노래방'처럼 (게시판명 + 업종)으로 검색하면 그 게시판에 이미 올라온 홍보글이
+#  잡혀 → 같은 형제 게시판을 대량 역발굴한다. Cafe24 기본/흔한 게시판명을 폭넓게 넣는다.
+CAFE24_BOARD_NAMES=['상품 Q&A','상품 사용후기','상품문의','상품 후기','자유게시판','공지사항',
+                    'Q&A','1:1 문의게시판','게시판','커뮤니티','고객센터','묻고답하기','질문답변',
+                    '이용후기','포토후기','상품평','자유 게시판','자유 커뮤니티','문의게시판']
+# 업종(홍보 대상) — 이 게시판명들과 곱해 검색. 지역 없이 업종만으로도 형제 게시판 역추적됨.
+CAFE24_SVC_KEYWORDS=['노래방','마사지','출장마사지','가라오케','셔츠룸','룸싸롱','하이퍼블릭',
+                     '쓰리노','출장안마','스웨디시','풀싸롱','텐프로','건마','안마']
+
+def _cafe24_boardname_queries():
+    """Cafe24 게시판명 × 업종 조합 검색어 — /article/게시판명/ 형태 형제 게시판 역발굴."""
+    qs=[]
+    for bn in CAFE24_BOARD_NAMES:
+        for sv in CAFE24_SVC_KEYWORDS:
+            qs.append(f'"{bn}" {sv}')            # 예: "상품 Q&A" 노래방
+        qs.append(f'"{bn}" 010 홍보')            # 홍보글 있는 게시판 역추적
+        qs.append(f'article "{bn}" 010')          # cafe24 article URL + 게시판명
+    return qs
+
 # ★무인증(꿀사이트) 최우선 조각 — 실측상 유일하게 전환되는 유형.
 #  ① 비회원 글쓰기(가입 자체가 없음=인증 불필요) ② 그누보드 기본가입(이메일인증 기본 OFF)
 #  본인인증/실명인증 게시판은 auto_signup에서 조기 제외되므로 여기선 무인증 신호만 강하게 민다.
@@ -4185,6 +4206,8 @@ def _board_finder_queries(provider):
             qs.append(frag)
             for i in INTENT[:2]:
                 qs.append(f'{frag} {i}')
+        # ★Cafe24 게시판명 × 업종 (대표님 지시) — /article/상품-qa/ 형제 게시판 역발굴
+        qs.extend(_cafe24_boardname_queries())
     else:
         # Google: inurl: 연산자가 강력 — 무인증(비회원 글쓰기) 신호를 맨 앞에.
         qs.append('inurl:bbs/write.php 비회원 글쓰기')
@@ -4198,6 +4221,8 @@ def _board_finder_queries(provider):
         for i in INTENT:
             qs.append(f'{i} inurl:bbs')
             qs.append(f'{i} inurl:board')
+        # ★Cafe24 게시판명 × 업종 (대표님 지시)
+        qs.extend(_cafe24_boardname_queries())
     return qs
 
 def build_queries(cfg):
