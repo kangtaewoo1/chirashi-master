@@ -6990,7 +6990,7 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 <div style="max-height:520px;overflow-y:auto" id="wlogList"></div></div></div>
 
 <div id="p-disco" class="panel">
-<div class="note">🔎 Brave 검색 결과 중 실제 페이지 접속 성공 → HTML 제목 숫자 8개 이상 → 게시판 글쓰기 제목·본문 폼 확인까지 모두 통과한 사이트만 후보에 추가합니다. CAPTCHA·광고 금지 여부는 현재 후보 등록 조건에서 제외합니다.</div>
+<div class="note">🔎 Brave 검색 → 접속 성공 → 오류/데모/웹빌더·영구탈락 제외 → 게시판 글쓰기 폼 확인까지 통과한 곳만 후보로 수집합니다. 그다음 자동가입·발행테스트로 <b style="color:var(--g)">실제 되는 곳만 자동 등록</b>, 안 되는 곳은 자동 탈락됩니다. (수동 URL은 최우선 처리)</div>
 <div id="dcSummary" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px"></div>
 <div class="card"><h3>후보 수집 <span style="font-size:11px;color:var(--g);font-weight:400">🟢 완전자동 작동 중 — 발굴·검수·가입·발행이 24시간 자동으로 돕니다</span></h3>
 <div class="row">
