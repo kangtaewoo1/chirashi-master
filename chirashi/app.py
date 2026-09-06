@@ -704,7 +704,9 @@ def format_phone(phone):
     return phone
 
 PHONE_SEPS=['↔','●','=','~','-',' ','.','·','_','ㆍ','∼','◆','ㅡ']
-TITLE_EXTRAS=['확실한','24시','검증된','재방문200%','인기','추천','친절한','예약가능','빠른안내','만족도높은']
+TITLE_EXTRAS=['확실한','24시','검증된','재방문200%','인기','추천','친절한','예약가능','빠른안내','만족도높은',
+              '실시간','당일예약','프리미엄','가성비','단골많은','후회없는','1위','핫플','고급진','편안한',
+              '깔끔한','안전한','합리적인','신상','VIP','친절상담','바로연결','문의환영','강력추천','최고의']
 def format_phone_random(phone):
     """제목용 번호 랜덤 변형 (매번 다른 기호·표기). 사람은 읽을 수 있게 유지."""
     d=re.sub(r'[^0-9]','',phone or '01082755736')
@@ -732,10 +734,24 @@ def pick_phone(cfg):
     return random.choice(get_phones(cfg))
 
 def build_title(r,s,b,cfg,raw=None):
-    """제목 = 지역 키워드1 + 변형 번호 + 같은 지역 키워드2 + 기타요소 + 같은 지역 키워드3."""
+    """제목을 매번 다른 형태로 변형 — 키워드 순서·전화 위치·연결어·템플릿을 랜덤화해서
+       같은 조합이라도 제목이 반복돼 보이지 않게 한다(대표님 지시: 키워드 계속 변형)."""
     raw=raw or pick_phone(cfg)
-    extra=random.choice(TITLE_EXTRAS)
-    return f'{r} {format_phone_random(raw)} {s} {extra} {b}'[:140], raw
+    ph=format_phone_random(raw)
+    kws=[r,s,b]; random.shuffle(kws)            # 키워드 순서 랜덤
+    e1=random.choice(TITLE_EXTRAS); e2=random.choice(TITLE_EXTRAS)
+    k0,k1,k2=kws
+    templates=[
+        f'{k0} {ph} {e1} {k1} {k2}',
+        f'{k0} {k1} {ph} {k2} {e1}',
+        f'{e1} {k0} {ph} {k1} {e2} {k2}',
+        f'{k0} {k1} {k2} {e1} {ph}',
+        f'{k0} {ph} {k1} {e1} {k2} {e2}',
+        f'{k0} {e1} {k1} {ph} {k2}',
+        f'{k0} {k1} {e1} {k2} {ph} {e2}',
+        f'{ph} {k0} {k1} {e1} {k2}',
+    ]
+    return random.choice(templates).strip()[:140], raw
 
 # ==================== 키워드 풀 (엑셀/CSV 랜덤 치환) ====================
 REGION_ORDER=('인천','경기','서울','충남','충북','세종','전북','전남','경상','경북','강원','제주')
@@ -960,8 +976,20 @@ def generate_rich_html(keywords, cfg):
             ('만족스러운 마무리','다음 방문 시 좋은 혜택과 멤버십 안내를 받으실 수 있습니다.')]
     steps_html=''.join(f'<div style="background:{c2};color:#fff;text-align:center;padding:8px;font-weight:bold;border-radius:5px;margin:14px 0 6px;letter-spacing:1px;">STEP {_i+1}</div>'
         f'<p style="font-size:14px;margin:0 0 4px;line-height:1.7;"><b style="color:{c1};">{_t}</b> — {_ds}</p>' for _i,(_t,_ds) in enumerate(_steps))
+    # 업종별 소개 섹션 (참고 디자인 반영 — 지역에서 만나는 다양한 업종)
+    _cats=[('프리미엄 룸','고급스러운 프라이빗 공간에서 최상의 서비스를 경험할 수 있는 프리미엄 업소'),
+           ('노래 엔터테인먼트','최신 음향 시스템과 신나는 분위기에서 노래를 즐길 수 있는 엔터테인먼트 업소'),
+           ('퍼블릭 계열','오픈된 분위기에서 다양한 만남과 즐거움을 누릴 수 있는 퍼블릭 스타일 업소'),
+           ('바 & 라운지','감성적인 바 문화와 개성 넘치는 분위기를 즐길 수 있는 바 및 라운지 업소'),
+           ('보도 & 글로벌','전문 보도 서비스와 글로벌 감성이 어우러진 다채로운 엔터테인먼트 업소'),
+           ('프라이빗 모임','조용하고 프라이빗하게 소규모 모임을 즐기기 좋은 공간')]
+    random.shuffle(_cats); _cats=_cats[:random.randint(3,5)]
+    cats_html=''.join(f'<h3 style="color:{c1};font-size:16px;margin:18px 0 4px;">{_t}</h3>'
+        f'<p style="font-size:14px;color:#555;line-height:1.7;margin:0 0 3px;">{_ds}</p>'
+        f'<p style="font-size:13px;color:{c2};margin:0 0 6px;">{r} {random.choice([s,b])}</p>' for _t,_ds in _cats)
     # 중간 콘텐츠 블록 — 순서를 매번 섞어 변형 폭 확대(중복 방지)
     blocks=[
+        SEC('🏢',f'{r}에서 만나는 다양한 업종')+cats_html,
         SEC('⭐',f'{r} {s} 주요 특징')+f'<ul style="font-size:15px;padding:0;list-style:none;color:#444;">{feats}</ul>',
         SEC('🙋',f'{r} {s} 이런 분께 추천합니다')+f'<ul style="font-size:15px;padding:0;list-style:none;color:#444;">{recos}</ul>',
         SEC('💬',f'{r} {s} 자주 묻는 질문')+f'<dl style="font-size:15px;margin:14px 0;">{faqs}</dl>',
