@@ -2085,11 +2085,23 @@ def gnuboard_post(site, title, content_html, skip_login=False):
         except:
             ta=d.find_element(By.CSS_SELECTOR,"textarea[name='wr_content']")
             _robust_fill(d,ta,editor_content)   # hidden textarea면 JS value로 폴백
-    # 그누보드는 폼의 html 필드가 1이어야 HTML을 렌더한다(0이면 태그를 이스케이프→코드 그대로 노출).
-    # 에디터/SET_IR를 거치지 않고 본문을 넣은 경우를 대비해 HTML 허용을 강제로 켠다(raw 코드 방지).
+    # 그누보드는 폼의 html 필드가 HTML모드여야 태그를 렌더한다(아니면 이스케이프→코드 그대로 노출).
+    # ★중요: 그누보드5의 html 필드 값은 '1'이 아니라 'html1'(위지윅)·'html2'(HTML) 이다.
+    #   기존 값이 이미 'html*'이면 그대로 두고(이미 HTML모드), 비었거나 다른 값일 때만 켠다.
+    #   (예전엔 무조건 value='1'로 덮어써서 그누보드가 무효값→일반텍스트로 이스케이프하던 버그 수정.
+    #    lamplant youtube 게시판 실측: <input name="html" value="html1"> 를 '1'로 망가뜨리고 있었음)
     if html_mode:
-        try:
-            _safe_js(d,"var f=document.getElementById('fwrite')||document.forms['fwrite']||document.querySelector(\"form[action*='write_update']\");if(f){var h=f.querySelector(\"[name='html']\");if(h){if(h.type==='checkbox'){h.checked=true;}else{h.value='1';}}else{var i=document.createElement('input');i.type='hidden';i.name='html';i.value='1';f.appendChild(i);}}")
+        # 기존 html 필드 값이 이미 'html*'(그누보드 위지윅/HTML 모드)면 건드리지 않는다.
+        # 비었거나 다른 값일 때만: 순수 숫자 관례면 '1', 그 외(그누보드)는 'html1'로 켠다.
+        _html_flag_js=(
+            "var f=document.getElementById('fwrite')||document.forms['fwrite']||"
+            "document.querySelector(\"form[action*='write_update']\");"
+            "if(f){var h=f.querySelector(\"[name='html']\");"
+            "if(h){if(h.type==='checkbox'){h.checked=true;}"
+            "else{var v=(h.value||'');if(!(/^html/i).test(v)){h.value=((/^[0-9]*$/).test(v)?'1':'html1');}}}"
+            "else{var i=document.createElement('input');i.type='hidden';i.name='html';i.value='html1';f.appendChild(i);}}"
+        )
+        try: _safe_js(d,_html_flag_js)
         except Exception: pass
 
     # 본문 HTML에 이미지가 이미 있으면 중복 파일 첨부하지 않는다.
