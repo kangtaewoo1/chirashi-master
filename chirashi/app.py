@@ -499,9 +499,11 @@ def _signup_form_measure(site):
         if m: rules[key]=int(m.group(1))
     rules['require_special']=bool(re.search(r'비밀번호.{0,80}(특수문자|특수 문자)',text,re.I))
     captcha=bool(re.search(r'(captcha|kcaptcha|g-recaptcha|turnstile|자동등록방지)',html,re.I))
+    # 이메일 인증 필요 판단은 '필수/해야/완료' 같은 강제 신호가 있을 때만(오탐 축소 — 대표님 전략:
+    # 일단 인증 없이 시도하고 정말 필요할 때만 인증. 이메일칸 언급만으론 인증 필요로 보지 않는다).
     email_verification=bool(
-        re.search(r'(?:e-?mail|이메일).{0,160}(?:인증|확인).{0,100}(?:회원가입|가입|완료)',text,re.I) or
-        re.search(r'(?:인증|확인).{0,100}(?:e-?mail|이메일)',text,re.I))
+        re.search(r'(?:e-?mail|이메일)\s*(?:주소)?\s*(?:인증|확인)(?:을|를|이|가)?\s*(?:반드시|필수|해야|하셔야|완료해야|하여야)',text,re.I) or
+        re.search(r'(?:인증\s*(?:메일|이메일)|인증\s*링크).{0,40}(?:발송|보냈|전송|클릭|확인)',text,re.I))
     signature=[(f.get('role'),f.get('name'),f.get('id'),f.get('type'),f.get('minlength'),f.get('maxlength'),f.get('pattern')) for f in fields]
     fingerprint=hashlib.sha256(json.dumps(signature,ensure_ascii=False,sort_keys=True).encode()).hexdigest()
     return {'signup_url':url,'form_url':measured_url,'form_action':urllib.parse.urljoin(measured_url,form.get('action','')),
@@ -4427,13 +4429,24 @@ def auto_signup(site, submit=True):
     if not submitted:
         _safe_js(d,"var f=document.getElementById('fregister')||document.forms['fregister']||document.querySelector(\"form[action*='register_form_update']\");if(f){if(f.requestSubmit)f.requestSubmit();else f.submit();}")
     time.sleep(3); dismiss_alerts(d)
-    add_log(f'[자동가입] {_snm} 제출 완료 — 가입 결과 확인 중{" (이메일 인증 필요)" if need_email_verify else " (이메일 인증 불필요)"}')
-    # 5.5) 이메일 인증: 임시메일 받은편지함을 폴링해 인증 링크/코드를 처리
+    add_log(f'[자동가입] {_snm} 제출 완료 — 가입 결과 확인 중{" (이메일 인증 필요할 수 있음)" if need_email_verify else ""}')
+    # 5.5) 대표님 전략: 먼저 '인증 없이 바로 가입됐는지' 확인 → 됐으면 인증 스킵(꿀사이트).
+    #      제출 직후 이미 로그인 상태(로그아웃/마이페이지 노출)면 이메일 인증 불필요 → 바로 성공 처리.
+    def _quick_logged_in():
+        try: _b=d.find_element(By.TAG_NAME,'body').text[:2500]
+        except Exception: _b=''
+        _s=(d.page_source or '').lower()
+        return ('로그아웃' in _b) or ('logout' in _s) or ('mypage' in _s) or ('마이페이지' in _b) or ('회원정보' in _b)
+    _already=_quick_logged_in()
+    if _already and need_email_verify:
+        need_email_verify=False   # 인증 없이 가입 완료됨 → 인증 스킵(꿀사이트)
+        add_log(f'[자동가입] {_snm} — 이메일 인증 없이 가입 완료 확인(꿀사이트) → 인증 생략')
+    # 이메일 인증: 위에서 성공 안 됐고 인증이 실제로 필요할 때만 대기(안 오면 60초로 단축)
     if need_email_verify and tm_token:
         add_log(f'[자동가입] {site.get("name") or site.get("site_url","")} 인증메일 대기 중...')
-        verify=tempmail_wait_verify_link(tm_token, timeout=120)
+        verify=tempmail_wait_verify_link(tm_token, timeout=60)
         if not verify:
-            return False,'이메일 인증 실패 — 인증메일이 오지 않음(임시메일 차단 가능)'
+            return False,'이메일 인증 실패 — 인증메일이 오지 않음(게시판 미발송/봇차단 가능)'
         if verify.get('link'):
             try: d.get(verify['link']); time.sleep(2); dismiss_alerts(d)
             except Exception: pass
