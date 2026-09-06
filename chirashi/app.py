@@ -4380,9 +4380,15 @@ def auto_signup(site, submit=True):
         # tmp['mb_id']가 빈 채로 남아 발행 단계에서 '비회원 발행'→로그인필요 게시판 거부가 된다.
         # 이 두 줄이 '가입은 됐는데 발행 로그인 실패' 반복의 실제 해결.
         site['mb_id']=mid; site['mb_pass']=pw
+        # 인증메일 없이 가입된 게시판(=꿀사이트)은 별도 표시해 신뢰 사이트로 남기고 우선한다.
+        # (실측: 이메일 인증 경로는 전환율 0. 무인증 게시판만 안정적으로 발행됨 — 대표님 지시.)
+        _no_verify=(not need_email_verify)
+        site['no_verify']=_no_verify
         set_site_flag(site.get('id'),mb_id=mid,mb_pass=pw,signup_status='complete',
-                      login_saved=True,signup_updated_at=datetime.now().isoformat(timespec='seconds'))
-        add_log(f'[자동가입 성공] {site.get("name") or site.get("site_url","")} — {mid} ({msg})')
+                      login_saved=True,no_verify=_no_verify,
+                      signup_updated_at=datetime.now().isoformat(timespec='seconds'))
+        _tag=' 🍯무인증' if _no_verify else ' (이메일인증)'
+        add_log(f'[자동가입 성공]{_tag} {site.get("name") or site.get("site_url","")} — {mid} ({msg})')
         return True,f'자동가입 성공 — {mid}'
 
     # ① 제출 직후 페이지의 명시적 신호 검사 (가입완료 or 중복/오류)
@@ -4540,6 +4546,13 @@ def auto_pipeline_once(limit=5):
     # (로그인 게시판은 이메일 인증 대기로 슬롯을 낭비 → 전환율 저하. 대표님 지시: 비회원 우선.)
     _guest=[c for c in _rest if c.get('write_form') and not c.get('login_required')]
     _login=[c for c in _rest if not (c.get('write_form') and not c.get('login_required'))]
+    # 로그인 풀은 '무인증(꿀사이트)' 우선 정렬 — 이메일 인증 필요로 판명된 후보는 맨 뒤로.
+    # (실측: 인증 경로 전환율 0. 인증 안 받는 게시판만 안정적으로 가입·발행됨 — 대표님 지시.)
+    def _login_prio(c):
+        need_verify=bool(c.get('signup_email_verification') or c.get('email_verification_required'))
+        no_cap=not c.get('captcha')
+        return (0 if need_verify else 1, 1 if no_cap else 0, c.get('score',0))
+    _login.sort(key=_login_prio, reverse=True)
     _login_cap=int(cfg.get('login_signup_per_cycle',2) or 2)
     pend=_manual + _guest[:max(1,limit)] + _login[:max(0,_login_cap)]
     done=0; registered=0; signed=0; results=[]
