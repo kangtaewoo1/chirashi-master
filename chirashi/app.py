@@ -607,7 +607,7 @@ def load_config():
        # 유니크 발급하고 IMAP으로 인증메일을 읽는다(일회용 도메인 차단 게시판도 통과). App Password 사용.
        'imap_email':'','imap_password':'','imap_host':'imap.gmail.com',
        'twocaptcha_api_key':'','twocaptcha_enabled':False,
-       'http_publish_enabled':True,  # browserless 초고속 발행(requests) 우선. 실패시 셀레늄 폴백(중복발행 방지 검증 완료).
+       'http_publish_enabled':False,  # browserless(requests) — gnuboard5 anti-CSRF(token)로 대부분 게시판이 거부. 보류.
        'public_base_url':'https://google.twseo.kr',  # 업로드 이미지 절대 URL 기준 도메인(외부 게시판 로드용)
        'twocaptcha_price_recaptcha_usd':0.003,'twocaptcha_price_image_usd':0.0005,
        'brave_price_per_query_usd':0.005,  # Pro 플랜 기준 쿼리당 $0.005(설정 탭에서 변경 가능)
