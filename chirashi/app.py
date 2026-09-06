@@ -89,8 +89,26 @@ def load_image_urls():
     d=load_json(IMAGES_FILE,[])
     return [u.strip() for u in d if isinstance(u,str) and u.strip().startswith('http')]
 def save_image_urls(urls): save_json(IMAGES_FILE,urls)
-def pick_images(n):
-    """본문용 이미지 n개 선택. 사용자 URL 풀이 있으면 그걸, 없으면 기본(picsum) 폴백."""
+def _workroom_image_urls(workroom_id):
+    """작업실 전용 이미지 풀 = 그 작업실 image_urls(외부 URL) + 그 작업실 업로드파일 URL."""
+    wid=str(workroom_id or '').strip()
+    if not wid: return []
+    room=next((r for r in (load_json(WORKROOMS_FILE,[]) or []) if str(r.get('id'))==wid),None)
+    urls=[]
+    if room:
+        urls+=[u.strip() for u in (room.get('image_urls') or []) if isinstance(u,str) and u.strip().startswith('http')]
+    urls+=[x['url'] for x in uploaded_images(wid)]   # 작업실 업로드 파일(상대경로 /media/wr_.../)
+    return list(dict.fromkeys(urls))
+
+def pick_images(n, workroom_id=None):
+    """본문용 이미지 n개 선택.
+       - workroom_id 주면: 그 작업실 전용 풀만 사용. 비어있으면 [](이미지 없이 발행) — 대표님 지시.
+       - workroom_id 없으면(테스트/전역): 사용자 URL 풀이 있으면 그걸, 없으면 기본(picsum) 폴백."""
+    if workroom_id:
+        pool=_workroom_image_urls(workroom_id)
+        if not pool: return []            # 작업실에 이미지 없음 → 이미지 없이 발행
+        if len(pool)>=n: return random.sample(pool,n)
+        return [random.choice(pool) for _ in range(n)]
     pool=load_image_urls() or IMAGES
     if len(pool)>=n: return random.sample(pool,n)
     return [random.choice(pool) for _ in range(n)]   # URL이 부족하면 중복 허용
@@ -288,21 +306,34 @@ def _usd_krw(cfg=None):
         return {'rate':float(cache['rate']),'source':'cache','updated_at':cache.get('updated_at','')}
     return {'rate':fallback,'source':'fallback','updated_at':''}
 
-def uploaded_images():
+def _workroom_upload_dir(workroom_id):
+    """작업실 전용 업로드 폴더(uploads/wr_<id>). workroom_id 없으면 공통 UPLOAD_DIR."""
+    wid=re.sub(r'[^0-9a-zA-Z_-]','',str(workroom_id or ''))
+    if not wid: return UPLOAD_DIR
+    d=UPLOAD_DIR/('wr_'+wid); d.mkdir(parents=True,exist_ok=True); return d
+
+def uploaded_images(workroom_id=None):
+    """업로드된 이미지 목록. workroom_id를 주면 그 작업실 전용 폴더만 본다(공통 폴더 미포함).
+       공통(전역)은 UPLOAD_DIR의 파일만(작업실 하위폴더 제외)."""
+    base=_workroom_upload_dir(workroom_id)
+    prefix=('/media/wr_'+re.sub(r'[^0-9a-zA-Z_-]','',str(workroom_id))+'/') if workroom_id else '/media/'
     out=[]
-    for p in sorted(UPLOAD_DIR.iterdir(),key=lambda x:x.stat().st_mtime,reverse=True):
+    if not base.exists(): return out
+    for p in sorted(base.iterdir(),key=lambda x:x.stat().st_mtime,reverse=True):
         if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS:
             out.append({'name':p.name,'size':p.stat().st_size,
-                        'url':'/media/'+urllib.parse.quote(p.name),'saved_at':datetime.fromtimestamp(p.stat().st_mtime).isoformat(timespec='seconds')})
+                        'url':prefix+urllib.parse.quote(p.name),'saved_at':datetime.fromtimestamp(p.stat().st_mtime).isoformat(timespec='seconds')})
     return out
 
-def pick_attachment_paths(max_n=2):
-    files=[UPLOAD_DIR/x['name'] for x in uploaded_images()]
+def pick_attachment_paths(max_n=2, workroom_id=None):
+    base=_workroom_upload_dir(workroom_id)
+    files=[base/x['name'] for x in uploaded_images(workroom_id)]
     return [str(p.resolve()) for p in files[:max(0,int(max_n))]]
 
-def attach_saved_images(d,max_n=1):
+def attach_saved_images(d,max_n=1,workroom_id=None):
     from selenium.webdriver.common.by import By
-    paths=pick_attachment_paths(max_n)
+    # 작업실 전용 업로드 파일만 첨부(없으면 첨부 안 함 — 대표님 지시: 이미지 없으면 넣지 말 것).
+    paths=pick_attachment_paths(max_n,workroom_id=workroom_id) if workroom_id else pick_attachment_paths(max_n)
     if not paths: return 0,'저장 이미지 없음'
     inputs=[e for e in d.find_elements(By.CSS_SELECTOR,"input[type='file']") if _sel_vis(e)]
     if not inputs: return 0,'파일 첨부 입력란 없음'
@@ -871,7 +902,7 @@ SERVICE_FLAVOR = {
 DEFAULT_FLAVOR={'mood':['편안하고 세련된','밝고 활기찬','아늑한']}
 RELATED_POOL=['하이퍼블릭','노래빠','쓰리노','가요광장','터치룸','노래클럽','가라오케','호빠','룸싸롱','셔츠룸','퍼블릭','비즈니스바','가요주점']
 
-def generate_rich_html(keywords, cfg):
+def generate_rich_html(keywords, cfg, workroom_id=None):
     r=(keywords.get('지역') or '서울').strip()
     s=(keywords.get('서비스') or '셔츠룸').strip()
     b=(keywords.get('브랜드') or cfg.get('brand') or '인천홍마니').strip()
@@ -879,15 +910,15 @@ def generate_rich_html(keywords, cfg):
     title,rawphone=build_title(r,s,b,cfg)
     p=format_phone(rawphone)
     mood=random.choice(SERVICE_FLAVOR.get(s,DEFAULT_FLAVOR)['mood'])
-    imgs=pick_images(1)   # 게시물당 이미지는 항상 정확히 1개
+    imgs=pick_images(1,workroom_id=workroom_id)   # 게시물당 이미지 1개(작업실에 이미지 없으면 [] → 이미지 없이 발행)
     # 대표님 지시(2026-09-07): 붙여준 예시처럼 '단일 강조색'을 게시물마다 하나 골라 전체에 일관 적용.
     AC=random.choice(COLORS)              # 강조색 하나(제목·소제목·라벨·별점 등 전부 이 색)
     c1=c2=c3=AC                           # 기존 c1/c2/c3 참조 호환(모두 같은 강조색)
     rel=RELATED_POOL[:]; random.shuffle(rel)
     _upd=_kst_now().strftime('%Y년 %m월')   # 우측 하단 업데이트 표기용
     H=lambda t:f'<h2 style="color:{c1};border-bottom:3px solid {c2};padding-bottom:10px;font-size:24px;margin-top:34px;">{t}</h2>'
-    # 이미지 alt = 치환키워드 맨앞(지역) 그대로 (SEO)
-    IMG=lambda i,cap='':(f'<div style="text-align:center;margin:34px 0;"><img src="{imgs[i%len(imgs)]}" alt="{r}" style="max-width:100%;height:auto;border-radius:8px;" loading="lazy" />'+(f'<p style="color:#888;font-size:13px;margin-top:8px;">▲ {cap}</p>' if cap else '')+'</div>')
+    # 이미지 alt = 치환키워드 맨앞(지역) 그대로 (SEO). imgs가 비면 이미지 블록을 아예 넣지 않는다.
+    IMG=lambda i,cap='':('' if not imgs else (f'<div style="text-align:center;margin:34px 0;"><img src="{imgs[i%len(imgs)]}" alt="{r}" style="max-width:100%;height:auto;border-radius:8px;" loading="lazy" />'+(f'<p style="color:#888;font-size:13px;margin-top:8px;">▲ {cap}</p>' if cap else '')+'</div>'))
 
     intro=random.choice([
         f'{r} 지역에서 {s}를 찾고 계신가요? {mood} 분위기의 <strong>{r} {s}</strong>는 회식과 모임 장소로 꾸준히 사랑받는 곳입니다. {b}에서 위치와 이용 정보를 한눈에 정리해 드립니다.',
@@ -1044,7 +1075,7 @@ def generate_rich_html(keywords, cfg):
     return html, title
 
 # ==================== GPT 본문 생성 (선택) ====================
-def generate_post_gpt(keywords, cfg):
+def generate_post_gpt(keywords, cfg, workroom_id=None):
     """OpenAI로 키워드1 중심의 장문 HTML 본문 생성. 실패 시 템플릿으로 폴백."""
     import requests as _rq
     r=(keywords.get('지역') or '서울').strip(); s=(keywords.get('서비스') or '셔츠룸').strip()
@@ -1052,7 +1083,7 @@ def generate_post_gpt(keywords, cfg):
     _rawph=pick_phone(cfg); p=format_phone(_rawph)
     key=cfg.get('openai_key',''); model=cfg.get('model') or 'gpt-4o-mini'
     if not key: raise RuntimeError('openai_key 없음')
-    imgs=pick_images(1)                                   # 게시물당 이미지는 항상 정확히 1개
+    imgs=pick_images(1,workroom_id=workroom_id)           # 이미지 1개(작업실에 없으면 [] → 이미지 없이)
     c1=c2=random.choice(COLORS)                           # 강조색 하나로 통일(디자인 틀과 동일 색)
     sys_p=("너는 한국어 정보형 랜딩페이지와 지역 안내 글을 작성하는 전문 카피라이터다. "
            "세 개의 키워드 중 키워드1을 문서 전체의 명확한 메인 주제로 삼고, 키워드2와 키워드3은 "
@@ -1103,10 +1134,11 @@ def generate_post_gpt(keywords, cfg):
             f'<p style="font-size:14px;font-weight:800;color:{AC};letter-spacing:2px;margin:0 0 12px;">목차</p>'
             f'<ul style="list-style:none;padding:0;margin:0;font-size:15px;">{_items}</ul></div>')
     _label=random.choice(['총정리','이용 안내','완벽 가이드','한눈에 정리','상세 안내'])
+    _img_block=(f'<div style="text-align:center;margin:0 0 28px;"><img src="{imgs[0]}" alt="{r}" style="max-width:100%;border-radius:8px;" loading="lazy"/></div>' if imgs else '')
     header=(f'<div style="font-size:12px;font-weight:700;letter-spacing:5px;color:{AC};margin-bottom:12px;">{_label} · {r} {s}</div>'
             f'<h1 style="font-size:32px;font-weight:800;line-height:1.3;margin:0 0 16px;color:#111;">{title}</h1>'
             f'<div style="width:80px;height:4px;background:{AC};margin:0 0 28px;border-radius:2px;"></div>'
-            f'<div style="text-align:center;margin:0 0 28px;"><img src="{imgs[0]}" alt="{r}" style="max-width:100%;border-radius:8px;" loading="lazy"/></div>'
+            f'{_img_block}'
             f'{toc_box}')
     cta=(f'<div style="margin:38px 0 8px;padding:24px;background:#1f2733;color:#e8edf4;border-radius:12px;text-align:center;">'
          f'<p style="font-size:17px;font-weight:bold;color:#fff;margin:0 0 12px;">📞 {r} {s} 문의·예약</p>'
@@ -1115,21 +1147,22 @@ def generate_post_gpt(keywords, cfg):
          f'<p style="font-size:12px;color:#999;text-align:right;margin:16px 0 8px;">최신 업데이트 · {_upd} 기준</p>')
     return header+body+cta, title
 
-def _gen_once(keywords, cfg):
+def _gen_once(keywords, cfg, workroom_id=None):
     if cfg.get('use_gpt') and cfg.get('openai_key'):
         try:
-            return generate_post_gpt(keywords,cfg)
+            return generate_post_gpt(keywords,cfg,workroom_id=workroom_id)
         except Exception as e:
             add_log(f'[GPT 실패→템플릿] {str(e)[:80]}')
-    return generate_rich_html(keywords,cfg)
+    return generate_rich_html(keywords,cfg,workroom_id=workroom_id)
 
-def generate_article(keywords, cfg, unique=True):
-    """본문 생성. unique=True 면 제목/본문이 과거와 겹치지 않을 때까지 재생성(상시 다르게)."""
+def generate_article(keywords, cfg, unique=True, workroom_id=None):
+    """본문 생성. unique=True 면 제목/본문이 과거와 겹치지 않을 때까지 재생성(상시 다르게).
+       workroom_id를 주면 그 작업실 전용 이미지 풀을 사용(없으면 이미지 없이 발행)."""
     if not unique:
-        return _gen_once(keywords,cfg)
+        return _gen_once(keywords,cfg,workroom_id=workroom_id)
     html=title=None
     for _ in range(8):
-        html,title=_gen_once(keywords,cfg)
+        html,title=_gen_once(keywords,cfg,workroom_id=workroom_id)
         if remember_if_unique(title,html): return html,title
     # 8회 모두 충돌(사실상 불가) → 강제 유니크 토큰 부착
     html=force_unique_html(html); remember_if_unique(title,html,force=True)
@@ -2105,7 +2138,9 @@ def gnuboard_post(site, title, content_html, skip_login=False):
         except Exception: pass
 
     # 본문 HTML에 이미지가 이미 있으면 중복 파일 첨부하지 않는다.
-    if '<img' not in (content_html or '').lower(): attach_saved_images(d,1)
+    # 첨부도 작업실 전용 폴더에서만(작업실 이미지 없으면 첨부 안 함).
+    if '<img' not in (content_html or '').lower():
+        attach_saved_images(d,1,workroom_id=site.get('workroom_id'))
     _,missing=fill_required_post_fields(d,site)
     if missing: return False,'필수항목 설정 필요: '+', '.join(missing[:6])
 
@@ -5014,10 +5049,11 @@ def _publish_one_combo(kw, wname, rid, cfg, writer_name=''):
         fresh=next((x for x in load_sites() if x.get('id')==s.get('id')),None)
         if not fresh or not is_publishable(fresh): continue
         if writer_name: fresh['writer_name']=writer_name   # 작업실 지정 작성자명 → 폼 wr_name에 사용
+        if rid: fresh['workroom_id']=rid                    # 첨부 이미지도 작업실 전용 폴더에서 고르도록 전달
         if not under_daily_limit(fresh,cfg): continue
         if not under_min_interval(fresh)[0]: continue
         try:
-            html,title=generate_article(kw,cfg,unique=True)
+            html,title=generate_article(kw,cfg,unique=True,workroom_id=rid)
         except Exception as e:
             add_log(f"[작업실:{wname}] 생성오류 {str(e)[:50]}"); continue
         now=datetime.now().strftime('%Y-%m-%d %H:%M:%S'); jid=secrets.token_hex(8)
@@ -5624,9 +5660,38 @@ def api_gen():
     html,title=generate_article(kw,cfg)
     return jsonify({'ok':True,'title':title,'content':html})
 
-# ---- 이미지 URL 풀 (본문 삽입용) ----
+# ---- 작업실별 이미지 URL 풀 헬퍼 ----
+def _sanitize_wid(wid):
+    return re.sub(r'[^0-9a-zA-Z_-]','',str(wid or ''))
+
+def _wr_load_image_urls(wid):
+    """작업실 image_urls(외부 URL 풀) 로드. wid 없으면 전역(images.json)."""
+    if not wid: return load_image_urls()
+    room=next((r for r in (load_json(WORKROOMS_FILE,[]) or []) if str(r.get('id'))==str(wid)),None)
+    if not room: return []
+    return [u.strip() for u in (room.get('image_urls') or []) if isinstance(u,str) and u.strip().startswith('http')]
+
+def _wr_save_image_urls(wid,urls):
+    """작업실 image_urls 저장. wid 없으면 전역(images.json)."""
+    if not wid: save_image_urls(urls); return True
+    with _json_lock(WORKROOMS_FILE):
+        rooms=load_json(WORKROOMS_FILE,[]) or []
+        room=next((r for r in rooms if str(r.get('id'))==str(wid)),None)
+        if not room: return False
+        room['image_urls']=urls
+        room['updated_at']=datetime.now().strftime('%m/%d %H:%M')
+        save_json(WORKROOMS_FILE,rooms)
+    return True
+
+def _req_wid():
+    """요청에서 workroom_id 추출(JSON body·query·form 순). 없으면 ''(전역)."""
+    d=request.get_json(silent=True) or {}
+    return _sanitize_wid(d.get('workroom_id') or request.args.get('workroom_id') or request.form.get('workroom_id') or '')
+
+# ---- 이미지 URL 풀 (본문 삽입용) — workroom_id 주면 그 작업실 전용, 없으면 전역 ----
 @app.route('/api/images',methods=['GET','POST','DELETE'])
 def api_images():
+    wid=_req_wid()
     if request.method=='POST':
         d=request.get_json() or {}
         urls=d.get('urls')
@@ -5634,12 +5699,14 @@ def api_images():
             urls=[x.strip() for x in (d.get('text','') or '').splitlines() if x.strip()]
         urls=[u for u in urls if u.startswith('http')]
         if d.get('append'):
-            urls=load_image_urls()+urls
+            urls=_wr_load_image_urls(wid)+urls
         urls=list(dict.fromkeys(urls))   # 중복 제거(순서보존)
-        save_image_urls(urls); return jsonify({'ok':True,'count':len(urls)})
+        if not _wr_save_image_urls(wid,urls):
+            return jsonify({'ok':False,'error':'작업실을 찾을 수 없습니다'}),404
+        return jsonify({'ok':True,'count':len(urls)})
     if request.method=='DELETE':
-        save_image_urls([]); return jsonify({'ok':True})
-    return jsonify(load_image_urls())
+        _wr_save_image_urls(wid,[]); return jsonify({'ok':True})
+    return jsonify(_wr_load_image_urls(wid))
 
 @app.route('/media/<path:filename>')
 def image_media(filename):
@@ -5647,6 +5714,8 @@ def image_media(filename):
 
 @app.route('/api/images/upload',methods=['POST'])
 def api_images_upload():
+    wid=_req_wid()
+    dest=_workroom_upload_dir(wid) if wid else UPLOAD_DIR
     files=request.files.getlist('files')
     if not files: return jsonify({'ok':False,'error':'이미지 파일을 선택하세요'}),400
     saved=[]
@@ -5658,20 +5727,25 @@ def api_images_upload():
         if size<=0 or size>10*1024*1024: continue
         stem=secure_filename(Path(original).stem)[:60] or 'image'
         name=f'{datetime.now().strftime("%Y%m%d_%H%M%S")}_{secrets.token_hex(4)}_{stem}{ext}'
-        f.save(UPLOAD_DIR/name); saved.append(name)
+        f.save(dest/name); saved.append(name)
     if not saved: return jsonify({'ok':False,'error':'JPG·PNG·GIF·WEBP만 가능하며 파일당 최대 10MB입니다'}),400
     return jsonify({'ok':True,'count':len(saved),'files':saved})
 
 @app.route('/api/images/file',methods=['DELETE'])
 def api_images_file_delete():
-    name=Path((request.get_json(silent=True) or {}).get('name','')).name
-    p=UPLOAD_DIR/name
+    d=request.get_json(silent=True) or {}
+    wid=_sanitize_wid(d.get('workroom_id') or '')
+    base=_workroom_upload_dir(wid) if wid else UPLOAD_DIR
+    name=Path(d.get('name','')).name
+    p=base/name
     if not name or p.suffix.lower() not in IMAGE_EXTENSIONS or not p.exists():
         return jsonify({'ok':False,'error':'파일을 찾을 수 없습니다'}),404
     p.unlink(); return jsonify({'ok':True})
 
 @app.route('/api/images/files')
-def api_images_files(): return jsonify(uploaded_images())
+def api_images_files():
+    wid=_sanitize_wid(request.args.get('workroom_id') or '')
+    return jsonify(uploaded_images(wid) if wid else uploaded_images())
 
 # ---- 도메인 발굴 후보 (승인해야만 사이트 목록에 투입) ----
 @app.route('/api/candidates',methods=['GET','DELETE'])
@@ -7303,12 +7377,16 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 <span style="color:var(--d);font-size:10px">풀에서 N개 랜덤 추출 → 허용 사이트 발행</span></div></div>
 </div>
 
-<div id="p-images" class="panel"><div class="card"><h3>이미지 파일 저장</h3>
+<div id="p-images" class="panel">
+<div class="card" style="border:1px solid var(--p)"><h3>이미지 저장 대상 작업실</h3>
+<div style="font-size:10px;color:var(--d);margin-bottom:6px">작업실을 고르면 <b style="color:var(--p)">그 작업실 전용 이미지</b>를 저장·조회합니다. 발행 시 각 작업실 글에는 <b>그 작업실 이미지만</b> 사용됩니다. <b style="color:var(--y)">이미지를 넣지 않은 작업실은 이미지 없이 발행</b>됩니다.</div>
+<div class="row"><select id="imgWrSelect" style="flex:1" onchange="onImgWrChange()"><option value="">전체(공통) 이미지</option></select></div></div>
+<div class="card"><h3>이미지 파일 저장 <span id="imgWrLabel" style="color:var(--p);font-size:12px"></span></h3>
 <div style="font-size:10px;color:var(--d);margin-bottom:8px">JPG·PNG·GIF·WEBP, 파일당 최대 10MB. 저장된 이미지는 파일 첨부란이 있는 게시판에 최대 2개까지 자동으로 들어갑니다.</div>
 <div class="row"><input type="file" id="imgFiles" accept="image/jpeg,image/png,image/gif,image/webp" multiple style="flex:1"><button class="btn btn-p" onclick="uploadImages()">선택 이미지 저장</button></div>
 <div id="imgGallery" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-top:12px"></div></div>
-<div class="card"><h3>외부 이미지 URL 풀 (본문 삽입 — 한 줄에 하나)</h3>
-<div style="font-size:10px;color:var(--d);margin-bottom:6px">여기에 넣은 이미지 주소에서 <b style="color:var(--p)">매번 랜덤으로</b> 골라 본문에 삽입합니다(alt=지역 자동). <b style="color:var(--y)">비워두면 기본 이미지</b>가 쓰입니다.</div>
+<div class="card"><h3>외부 이미지 URL 풀 (본문 삽입 — 한 줄에 하나) <span id="imgWrLabel2" style="color:var(--p);font-size:12px"></span></h3>
+<div style="font-size:10px;color:var(--d);margin-bottom:6px">여기에 넣은 이미지 주소에서 <b style="color:var(--p)">매번 랜덤으로</b> 골라 본문에 삽입합니다(alt=지역 자동). <b style="color:var(--y)">작업실 선택 시 비워두면 그 작업실 글엔 이미지가 안 들어갑니다.</b></div>
 <textarea id="imgUrls" rows="5" placeholder="https://내사이트.kr/img/room1.jpg&#10;https://내사이트.kr/img/room2.jpg"></textarea>
 <div class="row" style="margin-top:6px"><button class="btn btn-p" onclick="saveImages(false)">저장(덮어쓰기)</button><button class="btn btn-v" onclick="saveImages(true)">추가</button><span style="flex:1"></span><span style="color:var(--d);font-size:10px" id="imgCount">0개</span><button class="btn btn-r btn-xs" onclick="if(confirm('이미지 URL 전체 삭제?'))clearImages()">비우기</button></div></div></div>
 
@@ -7617,7 +7695,7 @@ const _stationsByProvince={
 "광주광역시":["광주송정역","송정공원역","도산역","공항역","김대중컨벤션센터역","상무역","운천역","돌고개역","농성역","화정역","쌍촌역","금남로4가역","금남로5가역","문화전당역","남광주역","학동증심사입구역","소태역","녹동역","평동역"]
 };
 let _workrooms=[];
-async function loadWorkrooms(){const r=await api('/workrooms','GET');if(!Array.isArray(r))return;_workrooms=r;const s=$('wrSelect');const keep=s.value;s.innerHTML='<option value="">작업실 선택</option>'+r.map(x=>'<option value="'+esc(x.id)+'">'+esc(x.name)+'</option>').join('');if(r.some(x=>x.id===keep))s.value=keep;else if(r.length)s.value=r[0].id;showWorkroom()}
+async function loadWorkrooms(){const r=await api('/workrooms','GET');if(!Array.isArray(r))return;_workrooms=r;const s=$('wrSelect');const keep=s.value;s.innerHTML='<option value="">작업실 선택</option>'+r.map(x=>'<option value="'+esc(x.id)+'">'+esc(x.name)+'</option>').join('');if(r.some(x=>x.id===keep))s.value=keep;else if(r.length)s.value=r[0].id;showWorkroom();if(typeof loadImgWorkrooms==='function')loadImgWorkrooms()}
 function showWorkroom(){const r=_workrooms.find(x=>x.id===$('wrSelect').value);$('wrName').value=r?r.name:'';$('wrKeywords').value=r?r.keyword_csv:'';if($('wrBases'))$('wrBases').value=(r&&r.bases)?r.bases:'';if($('wrWriter'))$('wrWriter').value=(r&&r.writer_name)?r.writer_name:'';$('wrSite').value=r?r.site_id:'';$('wrSaved').textContent=r?('저장 '+(r.updated_at||'')):''}
 async function newWorkroom(){const name=(prompt('새 작업실 이름','작업실'+(_workrooms.length+1))||'').trim();if(!name)return;const r=await api('/workrooms','POST',{name:name,keyword_csv:'',site_id:'',bases:''});if(r&&r.ok){await loadWorkrooms();$('wrSelect').value=r.id;showWorkroom();toast(name+' 추가됨','ok')}}
 async function saveWorkroom(){const id=$('wrSelect').value;if(!id){toast('먼저 작업실을 추가하세요','er');return}const r=await api('/workrooms','POST',{id:id,name:$('wrName').value.trim(),keyword_csv:$('wrKeywords').value,site_id:$('wrSite').value,bases:($('wrBases')?$('wrBases').value:''),writer_name:($('wrWriter')?$('wrWriter').value:'')});if(r&&r.ok){toast('작업실 저장 완료 · '+r.count+'개 조합','ok');await loadWorkrooms();$('wrSelect').value=id;showWorkroom()}else toast((r&&r.error)||'저장 실패','er')}
@@ -7930,12 +8008,16 @@ async function loadUsageDashboard(silent){
 async function loadPool(){const p=await api('/keywords','GET');if(!Array.isArray(p))return;$('poolCount').textContent=p.length+'개';$('poolCsv').value=p.map(k=>[k.지역||'',k.서비스||'',k.브랜드||''].join(',')).join('\n')}
 async function savePool(append){const csv=$('poolCsv').value;const r=await api('/keywords','POST',{csv:csv,append:!!append});if(r&&r.ok){toast('풀 저장: '+r.count+'개');loadPool()}else if(r)toast('실패','er')}
 async function clearPool(){const r=await api('/keywords','DELETE');if(r&&r.ok){toast('풀 비움');loadPool()}}
-async function loadImages(){const p=await api('/images','GET');if(!Array.isArray(p))return;$('imgCount').textContent=p.length+'개';$('imgUrls').value=p.join('\n')}
-async function saveImages(append){const text=$('imgUrls').value;const r=await api('/images','POST',{text:text,append:!!append});if(r&&r.ok){toast('이미지 URL: '+r.count+'개 저장');loadImages()}else if(r)toast('실패','er')}
-async function clearImages(){const r=await api('/images','DELETE');if(r&&r.ok){toast('이미지 URL 비움');loadImages()}}
-async function loadImageFiles(){const rows=await api('/images/files','GET');if(!Array.isArray(rows))return;const g=$('imgGallery');g.innerHTML=rows.length?rows.map(x=>`<div style="background:#0b1322;border:1px solid var(--line);border-radius:8px;padding:7px"><img src="${x.url}" alt="${esc(x.name)}" style="width:100%;height:105px;object-fit:cover;border-radius:5px"><div style="font-size:9px;color:var(--d);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin:5px 0" title="${esc(x.name)}">${esc(x.name)}</div><div class="row"><span style="font-size:9px;color:var(--d)">${Math.ceil(x.size/1024)}KB</span><span style="flex:1"></span><button class="btn btn-r btn-xs" onclick="deleteImageFile('${esc(x.name)}')">삭제</button></div></div>`).join(''):'<div style="color:var(--d);font-size:11px">저장된 이미지가 없습니다.</div>'}
-async function uploadImages(){const f=$('imgFiles').files;if(!f.length)return toast('이미지를 선택하세요','er');const fd=new FormData();[...f].forEach(x=>fd.append('files',x));try{const r=await(await fetch('/api/images/upload',{method:'POST',body:fd})).json();if(r.ok){toast(r.count+'개 이미지 저장됨','ok');$('imgFiles').value='';loadImageFiles()}else toast(r.error||'업로드 실패','er')}catch(e){toast(e.message,'er')}}
-async function deleteImageFile(name){if(!confirm('이 이미지를 삭제할까요?'))return;const r=await api('/images/file','DELETE',{name});if(r&&r.ok){toast('이미지 삭제됨','ok');loadImageFiles()}else toast(r&&r.error||'삭제 실패','er')}
+function imgWid(){const s=$('imgWrSelect');return s?s.value:''}
+function _wq(path){const w=imgWid();return w?(path+(path.includes('?')?'&':'?')+'workroom_id='+encodeURIComponent(w)):path}
+async function loadImgWorkrooms(){const s=$('imgWrSelect');if(!s)return;let list=[];try{const r=await api('/workrooms','GET');if(Array.isArray(r))list=r}catch(e){}const keep=s.value;s.innerHTML='<option value="">전체(공통) 이미지</option>'+list.map(x=>'<option value="'+esc(x.id)+'">'+esc(x.name)+'</option>').join('');if(list.some(x=>x.id===keep))s.value=keep;onImgWrChange(true)}
+function onImgWrChange(skipToast){const w=imgWid();const nm=w?(($('imgWrSelect').selectedOptions[0]||{}).textContent||''):'';const lbl=w?('· '+nm):'· 전체(공통)';if($('imgWrLabel'))$('imgWrLabel').textContent=lbl;if($('imgWrLabel2'))$('imgWrLabel2').textContent=lbl;loadImages();loadImageFiles();if(!skipToast&&w)toast(nm+' 작업실 이미지','ok')}
+async function loadImages(){const p=await api(_wq('/images'),'GET');if(!Array.isArray(p))return;$('imgCount').textContent=p.length+'개';$('imgUrls').value=p.join('\n')}
+async function saveImages(append){const text=$('imgUrls').value;const r=await api('/images','POST',{text:text,append:!!append,workroom_id:imgWid()});if(r&&r.ok){toast('이미지 URL: '+r.count+'개 저장');loadImages()}else if(r)toast((r.error)||'실패','er')}
+async function clearImages(){const r=await api('/images','DELETE',{workroom_id:imgWid()});if(r&&r.ok){toast('이미지 URL 비움');loadImages()}}
+async function loadImageFiles(){const rows=await api(_wq('/images/files'),'GET');if(!Array.isArray(rows))return;const g=$('imgGallery');g.innerHTML=rows.length?rows.map(x=>`<div style="background:#0b1322;border:1px solid var(--line);border-radius:8px;padding:7px"><img src="${x.url}" alt="${esc(x.name)}" style="width:100%;height:105px;object-fit:cover;border-radius:5px"><div style="font-size:9px;color:var(--d);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin:5px 0" title="${esc(x.name)}">${esc(x.name)}</div><div class="row"><span style="font-size:9px;color:var(--d)">${Math.ceil(x.size/1024)}KB</span><span style="flex:1"></span><button class="btn btn-r btn-xs" onclick="deleteImageFile('${esc(x.name)}')">삭제</button></div></div>`).join(''):'<div style="color:var(--d);font-size:11px">저장된 이미지가 없습니다.</div>'}
+async function uploadImages(){const f=$('imgFiles').files;if(!f.length)return toast('이미지를 선택하세요','er');const fd=new FormData();[...f].forEach(x=>fd.append('files',x));const w=imgWid();if(w)fd.append('workroom_id',w);try{const r=await(await fetch('/api/images/upload',{method:'POST',body:fd})).json();if(r.ok){toast(r.count+'개 이미지 저장됨','ok');$('imgFiles').value='';loadImageFiles()}else toast(r.error||'업로드 실패','er')}catch(e){toast(e.message,'er')}}
+async function deleteImageFile(name){if(!confirm('이 이미지를 삭제할까요?'))return;const r=await api('/images/file','DELETE',{name,workroom_id:imgWid()});if(r&&r.ok){toast('이미지 삭제됨','ok');loadImageFiles()}else toast(r&&r.error||'삭제 실패','er')}
 async function uploadXlsx(){const f=$('poolXlsx').files[0];if(!f)return;const fd=new FormData();fd.append('file',f);try{const r=await(await fetch('/api/keywords/upload',{method:'POST',body:fd})).json();if(r&&r.ok){toast('엑셀 업로드: '+r.count+'개');loadPool()}else toast(r&&r.error||'업로드 실패','er')}catch(e){toast(e.message,'er')}$('poolXlsx').value=''}
 async function genRandom(){const sid=$('poolSiteFilter').value;const n=parseInt($('poolN').value)||1;const r=await api('/generate/random','POST',{site_ids:sid?[sid]:[],count:n});if(r&&r.ok){if(r.generated!=null)toast(r.generated+'건 큐 등록 (랜덤 '+r.picks+'개)'+(r.blocked?` · 미허용 ${r.blocked} 제외`:''));else{$('gTitle').value=r.title;$('gContent').value=r.content;$('gLen').textContent=(r.content||'').length.toLocaleString()+'자';toast('랜덤 미리보기 생성')}loadOpenAIUsage()}else if(r)toast(r.error||'실패','er')}
 // ---- 사이트 대량/허용/헬스 ----
@@ -8028,7 +8110,7 @@ if($('p-res').classList.contains('on'))renderHistory();if($('p-wlog').classList.
 
 $('gContent').addEventListener('input',function(){$('gLen').textContent=this.value.length.toLocaleString()+'자'});
 $('kwlist').addEventListener('input',function(){$('kwCount').textContent=parseList().length+'줄'});
-renderSites();poll();loadPool();loadImages();loadImageFiles();loadWorkrooms();loadRegionTool();
+renderSites();poll();loadPool();loadImages();loadImageFiles();loadWorkrooms();loadImgWorkrooms();loadRegionTool();
 setInterval(poll,2000);
 setInterval(renderSites,4000);
 </script>
