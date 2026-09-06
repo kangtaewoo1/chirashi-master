@@ -2703,6 +2703,12 @@ def cafe24_post(site, title, content_html, skip_login=False):
                     el=d.find_element(By.CSS_SELECTOR,"input[name='member_passwd']"); el.send_keys(Keys.RETURN)
                 except Exception: pass
         time.sleep(3); _wait_cf(10); _pass_turnstile_if_present(); dismiss_alerts(d)
+        # 로그인 성공 여부 확인·로그(디버깅: 어디서 막히는지 추적 — 대표님 Cafe24 검증)
+        try:
+            _b=(d.find_element(By.TAG_NAME,'body').text or '')[:2000]; _src=(d.page_source or '').lower()
+            _logged_in=('로그아웃' in _b or 'logout' in _src or 'mypage' in _src or '마이페이지' in _b or mid.lower() in _src)
+            add_log(f"[Cafe24로그인] {'성공' if _logged_in else '실패/불확실'} — {(site.get('name') or base)[:24]}")
+        except Exception: pass
 
     # 글쓰기 페이지 후보 (bo_table 이 숫자면 board_no, 문자면 board 경로)
     # ★rental-zon 등 스킨은 /board/product/write.html?board_no=N 형태 — product 경로도 시도(대표님 실측).
@@ -2727,10 +2733,12 @@ def cafe24_post(site, title, content_html, skip_login=False):
         except Exception: continue
     if not opened:
         return False,'Cafe24 글쓰기 페이지 못찾음 — Turnstile/로그인/게시판번호 확인'
+    add_log(f"[Cafe24글쓰기폼] 진입 성공 — {(site.get('name') or base)[:24]}")
 
     # CF 챌린지가 이미 통과됐으므로, 그래도 남은 진짜 차단(403 등)만 중단
     if _page_is_blocked(d): return False,'보안 차단 페이지(403 등) — 즉시 중단'
     _cap=detect_captcha(d)
+    add_log(f"[Cafe24캡차] 감지={_cap or '없음'}")
     if _cap:
         cfg=load_config()
         # 2captcha 자동 해결 시도
