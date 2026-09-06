@@ -555,6 +555,9 @@ def load_config():
        # 웹빌더/템플릿 플랫폼 등 발행 불가 도메인 제외 목록(한 줄에 하나, 발굴에서 즉시 제외). 설정에서 관리.
        'excluded_domains':'isweb.co.kr\nimweb.me\nimweb.io\nmodoo.at\ncreatorlink.net\nwixsite.com\nweebly.com\nblog.me',
        'discover_direct_queries':'','video_url':'','landing_url':'','post_email':'','guest_post_password':'',
+       # 실제 이메일(IMAP) 인증 — 지메일 등. 설정 시 임시메일 대신 '내지메일+랜덤@gmail.com' 플러스주소로
+       # 유니크 발급하고 IMAP으로 인증메일을 읽는다(일회용 도메인 차단 게시판도 통과). App Password 사용.
+       'imap_email':'','imap_password':'','imap_host':'imap.gmail.com',
        'twocaptcha_api_key':'','twocaptcha_enabled':False,
        'twocaptcha_price_recaptcha_usd':0.003,'twocaptcha_price_image_usd':0.0005,
        'brave_price_per_query_usd':0.005,  # Pro 플랜 기준 쿼리당 $0.005(설정 탭에서 변경 가능)
@@ -3978,9 +3981,17 @@ def _http_json(url):
         return 0, None
 
 def tempmail_create():
-    """임시메일 발급 — mail.tm 우선, 실패 시 1secmail 폴백(전략2D 로테이션).
-       반환: (address, password, token). token 문자열 앞에 서비스 태그를 붙여 wait가 구분한다:
-       'MT:<token>' = mail.tm, '1S:<login>|<domain>' = 1secmail. 실패 시 (None,None,None)."""
+    """인증용 이메일 발급. IMAP(지메일 등) 설정 시 '내지메일+랜덤@도메인' 플러스주소로 유니크 발급하고
+       IMAP으로 수신(일회용 도메인 차단 게시판도 통과). 미설정 시 mail.tm→1secmail 임시메일.
+       반환: (address, password, token). 태그: 'IMAP:<tag>' / 'MT:<t>' / '1S:<login>|<domain>'."""
+    # 0) IMAP 실제메일(지메일 등) — 설정돼 있으면 최우선(진짜 도메인이라 수신율↑)
+    try:
+        _cfg=load_config(); _em=(_cfg.get('imap_email') or '').strip(); _pw=(_cfg.get('imap_password') or '').strip()
+        if _em and _pw and '@' in _em:
+            _local,_,_dom=_em.partition('@')
+            _tag='twseo'+secrets.token_hex(5)
+            return f'{_local}+{_tag}@{_dom}', '', 'IMAP:'+_tag
+    except Exception: pass
     # 1) mail.tm 시도
     st, doms = _tempmail_req('/domains')
     if st == 200 and isinstance(doms, dict):
@@ -4009,10 +4020,71 @@ def _extract_verify(blob, text):
     if mcode: return {'code': mcode.group(1)}
     return None
 
+def _imap_msg_text(msg):
+    """이메일 메시지에서 text/html 본문을 모두 이어붙여 반환."""
+    import email as _email
+    parts=[]
+    try:
+        if msg.is_multipart():
+            for p in msg.walk():
+                ct=(p.get_content_type() or '')
+                if ct in ('text/plain','text/html'):
+                    try: parts.append(p.get_payload(decode=True).decode(p.get_content_charset() or 'utf-8','ignore'))
+                    except Exception: pass
+        else:
+            try: parts.append(msg.get_payload(decode=True).decode(msg.get_content_charset() or 'utf-8','ignore'))
+            except Exception: pass
+    except Exception: pass
+    return ' '.join(parts)
+
+def _imap_wait_verify(tag, timeout=120):
+    """지메일 등 IMAP 받은편지함에서 플러스주소(+tag)로 온 인증메일을 찾아 링크/코드 추출."""
+    import imaplib, email as _email
+    cfg=load_config(); em=(cfg.get('imap_email') or '').strip(); pw=(cfg.get('imap_password') or '').strip()
+    host=(cfg.get('imap_host') or 'imap.gmail.com').strip()
+    if not em or not pw: return None
+    deadline=time.time()+timeout
+    while time.time()<deadline:
+        try:
+            M=imaplib.IMAP4_SSL(host); M.login(em,pw); M.select('INBOX')
+            ids=[]
+            try:
+                typ,data=M.search(None,'TO',tag)   # +tag 주소로 온 메일
+                if data and data[0]: ids=data[0].split()
+            except Exception: pass
+            if not ids:
+                try:
+                    typ,data=M.search(None,'UNSEEN')
+                    if data and data[0]: ids=data[0].split()
+                except Exception: pass
+            for mid in reversed(ids[-20:]):
+                typ,md=M.fetch(mid,'(RFC822)')
+                if not md or not md[0]: continue
+                msg=_email.message_from_bytes(md[0][1])
+                hdr=(str(msg.get('To',''))+' '+str(msg.get('Delivered-To',''))+' '+str(msg.get('X-Original-To',''))).lower()
+                body=_imap_msg_text(msg)
+                if tag.lower() not in hdr and tag.lower() not in body.lower(): continue
+                r=_extract_verify(body, body)
+                if r:
+                    try: M.store(mid,'+FLAGS','\\Seen')
+                    except Exception: pass
+                    try: M.logout()
+                    except Exception: pass
+                    return r
+            try: M.logout()
+            except Exception: pass
+        except Exception as e:
+            add_log(f'[IMAP 인증오류] {str(e)[:70]}'); return None
+        time.sleep(5)
+    return None
+
 def tempmail_wait_verify_link(token, timeout=120):
-    """받은편지함 폴링 → 인증 링크/6자리 코드. token 태그(MT:/1S:)로 서비스 구분(전략2D).
+    """받은편지함 폴링 → 인증 링크/6자리 코드. token 태그(IMAP:/MT:/1S:)로 서비스 구분.
        반환: {'link':url} 또는 {'code':'123456'} 또는 None."""
     deadline = time.time() + timeout
+    # --- IMAP 실제메일(지메일 등) ---
+    if str(token).startswith('IMAP:'):
+        return _imap_wait_verify(token[5:], timeout)
     # --- 1secmail ---
     if str(token).startswith('1S:'):
         login, _, domain = token[3:].partition('|')
@@ -6200,11 +6272,12 @@ def api_cfg():
                   'discover_query_limit','discover_keywords','discover_direct_queries','excluded_domains','finder_ratio',
                   'workroom_workers','vps_reserve_mb','vps_mb_per_worker','site_goal',
                   'video_url','landing_url','post_email','guest_post_password',
+                  'imap_email','imap_password','imap_host',
                   'twocaptcha_api_key','twocaptcha_enabled',
                   'twocaptcha_price_recaptcha_usd','twocaptcha_price_image_usd','brave_price_per_query_usd',
                   'auto_pipeline_enabled','auto_pipeline_batch']:
             if k in d:
-                if k in ('openai_key','openai_admin_key','telegram_token','google_api_key','brave_api_key','guest_post_password','twocaptcha_api_key') and d[k]=='***설정됨***': continue  # 마스크 값은 무시(기존 유지)
+                if k in ('openai_key','openai_admin_key','telegram_token','google_api_key','brave_api_key','guest_post_password','twocaptcha_api_key','imap_password') and d[k]=='***설정됨***': continue  # 마스크 값은 무시(기존 유지)
                 cfg[k]=d[k]
         if d.get('password'): cfg['password']=generate_password_hash(d['password'])  # 해시 저장
         # 완전 자동화: 필수 키(Brave 발굴 + 2captcha)가 채워지면 발굴·파이프라인을 자동 ON.
@@ -6227,6 +6300,7 @@ def api_cfg():
     if c.get('brave_api_key'): c['brave_api_key']='***설정됨***'
     if c.get('guest_post_password'): c['guest_post_password']='***설정됨***'
     if c.get('twocaptcha_api_key'): c['twocaptcha_api_key']='***설정됨***'
+    if c.get('imap_password'): c['imap_password']='***설정됨***'
     c.pop('password',None)
     return jsonify(c)
 
@@ -6978,6 +7052,11 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 <div style="margin-top:6px"><small style="color:var(--d)">홍보/랜딩 URL (필수 링크란 자동 입력)</small><input id="cLandingUrl" placeholder="https://내사이트.kr/"></div>
 <div style="margin-top:6px"><small style="color:var(--d)">게시용 이메일 (필수일 때만)</small><input id="cPostEmail" type="email" placeholder="name@example.com"></div>
 <div style="margin-top:6px"><small style="color:var(--d)">비회원 글 비밀번호 (필수일 때만)</small><input id="cGuestPw" type="password" placeholder="변경시에만 입력"></div>
+<div style="margin-top:12px;padding:10px;border:1px solid #2a5;border-radius:8px;background:#0f1a12">
+<div style="color:var(--g);font-weight:700;font-size:12px;margin-bottom:6px">📧 실제 이메일(IMAP) 인증 — 로그인 게시판 자동가입용 (강력 권장)</div>
+<div style="font-size:10px;color:var(--d);margin-bottom:6px">지메일 추천. 일회용 임시메일을 거부하는 게시판도 통과합니다. 각 가입은 <b>내주소+랜덤@gmail.com</b> 플러스주소로 유니크 발급되고, 인증메일을 IMAP으로 자동 읽어 처리합니다. 비우면 임시메일 사용.</div>
+<div class="row"><input id="cImapEmail" type="email" placeholder="예: mymail@gmail.com" style="max-width:260px"><input id="cImapPass" type="password" placeholder="앱 비밀번호 16자리 (변경시만)" style="max-width:240px"><input id="cImapHost" placeholder="imap.gmail.com" style="max-width:180px"></div>
+<div style="font-size:10px;color:var(--d);margin-top:5px">⚠️ 지메일: 2단계인증 켜고 <b>앱 비밀번호</b>를 발급해 넣으세요(일반 비번 아님). IMAP 사용 설정도 켜야 합니다.</div></div>
 <div style="font-size:10px;color:var(--d)">제목의 번호는 매번 <b style="color:var(--p)">[010]↔8275↔5736 · O1O=2572=3859 · [OIO-5350-5892]</b> 처럼 랜덤 기호로 변형됩니다. 여러 개면 그 중 하나를 랜덤 선택. 비우면 위 대표 전화번호 사용.</div></div>
 <div class="card"><h3>워커/비번</h3>
 <div style="margin-bottom:6px"><small style="color:var(--d)">워커 수</small><input type="number" id="cWorkers" value="{{cfg.workers}}" min="1" max="10"></div>
@@ -7338,11 +7417,11 @@ function previewPost(){const c=$('gContent').value.trim();if(!c){toast('먼저 �
 function closePreview(){$('pvOverlay').style.display='none';$('pvFrame').srcdoc=''}
 async function delSite(id){if(!confirm('삭제?'))return;await api('/sites','DELETE',{id});renderSites()}
 async function testSite(id){toast('Selenium 테스트 중...');const r=await api('/test/'+id,'POST');if(r&&r.ok)toast('✅ 테스트 성공!'+(r.platform?' ['+(r.platform==='cafe24'?'Cafe24':'그누보드')+']':'')+' '+(r.message||''));else toast('실패: '+(r?.error||r?.message||''),'er')}
-async function saveCfg(){const d={brand:$('cBrand').value.trim(),phone:$('cPhone').value.trim(),phones:$('cPhones').value,video_url:$('cVideoUrl').value.trim(),landing_url:$('cLandingUrl').value.trim(),post_email:$('cPostEmail').value.trim(),workers:parseInt($('cWorkers').value)||2,post_delay:parseInt($('cDelay').value)||0,daily_limit:parseInt($('cDaily').value)||0,use_gpt:$('cUseGpt').checked,model:$('cModel').value.trim()||'gpt-4o-mini',openai_monthly_budget_usd:parseFloat($('cOpenaiBudget').value)||0,openai_input_price_per_million:parseFloat($('cOpenaiInPrice').value)||0,openai_output_price_per_million:parseFloat($('cOpenaiOutPrice').value)||0,telegram_chat_id:$('cTgChat').value.trim(),notify_done:$('cNotifyDone').checked,notify_fail:$('cNotifyFail').checked,backup_time:$('cBackupTime').value.trim(),telegram_control:$('cTgControl').checked,verify_enabled:$('cVerify').checked,mix_keywords:$('cMixKw').checked,block_unpaid:$('cBlockUnpaid').checked,search_provider:'brave',discover_enabled:$('cDiscoOn').checked,discover_daily_target:parseInt($('cDTarget').value)||100,discover_query_limit:parseInt($('cDQuery').value)||100,discover_keywords:'',discover_direct_queries:$('cDDirect').value,excluded_domains:($('cExcludedDomains')?$('cExcludedDomains').value:''),twocaptcha_enabled:$('cTwocaptchaEn').checked,brave_price_per_query_usd:parseFloat($('cBravePrice').value)||0,twocaptcha_price_recaptcha_usd:parseFloat($('cCapRePrice').value)||0,twocaptcha_price_image_usd:parseFloat($('cCapImgPrice').value)||0,openai_cached_input_price_per_million:parseFloat($('cOpenaiCachedPrice')?.value)||undefined};
+async function saveCfg(){const d={brand:$('cBrand').value.trim(),phone:$('cPhone').value.trim(),phones:$('cPhones').value,video_url:$('cVideoUrl').value.trim(),landing_url:$('cLandingUrl').value.trim(),post_email:$('cPostEmail').value.trim(),workers:parseInt($('cWorkers').value)||2,post_delay:parseInt($('cDelay').value)||0,daily_limit:parseInt($('cDaily').value)||0,use_gpt:$('cUseGpt').checked,model:$('cModel').value.trim()||'gpt-4o-mini',openai_monthly_budget_usd:parseFloat($('cOpenaiBudget').value)||0,openai_input_price_per_million:parseFloat($('cOpenaiInPrice').value)||0,openai_output_price_per_million:parseFloat($('cOpenaiOutPrice').value)||0,telegram_chat_id:$('cTgChat').value.trim(),notify_done:$('cNotifyDone').checked,notify_fail:$('cNotifyFail').checked,backup_time:$('cBackupTime').value.trim(),telegram_control:$('cTgControl').checked,verify_enabled:$('cVerify').checked,mix_keywords:$('cMixKw').checked,block_unpaid:$('cBlockUnpaid').checked,search_provider:'brave',discover_enabled:$('cDiscoOn').checked,discover_daily_target:parseInt($('cDTarget').value)||100,discover_query_limit:parseInt($('cDQuery').value)||100,discover_keywords:'',discover_direct_queries:$('cDDirect').value,excluded_domains:($('cExcludedDomains')?$('cExcludedDomains').value:''),imap_email:($('cImapEmail')?$('cImapEmail').value.trim():''),imap_password:($('cImapPass')&&$('cImapPass').value?$('cImapPass').value:'***설정됨***'),imap_host:($('cImapHost')&&$('cImapHost').value.trim()?$('cImapHost').value.trim():'imap.gmail.com'),twocaptcha_enabled:$('cTwocaptchaEn').checked,brave_price_per_query_usd:parseFloat($('cBravePrice').value)||0,twocaptcha_price_recaptcha_usd:parseFloat($('cCapRePrice').value)||0,twocaptcha_price_image_usd:parseFloat($('cCapImgPrice').value)||0,openai_cached_input_price_per_million:parseFloat($('cOpenaiCachedPrice')?.value)||undefined};
 if(d.openai_cached_input_price_per_million===undefined)delete d.openai_cached_input_price_per_million;
 const bk=$('cBraveKey').value.trim();if(bk)d.brave_api_key=bk;
 const pw=$('cPw').value.trim();if(pw)d.password=pw;const gp=$('cGuestPw').value.trim();if(gp)d.guest_post_password=gp;const ok=$('cOpenai').value.trim();if(ok)d.openai_key=ok;const oa=$('cOpenaiAdmin').value.trim();if(oa)d.openai_admin_key=oa;const tg=$('cTgTok').value.trim();if(tg)d.telegram_token=tg;const tc=$('cTwocaptchaKey').value.trim();if(tc)d.twocaptcha_api_key=tc;const r=await api('/config','POST',d);if(r&&r.ok){toast('저장 완료');$('cPw').value='';$('cGuestPw').value='';$('cOpenai').value='';$('cOpenaiAdmin').value='';$('cTgTok').value='';$('cTwocaptchaKey').value='';loadOpenAIUsage()}}
-async function loadCfgUI(){const c=await api('/config','GET');if(!c)return;$('cVideoUrl').value=c.video_url||'';$('cLandingUrl').value=c.landing_url||'';$('cPostEmail').value=c.post_email||'';$('cGuestPw').placeholder=(c.guest_post_password==='***설정됨***')?'설정됨 · 변경시에만 입력':'변경시에만 입력';$('cUseGpt').checked=!!c.use_gpt;$('cNotifyDone').checked=!!c.notify_done;$('cNotifyFail').checked=!!c.notify_fail;$('cTgControl').checked=!!c.telegram_control;$('cVerify').checked=(c.verify_enabled!==false);$('cMixKw').checked=(c.mix_keywords!==false);$('cBlockUnpaid').checked=(c.block_unpaid!==false);$('cDiscoOn').checked=!!c.discover_enabled;if(c.discover_daily_target)$('cDTarget').value=c.discover_daily_target;if(c.discover_query_limit)$('cDQuery').value=c.discover_query_limit;if(typeof c.discover_direct_queries==='string')$('cDDirect').value=c.discover_direct_queries;if($('cExcludedDomains')&&typeof c.excluded_domains==='string')$('cExcludedDomains').value=c.excluded_domains;$('cBraveKey').placeholder=(c.brave_api_key==='***설정됨***')?'설정됨 · 변경시에만 입력':'Brave API 키 입력';if(c.backup_time)$('cBackupTime').value=c.backup_time;if(c.model)$('cModel').value=c.model;if(c.telegram_chat_id)$('cTgChat').value=c.telegram_chat_id;if(typeof c.phones==='string')$('cPhones').value=c.phones;$('cOpenai').placeholder=(c.openai_key==='***설정됨***')?'설정됨 · 변경시만 입력':'sk-... (변경시만)';$('cOpenaiAdmin').placeholder=(c.openai_admin_key==='***설정됨***')?'관리자 키 설정됨 · 변경시만 입력':'관리자 키 없으면 로컬 예상비용 사용';$('cOpenaiBudget').value=c.openai_monthly_budget_usd==null?20:c.openai_monthly_budget_usd;$('cOpenaiInPrice').value=c.openai_input_price_per_million==null?0.15:c.openai_input_price_per_million;$('cOpenaiOutPrice').value=c.openai_output_price_per_million==null?0.60:c.openai_output_price_per_million;$('cTgTok').placeholder=(c.telegram_token==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';$('cTwocaptchaEn').checked=!!c.twocaptcha_enabled;$('cTwocaptchaKey').placeholder=(c.twocaptcha_api_key==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';if(c.brave_price_per_query_usd!=null)$('cBravePrice').value=c.brave_price_per_query_usd;if(c.twocaptcha_price_recaptcha_usd!=null)$('cCapRePrice').value=c.twocaptcha_price_recaptcha_usd;if(c.twocaptcha_price_image_usd!=null)$('cCapImgPrice').value=c.twocaptcha_price_image_usd;loadOpenAIUsage()}
+async function loadCfgUI(){const c=await api('/config','GET');if(!c)return;$('cVideoUrl').value=c.video_url||'';$('cLandingUrl').value=c.landing_url||'';$('cPostEmail').value=c.post_email||'';$('cGuestPw').placeholder=(c.guest_post_password==='***설정됨***')?'설정됨 · 변경시에만 입력':'변경시에만 입력';$('cUseGpt').checked=!!c.use_gpt;$('cNotifyDone').checked=!!c.notify_done;$('cNotifyFail').checked=!!c.notify_fail;$('cTgControl').checked=!!c.telegram_control;$('cVerify').checked=(c.verify_enabled!==false);$('cMixKw').checked=(c.mix_keywords!==false);$('cBlockUnpaid').checked=(c.block_unpaid!==false);$('cDiscoOn').checked=!!c.discover_enabled;if(c.discover_daily_target)$('cDTarget').value=c.discover_daily_target;if(c.discover_query_limit)$('cDQuery').value=c.discover_query_limit;if(typeof c.discover_direct_queries==='string')$('cDDirect').value=c.discover_direct_queries;if($('cExcludedDomains')&&typeof c.excluded_domains==='string')$('cExcludedDomains').value=c.excluded_domains;if($('cImapEmail'))$('cImapEmail').value=c.imap_email||'';if($('cImapHost'))$('cImapHost').value=c.imap_host||'imap.gmail.com';if($('cImapPass'))$('cImapPass').placeholder=(c.imap_password==='***설정됨***')?'설정됨 · 변경시만 입력':'앱 비밀번호 16자리 (변경시만)';$('cBraveKey').placeholder=(c.brave_api_key==='***설정됨***')?'설정됨 · 변경시에만 입력':'Brave API 키 입력';if(c.backup_time)$('cBackupTime').value=c.backup_time;if(c.model)$('cModel').value=c.model;if(c.telegram_chat_id)$('cTgChat').value=c.telegram_chat_id;if(typeof c.phones==='string')$('cPhones').value=c.phones;$('cOpenai').placeholder=(c.openai_key==='***설정됨***')?'설정됨 · 변경시만 입력':'sk-... (변경시만)';$('cOpenaiAdmin').placeholder=(c.openai_admin_key==='***설정됨***')?'관리자 키 설정됨 · 변경시만 입력':'관리자 키 없으면 로컬 예상비용 사용';$('cOpenaiBudget').value=c.openai_monthly_budget_usd==null?20:c.openai_monthly_budget_usd;$('cOpenaiInPrice').value=c.openai_input_price_per_million==null?0.15:c.openai_input_price_per_million;$('cOpenaiOutPrice').value=c.openai_output_price_per_million==null?0.60:c.openai_output_price_per_million;$('cTgTok').placeholder=(c.telegram_token==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';$('cTwocaptchaEn').checked=!!c.twocaptcha_enabled;$('cTwocaptchaKey').placeholder=(c.twocaptcha_api_key==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';if(c.brave_price_per_query_usd!=null)$('cBravePrice').value=c.brave_price_per_query_usd;if(c.twocaptcha_price_recaptcha_usd!=null)$('cCapRePrice').value=c.twocaptcha_price_recaptcha_usd;if(c.twocaptcha_price_image_usd!=null)$('cCapImgPrice').value=c.twocaptcha_price_image_usd;loadOpenAIUsage()}
 async function loadOpenAIUsage(){
   const r=await api('/openai/usage','GET');
   const c=await api('/twocaptcha/usage','GET');
