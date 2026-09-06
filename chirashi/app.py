@@ -569,7 +569,7 @@ def load_config():
 
        'discover_interval_sec':600,   # 발굴 주기 10분(크레딧 절약). 목표 도달 시 자동 중단
        'pipeline_interval_sec':120,   # 전환(후보→가입→발행테스트) 전용 루프 주기 — 발굴과 독립
-       'login_signup_per_cycle':2,    # 로그인 필요 게시판 자동가입은 주기당 소수만(비회원 우선·이메일인증 낭비 방지)
+       'login_signup_per_cycle':5,    # 로그인 필요 게시판 자동가입 주기당 처리 수(IMAP 설정 후 백로그 소진용)
        'log_token':'cae3aaa53d6f3576a1c1f6a258f79129'}   # 읽기전용 로그 조회 토큰(?token= 로 /api/logs·/api/worker-log 접근)
     c=load_json(CONFIG_FILE,None)
     if c is None or not isinstance(c,dict): save_json(CONFIG_FILE,d); return d.copy()
@@ -602,6 +602,12 @@ def load_config():
             if _ch: save_sites(_ss)
         except Exception: pass
         c['interval1_unlimited_migrated']=True
+        try: save_json(CONFIG_FILE,c)
+        except Exception: pass
+    # 1회 마이그레이션: IMAP 설정 후 쌓인 로그인 게시판 후보 소진 위해 주기당 처리 2→5.
+    if not c.get('login5_migrated'):
+        if int(c.get('login_signup_per_cycle',0) or 0) in (0,2): c['login_signup_per_cycle']=5
+        c['login5_migrated']=True
         try: save_json(CONFIG_FILE,c)
         except Exception: pass
     # 1회 마이그레이션: VPS 업그레이드(4vCPU/8GB)에 맞춰 동시 발행 워커 상한 3→4.
@@ -3537,6 +3543,15 @@ BRAVE_URL_FRAGMENTS=['bbs/write.php bo_table=promotion 비회원','bbs/write.php
                      # 전략3: 활발한(=색인 빠른) 게시판 신호 — 최근/오늘 등록·조회 많은 홍보 게시판.
                      'bbs/board.php 오늘 등록 홍보 게시판','bbs/board.php 실시간 홍보 자유게시판',
                      'bbs/board.php 광고 게시판 무료 등록 비회원','bbs/board.php 링크 홍보 게시판 누구나']
+# 카페24 게시판 찾기 조각 — 카페24로 만든 사이트(쇼핑몰·회사홈)의 자유/홍보 게시판을 겨냥.
+# 경로: /board/free/list.html, /board/write.html?board_no=, /article/... 등. 그누보드와 동등하게 강화.
+CAFE24_FRAGMENTS=['board/free/list.html 홍보','board/free/write.html 비회원','board write.html 자유게시판 홍보',
+                  'board_no 자유게시판 홍보 글쓰기','cafe24 자유게시판 비회원 글쓰기','cafe24 게시판 홍보 환영',
+                  'board 홍보게시판 write.html 등록','cafe24 자유게시판 광고 가능','board/board.html 홍보 비회원',
+                  'article write 자유게시판 홍보','cafe24 커뮤니티 게시판 홍보 글쓰기','board/free 광고 환영 비회원',
+                  'cafe24 쇼핑몰 자유게시판 글쓰기','cafe24 게시판 홍보 후기 등록','board write.html 비회원 홍보 환영',
+                  'cafe24 자유게시판 업체등록 무료','cafe24 홍보게시판 010 문의','cafe24 게시판 광고 게시 가능',
+                  'board list.html 자유 홍보 010','cafe24 자유게시판 링크 등록']
 
 def _board_finder_queries(provider):
     """플랫폼(그누보드/카페24) 홍보·자유 게시판을 '찾기 위한' 검색어.
@@ -3553,10 +3568,11 @@ def _board_finder_queries(provider):
         for i in INTENT:
             qs.append(f'{i} bbs board.php 글쓰기')
             qs.append(f'{i} 그누보드 게시판')
-        # 카페24: 평문 게시판 경로 조각(그누보드보다 약하지만 커버)
-        for frag in ['board/free list.html 홍보','board_no 자유게시판 cafe24',
-                     'board 홍보게시판 write.html','cafe24 게시판 홍보 환영']:
+        # 카페24: 게시판 경로 조각 + 홍보/비회원 신호(그누보드와 동등하게 강화 — 카페24 사이트 대량 커버)
+        for frag in CAFE24_FRAGMENTS:
             qs.append(frag)
+            for i in INTENT[:2]:
+                qs.append(f'{frag} {i}')
     else:
         # Google: inurl: 연산자가 강력
         for p in GNU_PATTERNS+CAFE_PATTERNS:
