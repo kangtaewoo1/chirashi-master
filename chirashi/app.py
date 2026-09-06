@@ -4609,6 +4609,7 @@ def auto_pipeline_once(limit=5):
                 else:
                     _cand_set(c['id'],status='rejected',reject_reason=f'자동가입 실패: {msg_su[:80]}')
                     results.append({'name':name,'stage':'signup','ok':False,'msg':msg_su})
+                    add_log(f'[자동가입 실패] {name} — {str(msg_su)[:90]}')  # 어느 사이트가 왜 실패했는지 로그로 남김
                     continue  # done 증가·드라이버 리셋은 finally에서 처리
             # 2) 실제 글 1건 발행 (스케줄/작업실 랜덤 키워드). 방금 가입했으면 로그인된 세션 재사용.
             kw=_test_kw()
@@ -4636,17 +4637,21 @@ def auto_pipeline_once(limit=5):
                     set_site_flag(_promoted_site_id(c),mb_id=tmp.get('mb_id'),mb_pass=tmp.get('mb_pass'))
                 registered+=1
                 results.append({'name':name,'stage':'post','ok':True,'url':result_url})
+                add_log(f'[발행가능 등록] {name} — 자동가입·실발행 검증 통과 → 발행가능으로 이동')  # 되는 곳 이동 로그
             elif ok:
                 _cand_set(c['id'],status='rejected',reject_reason='발행됨(결과 URL 확인 불가)')
                 results.append({'name':name,'stage':'post','ok':False,'msg':'결과 URL 없음'})
+                add_log(f'[탈락] {name} — 발행됐으나 결과 URL 확인 불가')
             else:
                 reason,_,is_temp=classify_fail(msg)
                 # 일시적 실패라도 무한 재시도로 배치 슬롯을 소모하지 않게 상한(5회)을 둔다.
                 attempts=int(c.get('pipeline_attempts',0) or 0)+1
                 if is_temp and attempts<5:
                     _cand_set(c['id'],status='ready',reject_reason=f'일시적 실패({attempts}/5): {str(msg)[:60]}',pipeline_attempts=attempts)
+                    add_log(f'[발행 재시도] {name} ({attempts}/5) — {str(msg)[:70]}')
                 else:
                     _cand_set(c['id'],status='rejected',reject_reason=(str(msg)[:90] if not is_temp else f'재시도 {attempts}회 초과: {str(msg)[:60]}'),pipeline_attempts=attempts)
+                    add_log(f'[탈락] {name} — {str(msg)[:80]}')  # 안 되는 곳 탈락 로그
                 results.append({'name':name,'stage':'post','ok':False,'msg':str(msg)[:90]})
         except Exception as e:
             results.append({'name':name,'stage':'error','ok':False,'msg':str(e)[:100]})
