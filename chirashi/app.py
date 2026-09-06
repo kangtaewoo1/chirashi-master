@@ -902,6 +902,36 @@ SERVICE_FLAVOR = {
 DEFAULT_FLAVOR={'mood':['편안하고 세련된','밝고 활기찬','아늑한']}
 RELATED_POOL=['하이퍼블릭','노래빠','쓰리노','가요광장','터치룸','노래클럽','가라오케','호빠','룸싸롱','셔츠룸','퍼블릭','비즈니스바','가요주점']
 
+# ── 메인 키워드 1개 → 지역(구/동)+업종 분리, 서브2·3 자동 생성 (대표님 지시 2026-09-07) ──
+# "메인만 한 줄씩" 입력 시: 교동노래방 → 지역='교동', 업종='노래방'.
+# 서브2(서비스)·서브3(브랜드)는 그 구/동에 맞춰 매 발행마다 랜덤 조합한다.
+SERVICE_SUFFIXES=['하이퍼블릭','다국적노래방','가요주점','비즈니스바','노래클럽','가라오케','룸싸롱','풀싸롱',
+                  '셔츠룸','쓰리노','퍼블릭','노래빠','노래방','호빠','룸','바','안마','마사지','테라피',
+                  '출장마사지','출장안마','스웨디시','건마']
+
+def _split_main_keyword(main):
+    """메인 키워드에서 (지역=구/동, 업종) 분리. 업종 접미사를 뒤에서부터 최장일치로 찾는다.
+       예) '교동노래방'→('교동','노래방'), '강남하이퍼블릭'→('강남','하이퍼블릭'),
+           업종을 못 찾으면 지역=전체, 업종='' 반환."""
+    m=str(main or '').strip()
+    for suf in sorted(SERVICE_SUFFIXES,key=len,reverse=True):
+        if m.endswith(suf) and len(m)>len(suf):
+            return m[:-len(suf)].strip(), suf
+    return m, ''
+
+def _auto_subkeywords(main):
+    """메인 1개에서 {지역,서비스,브랜드} 조합을 생성. 서브2·3은 그 구/동에 맞춰 랜덤.
+       - 지역 = 구/동 (예: 교동)
+       - 서비스 = 메인의 업종(있으면) 또는 관련 업종 랜덤
+       - 브랜드 = 구/동 + 관련 업종(랜덤) — 예: 교동가라오케"""
+    region,service=_split_main_keyword(main)
+    if not region: region=str(main or '').strip()
+    svc=service or random.choice(RELATED_POOL)
+    # 브랜드: 그 동/구에 매칭된 다른 관련 업종을 붙여 지역성 유지(중복 방지 위해 svc와 다르게)
+    pool=[x for x in RELATED_POOL if x!=svc] or RELATED_POOL
+    brand=region+random.choice(pool)
+    return {'지역':region,'서비스':svc,'브랜드':brand}
+
 def generate_rich_html(keywords, cfg, workroom_id=None):
     r=(keywords.get('지역') or '서울').strip()
     s=(keywords.get('서비스') or '셔츠룸').strip()
@@ -5014,11 +5044,15 @@ def collect_all_keywords():
     try:
         for room in (load_json(WORKROOMS_FILE,[]) or []):
             for line in str(room.get('keyword_csv') or '').splitlines():
-                p=[x.strip() for x in line.split(',')]
+                raw=line.strip()
+                if not raw or raw.startswith('#'): continue
+                p=[x.strip() for x in raw.split(',')]
                 if len(p)>=3 and all(p[:3]):
                     pool.append({'지역':p[0],'서비스':p[1],'브랜드':p[2]})
-                elif len(p)>=1 and p[0]:
-                    pool.append({'지역':p[0],'서비스':(p[1] if len(p)>1 else ''),'브랜드':(p[2] if len(p)>2 else '')})
+                elif len(p)>=2 and p[0] and p[1]:
+                    pool.append({'지역':p[0],'서비스':p[1],'브랜드':(p[2] if len(p)>2 else '')})
+                elif p and p[0]:
+                    pool.append(_auto_subkeywords(p[0]))   # 메인 1개 → 서브 자동생성
     except Exception:
         pass
     # 회원(고객) 전용 키워드도 상시발행 풀에 합친다 — 회원관리에 넣은 키워드가 24시간 발행에 안 쓰이던 문제 해결.
@@ -5036,14 +5070,22 @@ _WR_CURSOR={}   # workroom_id -> 다음 발행할 조합 인덱스(메모리). �
 _WR_RR=[0]      # 작업실 라운드로빈 포인터(모든 작업실을 번갈아 동시 진행)
 
 def _workroom_combos(room):
-    """작업실 keyword_csv → [{'지역','서비스','브랜드'}, ...] (한 줄=한 조합=한 글)."""
+    """작업실 keyword_csv → [{'지역','서비스','브랜드'}, ...] (한 줄=한 조합=한 글).
+       ★대표님 지시(2026-09-07): 한 줄에 메인 키워드 1개만 넣으면(콤마 없음)
+         '메인만 한 줄' 모드로 보고, 서브2·3은 발행 시 그 구/동에 맞춰 자동 생성한다.
+         (콤마로 3개 넣으면 기존처럼 고정 조합)"""
     combos=[]
     for line in str(room.get('keyword_csv') or '').splitlines():
-        p=[x.strip() for x in line.split(',')]
+        raw=line.strip()
+        if not raw or raw.startswith('#'): continue   # 빈 줄·메모(#) 제외
+        p=[x.strip() for x in raw.split(',')]
         if len(p)>=3 and all(p[:3]):
-            combos.append({'지역':p[0],'서비스':p[1],'브랜드':p[2]})
+            combos.append({'지역':p[0],'서비스':p[1],'브랜드':p[2]})   # 고정 3개 조합(기존)
+        elif len(p)>=2 and p[0]:
+            combos.append({'지역':p[0],'서비스':p[1],'브랜드':(p[2] if len(p)>2 else '')})
         elif p and p[0]:
-            combos.append({'지역':p[0],'서비스':(p[1] if len(p)>1 else ''),'브랜드':(p[2] if len(p)>2 else '')})
+            # 메인 1개만 → 발행 시 서브 자동생성. main으로 표시.
+            combos.append({'_main':p[0],'_main_only':True})
     return combos
 
 _WR_SLOTS={}   # slot_index -> Thread (작업실 발행 슬롯 워커 = 동시 크롬)
@@ -5062,14 +5104,16 @@ def _publish_one_combo(kw, wname, rid, cfg, writer_name=''):
         if rid: fresh['workroom_id']=rid                    # 첨부 이미지도 작업실 전용 폴더에서 고르도록 전달
         if not under_daily_limit(fresh,cfg): continue
         if not under_min_interval(fresh)[0]: continue
+        # '메인만 한 줄' 모드면 사이트마다 서브2·3을 그 구/동에 맞춰 새로 랜덤 생성(반복 방지).
+        pub_kw=_auto_subkeywords(kw.get('_main','')) if kw.get('_main_only') else kw
         try:
-            html,title=generate_article(kw,cfg,unique=True,workroom_id=rid)
+            html,title=generate_article(pub_kw,cfg,unique=True,workroom_id=rid)
         except Exception as e:
             add_log(f"[작업실:{wname}] 생성오류 {str(e)[:50]}"); continue
         now=datetime.now().strftime('%Y-%m-%d %H:%M:%S'); jid=secrets.token_hex(8)
         history_add({'id':jid,'time':now,'updated':now,'site_id':fresh.get('id'),
             'site_name':fresh.get('name') or fresh.get('site_url',''),'site_url':fresh.get('site_url',''),
-            'bo_table':fresh.get('bo_table',''),'title':title,'region':kw.get('지역',''),'service':kw.get('서비스',''),
+            'bo_table':fresh.get('bo_table',''),'title':title,'region':pub_kw.get('지역',''),'service':pub_kw.get('서비스',''),
             'workroom_id':rid,'workroom_name':wname,'status':'posting','result_url':'','message':'','attempts':0})
         ok=False; msg=''
         for attempt in range(1,4):
@@ -6122,8 +6166,14 @@ def api_workrooms():
         keyword_csv=str(d.get('keyword_csv') or '')
         rows=[]
         for line in keyword_csv.splitlines():
-            p=[x.strip() for x in line.split(',')]
-            if len(p)>=3 and all(p[:3]): rows.append(','.join(p[:3]))
+            raw=line.strip()
+            if not raw: continue
+            if raw.startswith('#'):        # 메모 줄은 그대로 보존
+                rows.append(raw); continue
+            p=[x.strip() for x in raw.split(',')]
+            if len(p)>=3 and all(p[:3]): rows.append(','.join(p[:3]))   # 고정 3개 조합
+            elif len(p)>=2 and p[0] and p[1]: rows.append(','.join(p[:2]))  # 지역,서비스
+            elif p and p[0]: rows.append(p[0])   # ★메인 1개만 — 서브는 발행 시 자동생성(대표님 지시)
         new_csv='\n'.join(rows)
         # 키워드 목록이 바뀌면 소진 커서를 맨 위로 리셋(새로 생성/교체 시 처음부터 소진).
         if new_csv!=(room.get('keyword_csv') or ''):
@@ -7357,7 +7407,8 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 <div style="color:var(--d);font-size:10px;margin-top:6px">발행 대상: <b style="color:var(--g)">전체 발행가능 사이트 자동</b> · 목록을 다 쓰면 맨 위부터 무한 반복(제목·본문은 매번 새로 생성).</div>
 
 <details style="margin-top:10px"><summary style="cursor:pointer;color:var(--d);font-size:11px">저장된 조합 보기 · 직접 편집</summary>
-<textarea id="wrKeywords" rows="5" placeholder="아직 생성된 조합이 없습니다 — 위 3단계로 생성하세요" style="margin-top:6px"></textarea>
+<div style="color:var(--g);font-size:10px;margin:6px 0 4px;line-height:1.6">💡 <b>메인 키워드 1개만 한 줄씩</b> 넣어도 됩니다(예: <code>교동노래방</code>). 그러면 서브2·3은 <b>그 구/동에 맞춰 매 발행마다 자동 랜덤</b> — 같은 조합 반복 없이 쭉쭉 진행됩니다.<br>콤마로 <code>지역,서비스,브랜드</code> 3개를 넣으면 기존처럼 고정 조합으로 씁니다.</div>
+<textarea id="wrKeywords" rows="5" placeholder="교동노래방&#10;강남하이퍼블릭&#10;부평다국적노래방&#10;(또는) 서울,셔츠룸,강남홍마니" style="margin-top:6px"></textarea>
 <button class="btn btn-g btn-xs" style="margin-top:4px" onclick="saveWorkroom()">직접 편집분 저장</button></details>
 <select id="wrSite" style="display:none"><option value="">전체</option></select>
 </div>
