@@ -6333,11 +6333,18 @@ def api_sites_purge():
 
 @app.route('/api/logs',methods=['GET'])
 def api_logs():
-    """최근 실행 로그(add_log)를 최신순으로 반환. 파이프라인 진행 표시용."""
+    """최근 실행 로그(add_log)를 최신순으로 반환. 파이프라인 진행 표시용.
+       진단용으로 IMAP 설정 여부(값 노출 없이 있음/없음)도 함께 반환한다."""
     try: n=max(1,min(200,int(request.args.get('n',60))))
     except Exception: n=60
     logs=load_json(LOG_FILE,[])
-    return jsonify({'ok':True,'logs':list(reversed(logs))[:n]})
+    _c=load_config()
+    _em=(_c.get('imap_email') or '').strip()
+    diag={'imap_email_set':bool(_em),'imap_email_domain':(_em.split('@')[-1] if '@' in _em else ''),
+          'imap_password_set':bool((_c.get('imap_password') or '').strip()),
+          'imap_host':_c.get('imap_host',''),
+          'publish_loop':bool(_c.get('publish_loop_enabled')),'auto_pipeline':bool(_c.get('auto_pipeline_enabled'))}
+    return jsonify({'ok':True,'logs':list(reversed(logs))[:n],'diag':diag})
 
 # ---- 발행 이력 (결과 탭) ----
 @app.route('/api/history',methods=['GET'])
