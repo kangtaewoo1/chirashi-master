@@ -1737,6 +1737,17 @@ def enable_html_mode(d):
                     d.execute_script('arguments[0].click()',btn); time.sleep(0.2)
                     return True
     except Exception: pass
+    # ★HTML을 그대로 렌더하는 리치에디터는 HTML 모드로 발행(예쁜 디자인 유지 — 대표님 지시).
+    #   smarteditor2(네이버 SE2, oEditors.SET_IR)·XpressEngine(XE) 에디터는 HTML 콘텐츠를 렌더한다.
+    try:
+        src=(d.page_source or '').lower()
+        # smarteditor2: oEditors 전역 + se2 위지윅 iframe이 있으면 HTML 렌더 에디터로 확정
+        if "typeof oeditors" in src or 'oeditors.geteditorbyidorname' in src or 'se2_input_wysiwyg' in src:
+            return True
+        # XpressEngine 에디터(ckeditor/xpresseditor 등) — editor_sequence가 있는 XE 글쓰기
+        if 'editor_sequence' in src and ('xpressengine' in src or '/modules/editor' in src or 'ckeditor' in src):
+            return True
+    except Exception: pass
     return False
 
 def editor_content_for_page(d,content_html):
