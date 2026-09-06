@@ -1739,6 +1739,8 @@ def fill_required_post_fields(d,site):
     brand=(cfg.get('brand') or '게시자').strip()
     # 작성자 이름: 작업실별로 지정한 값(site.writer_name) 우선, 없으면 브랜드. 발행 직전 site에 심어짐.
     writer=(str(site.get('writer_name') or '').strip() or brand)
+    try: phone_val=format_phone(pick_phone(cfg))
+    except Exception: phone_val=(cfg.get('phone') or '')
     guest_pw=(cfg.get('guest_post_password') or '').strip()
     video_url=(cfg.get('video_url') or '').strip()
     landing=(cfg.get('landing_url') or '').strip()
@@ -1789,13 +1791,13 @@ def fill_required_post_fields(d,site):
         if re.search(r'(wr_name|이름)',blob): value=writer
         elif typ=='password' or re.search(r'(password|passwd|비밀번호)',blob): value=guest_pw
         elif re.search(r'(email|e-mail|이메일)',blob): value=post_email  # 자동 브랜드메일(빈값 방지)
-        elif re.search(r'(tel|phone|연락처|전화|휴대)',blob): value=(cfg.get('phone') or brand)
+        elif re.search(r'(tel|phone|mobile|연락처|전화|휴대|핸드폰)',blob): value=(phone_val or post_email)  # 실제 번호(브랜드 넣지 않음)
         elif re.search(r'(youtube|youtu\.be|vimeo|동영상|영상)',blob) or (name in ('wr_link1','link1') and re.search(r'(youtube|유투브|유튜브|vimeo|비메오|동영상)',page_text)): value=video_url or landing or site.get('site_url','')
         elif re.search(r'(link|url|homepage|홈페이지|링크)',blob): value=landing or site.get('site_url','')
         else:
-            # 의미를 특정 못한 필수 텍스트/텍스트영역(그누보드 wr_2/wr_5 등 커스텀 확장필드)은
-            # 발행을 막지 말고 안전한 일반값으로 채운다(브랜드명). 이메일 형태면 이메일값.
-            value=post_email if 'mail' in blob else brand
+            # 의미를 특정 못한 필수 텍스트(주소 등)는 발행을 막지 말고 채운다. 브랜드 대신 작성자명 사용
+            # (대표님 지시: 작성자 설정하면 '인천홍마니' 브랜드가 안 나오게). 이메일 형태면 이메일값.
+            value=post_email if ('mail' in blob or '이메일' in blob) else writer
         if value:
             if _robust_fill(d,el,value): filled.append(name)
             else: missing.append(name)
