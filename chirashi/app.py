@@ -4062,7 +4062,7 @@ def tempmail_create():
         if _em and _pw and '@' in _em:
             _local,_,_dom=_em.partition('@')
             _tag='twseo'+secrets.token_hex(5)
-            add_log(f'[임시메일] IMAP({_em}) 플러스주소 발급 → {_local}+{_tag}@{_dom}')
+            add_log(f'[지메일 IMAP] {_em} 로 인증 (플러스주소 {_local}+{_tag}@{_dom} — 대표님 지메일로 실제 수신)')
             return f'{_local}+{_tag}@{_dom}', '', 'IMAP:'+_tag
         else:
             # ★진단: 지메일 설정이 비어 임시메일로 떨어짐 = 인증 게시판 전환율↓의 근본원인.
