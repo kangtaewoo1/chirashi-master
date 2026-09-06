@@ -2646,9 +2646,25 @@ def cafe24_post(site, title, content_html, skip_login=False):
                        "#member_id","#loginId","input#id"],mid)
         _fill_first(d,["input[name='member_passwd']","input[name='passwd']","input[name='password']",
                        "input[name='login_password']","#passwd","#loginPasswd","input[type='password']"],mpw)
-        _click_first(d,["a.btnSubmit","#btnLogin","a.btnLogin",".btnEm","button[type='submit']",
-                        "input[type='submit']","a[onclick*='login']"])
-        time.sleep(2); _wait_cf(10); dismiss_alerts(d)
+        # Cafe24 로그인 버튼은 <a data-ez-item="login"> 링크나 fnLogin() JS인 경우가 많다.
+        clicked=_click_first(d,["a.btnSubmit","#btnLogin","a.btnLogin",".btnEm","button[type='submit']",
+                        "input[type='submit']","a[onclick*='login']","a[data-ez-item='login']",
+                        ".ec-base-button a","button.btnSubmit"])
+        if not clicked:
+            # 폼 직접 제출(action=/exec/front/Member/login/) 또는 Enter — Cafe24 표준 로그인
+            try:
+                d.execute_script("""
+                    var f=document.querySelector("form[action*='Member/login']")||document.querySelector("form[action*='login']")||
+                          (document.querySelector("input[name='member_passwd']")||{}).form;
+                    if(f){ if(typeof f.requestSubmit==='function')f.requestSubmit(); else f.submit(); }
+                    else if(typeof fnLogin==='function'){fnLogin();}
+                """)
+            except Exception:
+                try:
+                    from selenium.webdriver.common.keys import Keys
+                    el=d.find_element(By.CSS_SELECTOR,"input[name='member_passwd']"); el.send_keys(Keys.RETURN)
+                except Exception: pass
+        time.sleep(3); _wait_cf(10); _pass_turnstile_if_present(); dismiss_alerts(d)
 
     # 글쓰기 페이지 후보 (bo_table 이 숫자면 board_no, 문자면 board 경로)
     # ★rental-zon 등 스킨은 /board/product/write.html?board_no=N 형태 — product 경로도 시도(대표님 실측).
