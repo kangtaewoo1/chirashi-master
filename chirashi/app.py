@@ -4562,6 +4562,14 @@ def auto_pipeline_once(limit=5):
           and not c.get('parked') and not c.get('illegal') and not c.get('ad_banned')
           and (c.get('domain') or '').lower() not in site_domains
           and c.get('reachable') and _has_write_path(c)]
+    # 진단: pend가 비면 각 조건이 몇 개를 걸렀는지 1줄로 남긴다(왜 '처리 0'인지 파악용).
+    if not pend:
+        _rdy=[c for c in cands if c.get('screened') and c.get('status')=='ready']
+        _d_park=sum(1 for c in _rdy if c.get('parked') or c.get('illegal') or c.get('ad_banned'))
+        _d_reg=sum(1 for c in _rdy if (c.get('domain') or '').lower() in site_domains)
+        _d_reach=sum(1 for c in _rdy if not c.get('reachable'))
+        _d_write=sum(1 for c in _rdy if not _has_write_path(c))
+        add_log(f'[파이프라인 진단] ready {len(_rdy)}개 중 제외 — 주차/불법/광고 {_d_park} · 이미등록 {_d_reg} · 접속불가 {_d_reach} · 글쓰기경로없음 {_d_write}')
     # 비회원 글쓰기 가능(로그인 불필요) 게시판을 먼저 처리한다. 로그인 필요 게시판은
     # 이메일 인증 등으로 자동가입이 막히는 경우가 많아 배치 슬롯을 낭비하기 쉽다.
     def _prio(c):
