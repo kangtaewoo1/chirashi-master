@@ -4677,6 +4677,17 @@ def auto_pipeline_once(limit=5):
         m=re.match(r'(https?://[^/]+)',c.get('url','')); base=m.group(1) if m else c.get('url','')
         tmp={'id':'cand_'+c.get('id',''),'site_url':base,'platform':c.get('platform','gnuboard'),
              'bo_table':c.get('bo_table') or 'free','name':name,'mb_id':'','mb_pass':''}
+        # ★대표님 지시: 이미 등록된 사이트에 저장된 계정(mb_id/mb_pass)이 있으면 그걸 써서 로그인 발행한다.
+        #   (계정이 있는데 새로 자동가입하려다 '중복ID'로 실패하던 버그 — sungsim처럼 대표님이 준 계정)
+        try:
+            _dom0=(c.get('domain') or _domain_of(c.get('url',''))).lower()
+            _saved=next((s for s in load_sites()
+                         if _domain_of(s.get('site_url',''))==_dom0 and str(s.get('mb_id') or '').strip()),None)
+            if _saved:
+                tmp['mb_id']=_saved.get('mb_id',''); tmp['mb_pass']=_saved.get('mb_pass','')
+                tmp['bo_table']=_saved.get('bo_table') or tmp['bo_table']
+                add_log(f'[계정 재사용] {name} — 저장된 계정({tmp["mb_id"]})으로 로그인 발행(자동가입 생략)')
+        except Exception: pass
         try:
             _just_signed=False
             kw=_test_kw()
@@ -4686,9 +4697,11 @@ def auto_pipeline_once(limit=5):
             #  ② 먼저 '비회원 글쓰기'로 바로 발행 시도 — 로그인 명백히 필요한 게 아니면 가입 없이 시도.
             #  ③ 로그인 필요로 튕기면 그때 자동가입 → 세션 재사용 재발행.
             #  ④ 자동가입은 auto_signup 내부에서 '이메일 없이 먼저, 안 되면 인증' 순서로 처리.
-            _login_first = bool(c.get('login_required')) and not c.get('write_form')
+            # 저장된 계정이 이미 있으면 자동가입 건너뛰기 — 그 계정으로 do_post가 로그인 발행한다.
+            _has_account = bool(str(tmp.get('mb_id') or '').strip())
+            _login_first = (not _has_account) and bool(c.get('login_required')) and not c.get('write_form')
             if _login_first:
-                # 게시판 자체가 로그인 필수로 판명된 곳만 가입 먼저(비회원 글쓰기 자리 없음)
+                # 게시판 자체가 로그인 필수 + 저장된 계정 없음 → 자동가입으로 계정 생성(성공시 저장·재사용)
                 ok_su,msg_su=auto_signup_guarded(tmp,submit=True)
                 if ok_su: signed+=1; _just_signed=True
                 else:
