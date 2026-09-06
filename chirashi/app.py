@@ -550,6 +550,7 @@ def load_config():
        'block_unpaid':True,
        'google_api_key':'','google_cx':'','brave_api_key':'','search_provider':'brave','discover_enabled':True,
        'discover_daily_target':500,'discover_query_limit':500,'discover_batch':50,'discover_keywords':'',
+       'finder_ratio':1.0,   # 발굴 쿼리 중 '게시판 찾기'(finder) 비중(1.0=100%). 업소 직접키워드는 미사용
        'site_goal':500,   # 실제 발행 가능 사이트 확보 목표(대시보드 진행률 표시용)
        # 웹빌더/템플릿 플랫폼 등 발행 불가 도메인 제외 목록(한 줄에 하나, 발굴에서 즉시 제외). 설정에서 관리.
        'excluded_domains':'isweb.co.kr\nimweb.me\nimweb.io\nmodoo.at\ncreatorlink.net\nwixsite.com\nweebly.com\nblog.me',
@@ -3521,7 +3522,16 @@ BRAVE_URL_FRAGMENTS=['bbs/write.php bo_table=promotion 비회원','bbs/write.php
                      'bbs/board.php bo_table=guest','bbs/board.php bo_table=event',
                      'bbs/write.php bo_table=promotion','bbs/write.php bo_table=hongbo',
                      'bbs/board.php bo_table=free 홍보','bbs/board.php 홍보게시판 글쓰기',
-                     'bbs/board.php 자유게시판 홍보 환영','그누보드 홍보게시판 비회원 글쓰기']
+                     'bbs/board.php 자유게시판 홍보 환영','그누보드 홍보게시판 비회원 글쓰기',
+                     # 전략2: '이미 홍보글이 올라와 색인된' 게시판(=글 잘 올라가고 색인 빠른 곳) 역추적.
+                     #  검색에 나온다는 것 자체가 색인됨을 뜻하고, 010/문의/후기 홍보글이 있으면 실제 등록 가능.
+                     'bbs/board.php 010 문의 홍보게시판','bbs/board.php 노래방 홍보 글쓰기',
+                     'bbs/board.php 마사지 홍보 게시판 비회원','bbs/board.php 유흥 홍보 게시판 등록',
+                     'bbs/board.php 출장 문의 게시판 글쓰기','bbs/board.php 업소 홍보 게시판 010',
+                     'bbs/board.php 후기 이벤트 홍보 등록','bbs/board.php 지역 홍보 게시판 자유',
+                     # 전략3: 활발한(=색인 빠른) 게시판 신호 — 최근/오늘 등록·조회 많은 홍보 게시판.
+                     'bbs/board.php 오늘 등록 홍보 게시판','bbs/board.php 실시간 홍보 자유게시판',
+                     'bbs/board.php 광고 게시판 무료 등록 비회원','bbs/board.php 링크 홍보 게시판 누구나']
 
 def _board_finder_queries(provider):
     """플랫폼(그누보드/카페24) 홍보·자유 게시판을 '찾기 위한' 검색어.
@@ -3884,7 +3894,12 @@ def discover_once(cfg=None, max_queries=10):
     # '바로 되는 500곳' 목표: 쿼리의 대부분(90%)을 게시판찾기(finder)에 쓴다.
     # direct(지역+업종)는 업소 홈페이지만 나와 발행 불가라 최소한만. finder는 fcursor로
     # 여러 날에 걸쳐 순회(날짜 바뀌어도 fcursor 유지)해 122개 검색어를 골고루 소진.
-    finder_budget=int(qlimit*0.9) if finder else 0
+    # finder(게시판 찾기) 비중 — 기본 100%. 업소 직접키워드(강남동노래방 등)는 업체 홈페이지만
+    # 나와 발행 불가라 기본적으로 사용 안 함. finder_ratio 설정(0~1)으로 조절 가능.
+    try: _fr=float(cfg.get('finder_ratio',1.0) or 1.0)
+    except Exception: _fr=1.0
+    _fr=max(0.0,min(1.0,_fr))
+    finder_budget=int(qlimit*_fr) if finder else 0
     if not finder and not direct:
         queries=build_queries(cfg)
         if not queries: return {'ok':False,'error':'쿼리 없음'}
@@ -6165,7 +6180,7 @@ def api_cfg():
                   'use_gpt','telegram_token','telegram_chat_id','notify_done','notify_fail','update_token',
                   'telegram_control','backup_time','verify_enabled','mix_keywords','block_unpaid',
                   'google_api_key','google_cx','brave_api_key','search_provider','discover_enabled','discover_daily_target',
-                  'discover_query_limit','discover_keywords','discover_direct_queries','excluded_domains',
+                  'discover_query_limit','discover_keywords','discover_direct_queries','excluded_domains','finder_ratio',
                   'workroom_workers','vps_reserve_mb','vps_mb_per_worker','site_goal',
                   'video_url','landing_url','post_email','guest_post_password',
                   'twocaptcha_api_key','twocaptcha_enabled',
