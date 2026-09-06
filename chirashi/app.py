@@ -880,8 +880,11 @@ def generate_rich_html(keywords, cfg):
     p=format_phone(rawphone)
     mood=random.choice(SERVICE_FLAVOR.get(s,DEFAULT_FLAVOR)['mood'])
     imgs=pick_images(1)   # 게시물당 이미지는 항상 정확히 1개
-    c1,c2,c3=random.sample(COLORS,3)
+    # 대표님 지시(2026-09-07): 붙여준 예시처럼 '단일 강조색'을 게시물마다 하나 골라 전체에 일관 적용.
+    AC=random.choice(COLORS)              # 강조색 하나(제목·소제목·라벨·별점 등 전부 이 색)
+    c1=c2=c3=AC                           # 기존 c1/c2/c3 참조 호환(모두 같은 강조색)
     rel=RELATED_POOL[:]; random.shuffle(rel)
+    _upd=_kst_now().strftime('%Y년 %m월')   # 우측 하단 업데이트 표기용
     H=lambda t:f'<h2 style="color:{c1};border-bottom:3px solid {c2};padding-bottom:10px;font-size:24px;margin-top:34px;">{t}</h2>'
     # 이미지 alt = 치환키워드 맨앞(지역) 그대로 (SEO)
     IMG=lambda i,cap='':(f'<div style="text-align:center;margin:34px 0;"><img src="{imgs[i%len(imgs)]}" alt="{r}" style="max-width:100%;height:auto;border-radius:8px;" loading="lazy" />'+(f'<p style="color:#888;font-size:13px;margin-top:8px;">▲ {cap}</p>' if cap else '')+'</div>')
@@ -927,6 +930,19 @@ def generate_rich_html(keywords, cfg):
         ('문의는 어디로 하나요?', f'{p}로 연락 주시면 친절하게 안내해 드립니다.'),
     ]
     faqs=''.join(f'<dt style="font-weight:bold;color:{c2};margin-top:12px;">Q. {q}</dt><dd style="margin:6px 0 12px 20px;line-height:1.7;">{a}</dd>' for q,a in random.sample(faq_pool,random.randint(4,6)))
+    # ★번호 매긴 H2 FAQ 섹션 + 상단 목차(TOC) — 붙여준 예시 디자인 반영(대표님 지시 2026-09-07).
+    _nqa=random.sample(faq_pool,4)
+    toc_items=''.join(
+        f'<li style="padding:8px 0;border-bottom:1px solid #e0e0e0;">'
+        f'<span style="color:{AC};font-weight:700;margin-right:10px;">{i+1:02d}</span>'
+        f'<span style="color:#222;">{q}</span></li>' for i,(q,a) in enumerate(_nqa))
+    toc_box=(f'<div style="background:#F7F7F5;border:1px solid {AC};border-radius:10px;padding:20px 24px;margin:0 0 36px;">'
+        f'<p style="font-size:14px;font-weight:800;color:{AC};letter-spacing:2px;margin:0 0 12px;">목차</p>'
+        f'<ul style="list-style:none;padding:0;margin:0;font-size:15px;">{toc_items}</ul></div>')
+    numbered_faq=''.join(
+        f'<h2 style="font-size:22px;font-weight:800;margin:36px 0 14px;padding-bottom:8px;'
+        f'border-bottom:2px solid {AC};color:{AC};">{i+1:02d}. {q}</h2>'
+        f'<p style="font-size:17px;line-height:1.9;margin:0 0 16px;color:#222;">{a}</p>' for i,(q,a) in enumerate(_nqa))
 
     reco_pool=['회식·접대 장소를 찾는 직장인','지인들과 편하게 모일 공간이 필요한 분',f'{r} 인근에서 약속 장소를 정하려는 분','믿을 만한 정보로 실패 없이 고르고 싶은 분','분위기 좋은 자리를 원하는 분','접근성 좋은 위치를 선호하는 분']
     recos=''.join(f'<li style="margin:9px 0;line-height:1.85;padding-left:26px;position:relative;"><span style="position:absolute;left:0;">👉</span>{x}</li>' for x in random.sample(reco_pool,random.randint(3,min(5,len(reco_pool)))))
@@ -999,12 +1015,20 @@ def generate_rich_html(keywords, cfg):
         SEC('💡',f'{r} {s} 이용 팁')+f'<ul style="font-size:15px;padding:0;list-style:none;color:#444;">{tips}</ul>',
     ]
     random.shuffle(blocks)
-    html=(f'<h1 style="font-size:23px;font-weight:bold;margin:0 0 18px;color:#1a1a1a;line-height:1.45;">{title}</h1>'
+    # ── 상단: 카테고리 라벨 + 큰 H1 + 언더라인 바 (붙여준 예시 디자인) ──
+    _label=random.choice(['총정리','이용 안내','완벽 가이드','한눈에 정리','상세 안내'])
+    head=(f'<div style="font-size:12px;font-weight:700;letter-spacing:5px;color:{AC};margin-bottom:12px;">'
+          f'{_label} · {r} {s}</div>'
+        + f'<h1 style="font-size:32px;font-weight:800;line-height:1.3;margin:0 0 16px;color:#111;">{title}</h1>'
+        + f'<div style="width:80px;height:4px;background:{AC};margin:0 0 28px;border-radius:2px;"></div>')
+    html=(head
         + IMG(0, f'{r} {s}의 {mood.split()[0]} 공간')
+        + toc_box                                    # ★상단 목차 박스
         + SEC('📍',f'{r} {s} 안내')
         + f'<p style="font-size:16px;margin:16px 0;line-height:1.95;">{intro}</p>'
         + f'<p style="font-size:15px;margin:14px 0;line-height:1.95;color:#333;">{para2}</p>'
         + price_box
+        + numbered_faq                               # ★번호 매긴 H2 FAQ(01. 02. 03. 04.)
         + SEC('📊',f'{r} {s} 서비스 비교') + compare_table
         + ''.join(blocks)
         + SEC('🧭',f'{r} {s} 이용 흐름') + steps_html
@@ -1015,7 +1039,8 @@ def generate_rich_html(keywords, cfg):
           f'<div style="display:inline-grid;gap:6px;text-align:center;font-size:14px;color:#cbd5e1;margin-bottom:14px;">'
           f'<div>일반 예약</div><div style="color:{c2};font-size:18px;">⚡</div><div>당일 예약</div>'
           f'<div style="color:{c2};font-size:18px;">⚡</div><div style="font-weight:bold;color:#ffe082;">VIP 서비스</div></div>'
-          f'<p style="font-size:24px;font-weight:bold;color:#fff;margin:0;background:#0f1621;padding:12px;border-radius:8px;">📞 {p}</p></div>')
+          f'<p style="font-size:24px;font-weight:bold;color:#fff;margin:0;background:#0f1621;padding:12px;border-radius:8px;">📞 {p}</p></div>'
+        + f'<p style="font-size:12px;color:#999;text-align:right;margin:16px 0 8px;">최신 업데이트 · {_upd} 기준</p>')
     return html, title
 
 # ==================== GPT 본문 생성 (선택) ====================
@@ -3835,8 +3860,66 @@ def precheck_search_result(url):
     except Exception:
         return {'reachable':False,'title':'','digits':0}
 
+# ─── URL 패턴 발굴 (대표님 지시 2026-09-07) ──────────────────────────────
+# "검색 키워드 목록"에 bbs/board.php?bo_table=free&wr_id= 같은 URL 조각을 직접 넣으면
+#   ① Brave가 그 조각으로 검색해 실제 그 게시판 글 URL들을 물어오고
+#   ② 그 글 URL을 '글 목록(=글쓰기 가능한 게시판)' URL로 잘라서 후보로 등록한다.
+# 개별 글(wr_id=12345)이 아니라 게시판(bo_table=free)을 후보로 잡아야 screen_candidate가
+# 글쓰기 폼을 찾고 auto_pipeline이 발행을 시도할 수 있다.
+_POST_ID_KEYS=('wr_id','document_srl','no','idx','uid','id','num','board_no','p','articleno','bbsidx')
+
+def _is_url_pattern_query(q):
+    """직접 검색어가 게시판 URL 조각인지 판별.
+       예) bbs/board.php?bo_table=free&wr_id=  ·  /board/list.html?board_no=  ·  inurl:board.php"""
+    if not q: return False
+    s=q.strip().lower().lstrip('#').replace('inurl:','').strip()
+    if any(t in s for t in ('bbs/board.php','board.php?','bo_table=','/board/','board_no=',
+                            'wr_id=','document_srl=','mid=','act=dispbo')):
+        # 사람이 읽는 문장(공백 많고 한글)과 구분: URL스러운 토큰이 있어야 패턴으로 인정
+        return ('=' in s) or ('board' in s) or ('bbs/' in s)
+    return False
+
+def _board_url_from_result(url):
+    """개별 글 URL을 '글 목록(게시판)' URL로 축약.
+       wr_id/document_srl 등 글 식별 파라미터를 떼어내 bo_table/board_no만 남긴다.
+       그누보드 예) .../bbs/board.php?bo_table=free&wr_id=123&page=2 → .../bbs/board.php?bo_table=free
+       XE 예)      .../index.php?mid=free&document_srl=123          → .../index.php?mid=free"""
+    try:
+        from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
+        sp=urlsplit(url)
+        if not sp.query:
+            return url  # 쿼리 없으면 그대로(정적 게시판일 수 있음)
+        keep=[]
+        for k,v in parse_qsl(sp.query, keep_blank_values=True):
+            if k.lower() in _POST_ID_KEYS:   # 글 식별자·페이지네이션 제거
+                continue
+            if k.lower() in ('page','page_num','sca','sfl','stx','sst','sod','spt','sop'):
+                continue
+            keep.append((k,v))
+        new_q=urlencode(keep)
+        return urlunsplit((sp.scheme,sp.netloc,sp.path,new_q,''))
+    except Exception:
+        return url
+
 def add_candidates_from(items, cfg, source='search'):
-    """검색 결과 → 접근·title 숫자·글쓰기 폼까지 확인 → 후보 등록."""
+    """검색 결과 → 접근·title 숫자·글쓰기 폼까지 확인 → 후보 등록.
+       source='urlpattern'이면 각 결과 URL을 게시판(글목록) URL로 축약해서 등록한다."""
+    if source=='urlpattern':
+        # 글 URL → 게시판 URL 축약 후, 같은 게시판 중복 제거
+        seen=set(); reduced=[]
+        for it in items:
+            u=it.get('url') if isinstance(it,dict) else str(it)
+            if not u: continue
+            bu=_board_url_from_result(u)
+            if bu in seen: continue
+            seen.add(bu)
+            if isinstance(it,dict):
+                it=dict(it); it['url']=bu
+            else:
+                it={'url':bu}
+            reduced.append(it)
+        items=reduced
+        source='search'   # 이후 로직은 일반 검색과 동일하게 검수·등록
     with _cand_lock:
         cands=load_cands()
         known_dom={c.get('domain') for c in cands}
@@ -3998,23 +4081,25 @@ def discover_once(cfg=None, max_queries=10):
         if not queries: return {'ok':False,'error':'쿼리 없음'}
     added=0; used=0; errs=[]
     def _next_query():
-        # finder를 fcursor로 순회하다(예산 소진 전) 그 뒤 direct를 cursor로 순환
+        # finder를 fcursor로 순회하다(예산 소진 전) 그 뒤 direct를 cursor로 순환.
+        # 반환: (쿼리, source) — direct 항목이 게시판 URL 조각이면 'urlpattern'으로 처리.
         if finder and st['queries']<finder_budget:
-            q=finder[st['fcursor']%len(finder)]; st['fcursor']+=1; return q
+            q=finder[st['fcursor']%len(finder)]; st['fcursor']+=1; return q,'search'
         if direct:
-            q=direct[st['cursor']%len(direct)]; st['cursor']+=1; return q
+            q=direct[st['cursor']%len(direct)]; st['cursor']+=1
+            return q,('urlpattern' if _is_url_pattern_query(q) else 'search')
         if finder:  # direct가 없으면 finder 계속
-            q=finder[st['fcursor']%len(finder)]; st['fcursor']+=1; return q
-        return None
+            q=finder[st['fcursor']%len(finder)]; st['fcursor']+=1; return q,'search'
+        return None,None
     for _ in range(max_queries):
         if st['queries']>=qlimit: errs.append('일일 쿼리 한도 도달'); break
         if st['found']>=target: errs.append('일일 후보 목표 달성'); break
-        q=_next_query()
+        q,qsrc=_next_query()
         if q is None: errs.append('쿼리 없음'); break
         try:
             items=web_search(cfg,q)
             for it in items: it['query']=q
-            n=add_candidates_from(items,cfg); added+=n; st['found']+=n
+            n=add_candidates_from(items,cfg,source=qsrc); added+=n; st['found']+=n
         except Exception as e:
             errs.append(str(e)[:120]); break
         finally:
@@ -7351,7 +7436,8 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 <span style="color:var(--d);font-size:11px">하루 쿼리 한도</span><input type="number" id="cDQuery" value="100" min="1" max="10000" style="width:90px" title="Brave API 플랜 한도 안에서 사용"></div>
 <label style="display:flex;align-items:center;gap:6px;color:var(--g);font-size:12px;margin-bottom:6px"><input type="checkbox" id="cDiscoOn" style="width:auto">24시간 자동 발굴 켜기 (1분마다 빠르게 — 하루 할당량 500 채우기)</label>
 <small style="color:var(--d)">검색 키워드 목록 (한 줄에 하나 — 입력 그대로 Brave 검색, #으로 시작하면 메모)</small>
-<textarea id="cDDirect" rows="6" placeholder="&quot;홍보게시판&quot; 마사지&#10;inurl:bbs/board.php &quot;업체등록&quot;&#10;인천 광고 가능한 게시판"></textarea>
+<small style="display:block;color:var(--g);font-size:11px;margin:2px 0 4px;line-height:1.5">💡 <b>게시판 URL 조각</b>을 그대로 넣어도 됩니다 — 그 게시판의 글들을 찾아 <b>글목록(글쓰기 가능한 게시판)</b>으로 잘라 후보 등록.<br>예) <code>bbs/board.php?bo_table=free&amp;wr_id=</code> · <code>bbs/board.php?bo_table=youtube&amp;wr_id=</code> · <code>/board/list.html?board_no=</code></small>
+<textarea id="cDDirect" rows="6" placeholder="bbs/board.php?bo_table=free&amp;wr_id=&#10;bbs/board.php?bo_table=notice&amp;wr_id=&#10;&quot;홍보게시판&quot; 마사지&#10;# 이 줄은 메모(검색 안 함)"></textarea>
 <div style="font-size:10px;color:var(--g);margin-top:4px">설정 저장을 누르면 서버에 영구 저장되며, 위 목록만 입력 순서대로 검색합니다.</div>
 <small style="color:var(--d);margin-top:10px;display:block">🚫 제외 도메인 (웹빌더/템플릿 등 발행 불가 — 한 줄에 하나, 이 문자열이 포함된 도메인은 발굴에서 즉시 제외)</small>
 <textarea id="cExcludedDomains" rows="4" placeholder="isweb.co.kr&#10;imweb.me&#10;modoo.at&#10;wixsite.com"></textarea>
