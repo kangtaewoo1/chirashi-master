@@ -5099,7 +5099,8 @@ def collect_all_keywords():
         pass
     return pool
 
-_WR_CURSOR={}   # workroom_id -> 다음 발행할 조합 인덱스(메모리). 재시작 시 0부터=처음부터 반복
+_WR_CURSOR={}   # workroom_id -> 다음 발행할 조합 '순열 위치'(메모리). 재시작 시 0부터.
+_WR_ORDER={}    # workroom_id -> 섞은 조합 인덱스 순열(지역 편중 방지). 한 바퀴 소진 시 재셔플.
 _WR_RR=[0]      # 작업실 라운드로빈 포인터(모든 작업실을 번갈아 동시 진행)
 
 def _workroom_combos(room):
@@ -5199,10 +5200,19 @@ def workroom_worker(slot):
             for room in mine:   # 슬롯 담당 작업실들을 라운드로빈(한 사이클에 각 1조합)
                 combos=_workroom_combos(room); rid=room.get('id','')
                 if not combos: continue
+                # ★지역 편중 방지(대표님 지시 2026-09-07): 키워드가 지역순(인천→강화…)으로
+                #   정렬돼 있어 커서를 앞에서부터 쓰면 인천/강화에만 오래 머문다. 조합 순서를
+                #   섞은 인덱스 순열(_WR_ORDER)로 순회해 매 사이클 지역이 골고루 섞이게 한다.
+                #   한 바퀴(순열 소진) 다 돌면 새로 섞어 다음 바퀴 — 전체를 빠짐없이 커버.
+                order=_WR_ORDER.get(rid)
+                if not order or len(order)!=len(combos):
+                    order=list(range(len(combos))); random.shuffle(order); _WR_ORDER[rid]=order
                 cur=int(_WR_CURSOR.get(rid,0) or 0)
-                if cur>=len(combos): cur=0
-                kw=combos[cur]; _WR_CURSOR[rid]=cur+1
-                add_log(f"[작업실:{room.get('name','')}] 조합 {cur+1}/{len(combos)} 발행 시작 (슬롯 {slot+1})")
+                if cur>=len(order):
+                    cur=0; random.shuffle(order); _WR_ORDER[rid]=order   # 새 바퀴: 다시 섞기
+                idx=order[cur]; kw=combos[idx]; _WR_CURSOR[rid]=cur+1
+                _kwlabel=(kw.get('_main') or f"{kw.get('지역','')}{kw.get('서비스','')}")
+                add_log(f"[작업실:{room.get('name','')}] 조합 {cur+1}/{len(combos)} ({_kwlabel}) 발행 시작 (슬롯 {slot+1})")
                 _publish_one_combo(kw,room.get('name',''),rid,cfg,writer_name=str(room.get('writer_name') or '').strip())
         except Exception as e:
             add_log(f"[작업실워커 오류 슬롯{slot+1}] {str(e)[:70]}")
