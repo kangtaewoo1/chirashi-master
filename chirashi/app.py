@@ -4412,12 +4412,15 @@ def auto_pipeline_once(limit=5):
         no_cap = not c.get('captcha')                                  # 캡차 없으면 더 빠름
         return (1 if direct else 0, 1 if no_cap else 0, c.get('score',0))
     pend.sort(key=_prio, reverse=True)
+    # 수동으로 직접 넣은 URL(source=manual)은 대표님이 지정한 것이므로 무조건 최우선 처리.
+    _manual=[c for c in pend if c.get('source')=='manual']
+    _rest=[c for c in pend if c.get('source')!='manual']
     # 비회원(로그인 불필요) 우선으로 배치를 채우고, 로그인 필요 게시판은 소수만 처리한다.
     # (로그인 게시판은 이메일 인증 대기로 슬롯을 낭비 → 전환율 저하. 대표님 지시: 비회원 우선.)
-    _guest=[c for c in pend if c.get('write_form') and not c.get('login_required')]
-    _login=[c for c in pend if not (c.get('write_form') and not c.get('login_required'))]
+    _guest=[c for c in _rest if c.get('write_form') and not c.get('login_required')]
+    _login=[c for c in _rest if not (c.get('write_form') and not c.get('login_required'))]
     _login_cap=int(cfg.get('login_signup_per_cycle',2) or 2)
-    pend=_guest[:max(1,limit)] + _login[:max(0,_login_cap)]
+    pend=_manual + _guest[:max(1,limit)] + _login[:max(0,_login_cap)]
     done=0; registered=0; signed=0; results=[]
     for c in pend:
         name=c.get('board_name') or c.get('domain') or c.get('url','')[:30]
