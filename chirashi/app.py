@@ -2553,37 +2553,50 @@ def cafe24_post(site, title, content_html, skip_login=False):
     bo=str(site.get('bo_table','') or '').strip()
     mid=site.get('mb_id',''); mpw=site.get('mb_pass','')
     d=get_driver()
+    # Cloudflare 'Just a moment' 챌린지 대기(rental-zon 등 CF 뒤 Cafe24 — 실제 크롬이 자동 통과)
+    def _wait_cf(sec=15):
+        for _ in range(int(sec*2)):
+            try:
+                t=(d.title or '').lower(); src=(d.page_source or '').lower()
+                if not (('just a moment' in t or 'attention required' in t) and ('cloudflare' in src or 'cf-chl' in src or 'challenge' in src)):
+                    return
+            except Exception: return
+            time.sleep(0.5)
 
     # 로그인 (skip_login=True면 가입 직후 로그인 세션 재사용 → 재로그인 건너뜀)
     if mid and not skip_login:
-        d.get(base+'/member/login.html'); time.sleep(2)
+        d.get(base+'/member/login.html'); time.sleep(2); _wait_cf(15)
         _fill_first(d,["input[name='member_id']","input[name='login_id']","input[name='id']",
                        "#member_id","#loginId","input#id"],mid)
         _fill_first(d,["input[name='member_passwd']","input[name='passwd']","input[name='password']",
                        "input[name='login_password']","#passwd","#loginPasswd","input[type='password']"],mpw)
         _click_first(d,["a.btnSubmit","#btnLogin","a.btnLogin",".btnEm","button[type='submit']",
                         "input[type='submit']","a[onclick*='login']"])
-        time.sleep(2); dismiss_alerts(d)
+        time.sleep(2); _wait_cf(10); dismiss_alerts(d)
 
     # 글쓰기 페이지 후보 (bo_table 이 숫자면 board_no, 문자면 board 경로)
+    # ★rental-zon 등 스킨은 /board/product/write.html?board_no=N 형태 — product 경로도 시도(대표님 실측).
     write_urls=[]
     if bo.isdigit():
-        write_urls=[base+f'/board/write.html?board_no={bo}', base+f'/board/{bo}/write.html']
+        write_urls=[base+f'/board/product/write.html?board_no={bo}',
+                    base+f'/board/write.html?board_no={bo}', base+f'/board/{bo}/write.html']
     elif bo:
-        write_urls=[base+f'/board/{bo}/write.html', base+f'/board/write.html?board_no=1', base+f'/board/write.html?board_no={bo}']
+        write_urls=[base+f'/board/{bo}/write.html', base+f'/board/product/write.html?board_no=1',
+                    base+f'/board/write.html?board_no=1', base+f'/board/write.html?board_no={bo}']
     else:
-        write_urls=[base+'/board/write.html?board_no=1', base+'/board/free/write.html']
+        write_urls=[base+'/board/product/write.html?board_no=1',
+                    base+'/board/write.html?board_no=1', base+'/board/free/write.html']
     opened=False
     for wu in write_urls:
         try:
-            d.get(wu); time.sleep(2); dismiss_alerts(d)
-            if d.find_elements(By.CSS_SELECTOR,"input[name='subject'],#subject,input[name='title']"):
+            d.get(wu); time.sleep(2); _wait_cf(15); dismiss_alerts(d)   # CF 챌린지 통과 대기
+            if d.find_elements(By.CSS_SELECTOR,"input[name='subject'],#subject,input[name='title'],input[name='board_subject']"):
                 opened=True; break
         except Exception: continue
     if not opened:
-        return False,'Cafe24 글쓰기 페이지 못찾음 — 게시판번호(board_no) 확인'
+        return False,'Cafe24 글쓰기 페이지 못찾음 — 게시판번호(board_no)/로그인 확인'
 
-    # 보안 차단 / 캡차 감지 → 우회하지 않고 즉시 중단
+    # CF 챌린지가 이미 통과됐으므로, 그래도 남은 진짜 차단(403 등)만 중단
     if _page_is_blocked(d): return False,'보안 차단 페이지(403 등) — 즉시 중단'
     _cap=detect_captcha(d)
     if _cap:
