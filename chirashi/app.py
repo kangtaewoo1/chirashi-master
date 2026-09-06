@@ -3718,6 +3718,11 @@ def reconcile_sites():
         for s in sites:
             edr=_is_error_or_demo_site(s)
             verified=str(s.get('verified_post_url') or '').startswith(('http://','https://'))
+            # ★대표님이 직접 계정 넣어 추가한 사이트(manual_admin)는 자동삭제 보호 —
+            #   테스트 실패로 rejected 돼도 목록에서 지우지 않는다(계정·설정 유지, 재시도 가능).
+            if s.get('registration_source')=='manual_admin' and not edr:
+                if s.get('status')=='rejected': s['status']='idle'   # 재시도 가능하게 상태 완화
+                kept.append(s); continue
             # 검증된 사이트는 오류/데모가 아닌 한 보호(일시 실패로 삭제 안 함)
             if verified and not edr:
                 if int(s.get('fail_streak',0) or 0)>=FAIL_STREAK_DROP+2 and s.get('permission'):
