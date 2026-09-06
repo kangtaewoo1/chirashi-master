@@ -2198,6 +2198,15 @@ def gnuboard_post(site, title, content_html, skip_login=False):
         try: return fn()
         except Exception: return dv
     _safe(lambda: d.execute_script("if(typeof oEditors!=='undefined')try{oEditors.getById['wr_content'].exec('UPDATE_CONTENTS_FIELD',[])}catch(e){}"))
+    # ★SE2 동기화 안전망: fwrite_submit이 textarea(#wr_content).value가 비면 '내용을 입력해 주십시오'
+    #   알림 후 return false로 제출을 막는다. UPDATE_CONTENTS_FIELD가 iframe→textarea 복사에
+    #   실패(에디터 초기화 지연 등)하면 본문이 비어 발행이 조용히 실패(→'등록 확인 불가')한다.
+    #   textarea가 비었을(공백만 포함 포함) 때만 본문 HTML을 직접 넣어 이 알림을 방지한다.
+    #   (작동 중인 SE2 동기화는 덮어쓰지 않음 — 비었을 때만)
+    _safe(lambda: d.execute_script(
+        "var ta=document.getElementById('wr_content');"
+        "if(ta && !((ta.value||'').trim())){ta.value=arguments[0];"
+        "ta.dispatchEvent(new Event('change',{bubbles:true}));}", editor_content))
     # 제출 버튼은 반드시 '글쓰기 폼' 안의 것을 골라야 한다. CSS 셀렉터 그룹은 문서 순서로
     # 첫 매치를 주므로 "input[type=submit]"만 쓰면 헤더 검색폼(fsearchbox)의 검색 버튼이
     # 먼저 잡혀 not-interactable → 제출 실패한다(그누보드 기본 스킨의 대표적 함정).
@@ -2236,6 +2245,13 @@ def gnuboard_post(site, title, content_html, skip_login=False):
                      ||document.querySelector("form[action*='write_update']");
                 if(f){ if(f.requestSubmit){f.requestSubmit();} else { if(typeof fwrite_submit==='function'){if(fwrite_submit(f)===false)return;} f.submit(); } }
             """))
+        # 제출 직후 상태 프로브(원인 진단용): 본문 textarea 길이·SE2 상태·알림. 실패 원인 규명에 사용.
+        try:
+            _tlen=_safe(lambda: d.execute_script("var t=document.getElementById('wr_content');return t?(t.value||'').length:-1"),'?')
+            _al=getattr(d,'_last_alerts',[]) or []
+            if _al or _tlen in (0,-1,'?'):
+                add_log(f"[발행프로브] 본문길이={_tlen} 알림={_al[:2]} {site.get('name') or base[:24]}")
+        except Exception: pass
         curl=''; body=''
         deadline=time.time()+14
         while time.time()<deadline:
@@ -2263,7 +2279,9 @@ def gnuboard_post(site, title, content_html, skip_login=False):
         finish_captcha_task(captcha_tid,False,'제출 거부(referer/token) — 폼 재로드 필요')
         return False,'제출 거부(referer/token 검증 실패)'
     # 캡차 불일치는 명확한 에러문구만으로 판정('자동등록방지'는 write 폼의 캡차 라벨이라 오탐 유발)
-    if any(k in body for k in ['입력 글자가 틀','횟수가 넘었','자동등록방지 숫자를 다시','보안문자가 일치']):
+    #  ★kcaptcha.js 실제 메시지 '자동등록방지 숫자가 일치하지 않습니다'를 추가(기존 '숫자를 다시'만
+    #    잡아 2captcha OCR 오답이 '등록 확인 불가'로 조용히 떨어지던 문제 — 진단 워크플로우 확인).
+    if any(k in body for k in ['입력 글자가 틀','횟수가 넘었','자동등록방지 숫자를 다시','자동등록방지 숫자가 일치','숫자가 일치하지','보안문자가 일치']):
         finish_captcha_task(captcha_tid,False,'캡차 불일치')
         return False,'캡차 불일치 — 재시도 필요'
     if any(k in body for k in ['권한이 없','권한 없','로그인이 필요','게시가 금지','차단']):
@@ -2271,6 +2289,21 @@ def gnuboard_post(site, title, content_html, skip_login=False):
     # 3.5) 도배방지/재작성 제한: 알림·본문에서 대기시간(초)을 파싱해 사이트별로 학습하고,
     #      이후 발행 간격을 그 룰에 맞춰 자동 조정한다(under_min_interval이 flood_sec 반영).
     _fa=' '.join(getattr(d,'_last_alerts',[]) or [])
+    # ★fwrite_submit이 alert+return false로 막은 '진짜 실패 사유'를 표면화(진단 워크플로우 확인).
+    #   지금까진 캡차오답·본문미입력·금지단어가 전부 '등록 확인 불가'로 뭉뚱그려졌다.
+    _blob=(_fa+' '+body)
+    if any(k in _blob for k in ['자동등록방지 숫자가 일치','숫자가 일치하지','보안문자가 일치하지','자동등록방지 숫자를 다시']):
+        finish_captcha_task(captcha_tid,False,'캡차 불일치')
+        return False,'캡차 불일치(2captcha 오답) — 재시도 필요'
+    if '내용을 입력' in _blob:
+        finish_captcha_task(captcha_tid,False,'본문 미입력')
+        return False,'본문 미입력 — SE2 에디터 동기화 실패(textarea 비어 제출 차단)'
+    if '금지단어' in _blob:
+        finish_captcha_task(captcha_tid,False,'금지단어 차단')
+        return False,'금지단어 차단 — 게시판 필터에 걸린 단어 포함(제목/본문 조정 필요)'
+    if ('글자 이상 쓰' in _blob) or ('글자 이하로 쓰' in _blob) or ('글자 이상' in _blob and '쓰셔야' in _blob):
+        finish_captcha_task(captcha_tid,False,'글자수 규칙 위반')
+        return False,'본문 글자수 규칙 위반(게시판 최소/최대 길이)'
     _fw=max(_flood_wait_seconds(_fa), _flood_wait_seconds(body))
     if _fw>0:
         try:
