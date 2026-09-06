@@ -1526,6 +1526,40 @@ def _captcha_image_data(d):
     except Exception:
         pass
 
+    # 7) ★src URL 직접 fetch 폴백: <img id="captcha_img" src="/exec/front/board/captcha?...">
+    #    (Cafe24 등) 스샷이 타이밍/렌더로 실패해도, 브라우저 쿠키로 그 src를 fetch해 base64로 받는다.
+    #    recaptcha/hcaptcha는 제외(이미지캡차 아님).
+    try:
+        srcs=d.execute_script("""
+            var out=[];
+            var sels=['img#captcha_img','img#captcha_image','img[id*="captcha"]','img[src*="captcha"]','img[src*="Captcha"]'];
+            var seen={};
+            sels.forEach(function(s){
+                document.querySelectorAll(s).forEach(function(im){
+                    var u=im.getAttribute('src')||'';
+                    if(u && !seen[u] && !/recaptcha|hcaptcha|gstatic|dot\\.gif/i.test(u)){ seen[u]=1; out.push(u); }
+                });
+            });
+            return out;
+        """) or []
+        try: d.set_script_timeout(10)
+        except Exception: pass
+        for u in srcs[:4]:
+            try:
+                # 브라우저 컨텍스트에서 fetch(같은 쿠키/세션) → base64 data-URI
+                data=d.execute_async_script("""
+                    var url=arguments[0], cb=arguments[arguments.length-1];
+                    fetch(url,{credentials:'include',cache:'no-store'}).then(function(r){return r.blob();})
+                      .then(function(b){var fr=new FileReader();fr.onloadend=function(){cb(fr.result);};fr.readAsDataURL(b);})
+                      .catch(function(){cb('');});
+                """, u)
+                if data and isinstance(data,str) and data.startswith('data:image') and len(data)>200:
+                    return data
+            except Exception:
+                continue
+    except Exception:
+        pass
+
     return ''  # 로그: 여기 도달 시 캡차 미필요(로그인/관리자·비활성)이거나 iframe 내부일 수 있음
 
 def solve_captcha_with_2captcha(d,site,cap_type,cfg,timeout=300):
