@@ -4993,6 +4993,19 @@ def discover_loop():
             else:
                 # 발굴 꺼져 있어도 미검수 후보는 계속 처리
                 if any(not c.get('screened') for c in load_cands()): screen_pending(10)
+            # 제외 도메인(설정)에 걸린 기존 후보를 자동 탈락 — 나중에 제외목록에 추가해도 이미
+            # 발굴된 후보가 안 사라지던 문제(대표님 지시: clickn.co.kr 등 제외했는데 후보에 남음).
+            try:
+                _pruned=0
+                with _cand_lock:
+                    _cds=load_cands(); _chg=False
+                    for _c in _cds:
+                        if _c.get('status')=='rejected': continue
+                        if _is_blacklisted(_c.get('url','')):
+                            _c['status']='rejected'; _c['reject_reason']='제외 도메인(설정) — 자동 탈락'; _chg=True; _pruned+=1
+                    if _chg: save_cands(_cds)
+                if _pruned: add_log(f'[제외도메인 정리] {_pruned}개 후보 자동 탈락(설정 제외목록 반영)')
+            except Exception as e: add_log(f'[제외도메인 정리 오류] {str(e)[:70]}')
             # 사이트 목록 상시 최신화(막힌 곳 자동 탈락). 후보→가입→발행 '전환'은 별도 pipeline_loop이
             # 독립적으로 돌린다(발굴이 루프를 독차지해 전환이 굶던 문제 해결 — 대표님 지시).
             try: reconcile_sites()
