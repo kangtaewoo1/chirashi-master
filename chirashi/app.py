@@ -4200,6 +4200,8 @@ def auto_signup(site, submit=True):
        이메일 인증 필요·지원불가 캡차는 실패로 반환(가입 대상 제외)."""
     from selenium.webdriver.common.by import By
     cfg=load_config()
+    _snm=site.get('name') or site.get('site_url','')
+    add_log(f'[자동가입 시작] {_snm}')   # 어느 사이트를 처리 중인지 항상 로그(결과 없으면 처리중/예외 판별용)
     # 1) 가입폼 측정(캐시 30분) — 이메일 인증 필요하면 즉시 제외
     try:
         profile=learn_signup_profile(site,force=False)
@@ -4375,6 +4377,7 @@ def auto_signup(site, submit=True):
     if not submitted:
         _safe_js(d,"var f=document.getElementById('fregister')||document.forms['fregister']||document.querySelector(\"form[action*='register_form_update']\");if(f){if(f.requestSubmit)f.requestSubmit();else f.submit();}")
     time.sleep(3); dismiss_alerts(d)
+    add_log(f'[자동가입] {_snm} 제출 완료 — 가입 결과 확인 중{" (이메일 인증 필요)" if need_email_verify else " (이메일 인증 불필요)"}')
     # 5.5) 이메일 인증: 임시메일 받은편지함을 폴링해 인증 링크/코드를 처리
     if need_email_verify and tm_token:
         add_log(f'[자동가입] {site.get("name") or site.get("site_url","")} 인증메일 대기 중...')
