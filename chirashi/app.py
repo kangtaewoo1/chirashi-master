@@ -2770,15 +2770,38 @@ def cafe24_post(site, title, content_html, skip_login=False):
     else:
         write_urls=[base+'/board/product/write.html?board_no=1',
                     base+'/board/write.html?board_no=1', base+'/board/free/write.html']
+    # ★rental-zon 등 일부 Cafe24 스킨의 write.html은 광고/위젯 스크립트로 '로드 완료'에
+    #   영영 도달하지 못한다(실측: JS·요소검색 전부 45초 타임아웃). eager 전략으로도
+    #   d.get()이 page_load_timeout(25초)만큼 블록되다 예외 → write_urls 3개 × 25초 헛돌다 실패.
+    #   → 로드 완료를 기다리지 않고(get 타임아웃 짧게+window.stop) subject 입력칸만 폴링한다.
+    #   폼 DOM 자체는 초반에 들어오므로(무한로딩은 위젯 탓) 입력은 가능.
+    _SUBJ_SEL="input[name='subject'],#subject,input[name='title'],input[name='board_subject']"
+    def _form_ready():
+        try: return bool(d.find_elements(By.CSS_SELECTOR,_SUBJ_SEL))
+        except Exception: return False
+    def _stop_load():
+        try: d.execute_script("try{window.stop();}catch(e){}")
+        except Exception: pass
     opened=False
-    for wu in write_urls:
-        try:
-            d.get(wu); time.sleep(2); _wait_cf(15)
-            _pass_turnstile_if_present()   # Turnstile 챌린지면 풀고 복귀
+    try: d.set_page_load_timeout(8)   # get()이 오래 블록되지 않게 (finally에서 25로 복원)
+    except Exception: pass
+    try:
+        for wu in write_urls:
+            try: d.get(wu)
+            except Exception: pass          # 로드 미완료 타임아웃은 정상 — 아래에서 폼 폴링
+            _stop_load()                    # 끝없는 로딩 강제 중단
+            # 첫 진입 시 Turnstile/CF 챌린지면 통과 후 복귀
+            _wait_cf(12); _pass_turnstile_if_present(); _stop_load()
             dismiss_alerts(d)
-            if d.find_elements(By.CSS_SELECTOR,"input[name='subject'],#subject,input[name='title'],input[name='board_subject']"):
-                opened=True; break
-        except Exception: continue
+            # subject 입력칸이 나타날 때까지 최대 ~15초 폴링(로드 완료와 무관하게 DOM만 확인)
+            deadline=time.time()+15
+            while time.time()<deadline:
+                if _form_ready(): opened=True; break
+                time.sleep(0.5)
+            if opened: break
+    finally:
+        try: d.set_page_load_timeout(25)
+        except Exception: pass
     if not opened:
         return False,'Cafe24 글쓰기 페이지 못찾음 — Turnstile/로그인/게시판번호 확인'
     add_log(f"[Cafe24글쓰기폼] 진입 성공 — {(site.get('name') or base)[:24]}")
