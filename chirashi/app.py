@@ -725,17 +725,27 @@ def unlocker_fetch(url, cfg=None, timeout=90):
     key=str(cfg.get('unlocker_api_key') or '').strip()
     zone=str(cfg.get('unlocker_zone') or 'web_unlocker1').strip()
     if not key: return None
-    try:
-        r=_rq.post('https://api.brightdata.com/request',
-                   headers={'Content-Type':'application/json','Authorization':f'Bearer {key}'},
-                   json={'zone':zone,'url':url,'format':'raw'},timeout=timeout)
-        if r.status_code>=400:
-            add_log(f'[Unlocker] 오류 {r.status_code}: {(r.text or "")[:80]}','발행')
+    # ★실측(2026-09-08): 4회 중 3회 CF 통과, 1회 일시 잔존(5KB 챌린지). CF 잔존/빈응답이면 최대 2회 재시도.
+    for attempt in range(3):
+        try:
+            r=_rq.post('https://api.brightdata.com/request',
+                       headers={'Content-Type':'application/json','Authorization':f'Bearer {key}'},
+                       json={'zone':zone,'url':url,'format':'raw'},timeout=timeout)
+            if r.status_code>=400:
+                add_log(f'[Unlocker] 오류 {r.status_code}: {(r.text or "")[:80]}','발행')
+                return None
+            body=r.text or ''
+            low=body[:3000].lower()
+            cf_left=(len(body)<8000 and ('just a moment' in low or 'cf-chl' in low or '_cf_chl' in low or 'challenge-platform' in low))
+            if body and not cf_left:
+                return body            # 정상(CF 통과)
+            if attempt<2:
+                time.sleep(2); continue  # CF 잔존/빈응답 → 재시도
+            return body or None          # 마지막 시도 결과 그대로
+        except Exception as e:
+            if attempt<2: time.sleep(2); continue
+            add_log(f'[Unlocker] 예외: {str(e)[:80]}','발행')
             return None
-        return r.text or ''
-    except Exception as e:
-        add_log(f'[Unlocker] 예외: {str(e)[:80]}','발행')
-        return None
 
 TWOCAPTCHA_CACHE_FILE=os.path.join(DATA_DIR,'twocaptcha_balance.json')
 
