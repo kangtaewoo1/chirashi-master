@@ -2758,26 +2758,33 @@ def cafe24_post(site, title, content_html, skip_login=False):
                 from selenium.webdriver.common.keys import Keys
                 el=d.find_element(By.CSS_SELECTOR,"input[name='member_passwd']"); el.send_keys(Keys.RETURN)
             except Exception: pass
-        # 로그인 응답 페이지도 광고/위젯으로 load가 안 끝나는 경우가 있어(write.html과 동일)
-        # 짧게 폴링하며 로그인폼이 사라지길 기다린 뒤 stop.
-        _t0=time.time()
-        while time.time()-_t0<12:
-            try:
-                if not d.find_elements(By.CSS_SELECTOR,"input[name='member_passwd']"): break
-            except Exception: pass
-            time.sleep(0.5)
+        # 로그인 응답 페이지가 광고/위젯으로 load가 안 끝나므로(write.html과 동일) 잠깐 대기 후 stop.
+        time.sleep(4)
         try: d.execute_script("try{window.stop();}catch(e){}")
         except Exception: pass
         _wait_cf(10); _pass_turnstile_if_present(); dismiss_alerts(d)
-        # 로그인 성공 여부 판정 — ★엄격화(2026-09-07): 기존엔 'mid in _src'로 판정했으나
-        #   로그인 폼에 방금 입력한 아이디 value가 남아 오탐(실패인데 성공 처리)→그 뒤 write 진입이
-        #   비로그인 상태로 홈 리다이렉트돼 '글쓰기 페이지 못찾음'. takago 원인.
-        #   → 로그인 입력폼(member_passwd)이 사라졌고 로그아웃/마이페이지 링크가 있어야 성공.
+        # 로그인 성공 판정 — ★마이페이지 접근으로 확인(2026-09-08 실측: takago는 봇방어 아님,
+        #   대표님이 브라우저로 로그인하면 바로 됨=추가보안창 없음. 워커 실패는 로그인 응답 무한로딩으로
+        #   판정을 놓친 것). 로그인폼 유무 판정은 무한로딩·리다이렉트에 취약 → 마이페이지를 직접 열어
+        #   로그인폼으로 튕기는지로 확정한다. 로그인됐으면 마이페이지가 열리고, 아니면 로그인폼이 뜬다.
         try:
-            # 로그인폼(member_passwd)이 사라졌으면 성공(로그인 페이지를 벗어남). 남아있으면 실패.
-            #   page_source 전체 읽기는 무한로딩 시 느려서 폼 존재 여부로만 판정(가볍고 견고).
-            still_login_form=bool(d.find_elements(By.CSS_SELECTOR,"input[name='member_passwd']"))
-            _logged_in=not still_login_form
+            try: d.set_page_load_timeout(8)
+            except Exception: pass
+            try: d.get(base+'/myshop/index.html')
+            except Exception: pass
+            try: d.execute_script("try{window.stop();}catch(e){}")
+            except Exception: pass
+            _mp0=time.time(); on_login_form=True
+            while time.time()-_mp0<12:
+                try:
+                    on_login_form=bool(d.find_elements(By.CSS_SELECTOR,"input[name='member_passwd']"))
+                    if not on_login_form: break
+                except Exception: pass
+                time.sleep(0.5)
+            try: d.set_page_load_timeout(25)
+            except Exception: pass
+            # 마이페이지가 로그인폼으로 안 튕겼으면 로그인 성공.
+            _logged_in=not on_login_form
             add_log(f"[Cafe24로그인] {'성공' if _logged_in else '실패'} — {(site.get('name') or base)[:24]}"
                     +('' if _logged_in else ' (아이디/비번 확인 필요)'))
             if not _logged_in:
