@@ -2893,23 +2893,35 @@ def cafe24_post(site, title, content_html, skip_login=False):
         try: d.set_page_load_timeout(45)
         except Exception: pass
     # Cloudflare 'Just a moment' 챌린지 대기(rental-zon 등 CF 뒤 Cafe24 — 실제 크롬이 자동 통과)
+    # ★시간최적화(2026-09-08 대표님 지시 '되는 범위서 다 줄여'): 매 루프 page_source(대용량) 읽던 것을
+    #   d.title(가벼움)만 먼저 보고, CF 챌린지 제목일 때만 page_source로 확정. 무챌린지(대부분)면
+    #   title 한 번 읽고 즉시 반환 → 원격 대용량 페이지에서 page_source 반복읽기(hang 위험) 제거.
     def _wait_cf(sec=15):
         for _ in range(int(sec*2)):
             try:
-                t=(d.title or '').lower(); src=(d.page_source or '').lower()
-                if not (('just a moment' in t or 'attention required' in t) and ('cloudflare' in src or 'cf-chl' in src or 'challenge' in src)):
+                t=(d.title or '').lower()
+                if not ('just a moment' in t or 'attention required' in t or '잠시' in t):
+                    return   # 제목이 CF 챌린지가 아니면 통과(page_source 안 읽음)
+                # 제목이 챌린지 의심 → page_source로 확정(이때만 무거운 읽기)
+                src=(d.page_source or '').lower()
+                if not ('cloudflare' in src or 'cf-chl' in src or 'challenge' in src):
                     return
             except Exception: return
             time.sleep(0.5)
     def _pass_turnstile_if_present():
         """현재 페이지가 Cloudflare Turnstile 챌린지(veritas-hub 등)면 2captcha로 풀고
-           브라우저 콜백으로 제출 → 원래 페이지로 복귀 대기. 통과/무챌린지면 True."""
-        try:
-            cur=(d.current_url or '').lower(); psrc=(d.page_source or '')
-        except Exception:
-            cur=''; psrc=''
-        if not ('turnstile' in psrc.lower() or 'veritas-hub' in cur or '사람인지' in psrc or '간단한 확인' in psrc):
-            return True
+           브라우저 콜백으로 제출 → 원래 페이지로 복귀 대기. 통과/무챌린지면 True.
+           ★시간최적화: URL(가벼움)에 veritas-hub/challenge 있을 때만 page_source(무거움) 읽어 확정.
+           대부분은 챌린지 아님 → URL 한 번 읽고 즉시 True(원격 대용량 page_source 반복 제거)."""
+        try: cur=(d.current_url or '').lower()
+        except Exception: cur=''
+        _url_hit=('veritas-hub' in cur or 'challenge' in cur)
+        if not _url_hit:
+            # URL이 챌린지가 아니면 page_source로 한 번만 더 확인(turnstile 위젯이 본문에 임베드된 경우).
+            try: psrc=(d.page_source or '')
+            except Exception: psrc=''
+            if not ('turnstile' in psrc.lower() or '사람인지' in psrc or '간단한 확인' in psrc):
+                return True
         cfg=load_config()
         ok,msg,tok,info=solve_captcha_with_2captcha(d,site,'turnstile',cfg)
         add_log(f'[Turnstile] {msg}')
@@ -3047,11 +3059,15 @@ def cafe24_post(site, title, content_html, skip_login=False):
         try: return bool(d.find_elements(By.CSS_SELECTOR,_SUBJ_SEL))
         except Exception: return False
     opened=False
+    # ★전체 글쓰기 진입에 시간상한(대표님 지시 '되는 범위서 다 줄여' + hang 방지). 원격 90s·로컬 60s.
+    #   이 시간 넘으면 후보 순회 중단하고 실패 반환 → 한 단계가 세션지연으로 10분 멈추던 것 방지.
+    _entry_deadline=time.time()+(90 if _use_sbr else 60)
     if not _use_sbr:   # 원격(Scraping Browser)은 시작부 45s 유지 — 짧게 덮으면 CF 처리중 타임아웃
         try: d.set_page_load_timeout(8)   # get()이 오래 블록되지 않게 (finally에서 25로 복원)
         except Exception: pass
     try:
         for wu in write_urls:
+            if time.time()>_entry_deadline: break
             try: d.get(wu)
             except Exception: pass          # 로드 미완료(load 이벤트 지연) 타임아웃은 정상 — 폼 폴링으로 판정
             # 첫 진입 시 Turnstile/CF 챌린지면 통과 후 복귀
@@ -3061,8 +3077,14 @@ def cafe24_post(site, title, content_html, skip_login=False):
             try: _cur=(d.current_url or '')
             except Exception: _cur=''
             add_log(f"[Cafe24글쓰기시도] {wu.split('/board/')[-1][:40]} → 현재:{_cur.split('//')[-1][:50]}")
+            # ★홈으로 리다이렉트됐으면(경로에 board/write/article 없음) 폼 폴링 낭비 말고 즉시 다음 후보로.
+            #   (takago 등은 write.html 직접 get이 홈으로 튕김 — 28초 폴링 소모 방지, article경유에 시간 확보.)
+            _cl=_cur.lower()
+            if _cur and not any(k in _cl for k in ('/board/','write','/article/','board_no','bo_table')):
+                continue
             # subject 입력칸이 나타날 때까지 폴링(폼은 JS로 그려짐 — 로딩 끊지 않음). 원격은 넉넉히.
-            deadline=time.time()+(28 if _use_sbr else 18)
+            #   단 전체 시간상한(_entry_deadline)을 넘지 않게 캡.
+            deadline=min(time.time()+(28 if _use_sbr else 18), _entry_deadline)
             while time.time()<deadline:
                 if _form_ready(): opened=True; break
                 time.sleep(0.5)
@@ -3081,11 +3103,19 @@ def cafe24_post(site, title, content_html, skip_login=False):
         #    write.html 직접 get은 홈으로 튕기지만 이 경로는 됨.) 저장된 게 없을 때만 1회 시도.
         if not opened and bo.isdigit() and not _art_name:
             try:
-                d.get(base+'/'); _wait_cf(10); _pass_turnstile_if_present()
-                _home=d.page_source or ''
-                _am=re.search(r'/article/([^/"\']+)/'+re.escape(bo)+r'/', _home)
-                if _am:
-                    _an=_am.group(1); _aurl=base+f'/article/{_an}/{bo}/'
+                d.get(base+'/')
+                # ★시간최적화: 대용량 page_source 대신 JS로 /article/…/board_no/ 링크만 추출(가벼움·hang방지).
+                _an=None
+                try:
+                    _hrefs=d.execute_script(
+                        "return Array.from(document.querySelectorAll(\"a[href*='/article/']\")).map(a=>a.getAttribute('href')).slice(0,200);"
+                    ) or []
+                except Exception: _hrefs=[]
+                for _h in _hrefs:
+                    _am=re.search(r'/article/([^/"\']+)/'+re.escape(bo)+r'/', str(_h or ''))
+                    if _am: _an=_am.group(1); break
+                if _an:
+                    _aurl=base+f'/article/{_an}/{bo}/'
                     if _aurl not in list_urls: list_urls.insert(0,_aurl)
                     try: set_site_flag(site.get('id'),article_board_name=_an); site['article_board_name']=_an
                     except Exception: pass
@@ -3093,6 +3123,7 @@ def cafe24_post(site, title, content_html, skip_login=False):
             except Exception: pass
         if not opened:
             for lu in list_urls:
+                if time.time()>_entry_deadline: break
                 try: d.get(lu)
                 except Exception: pass
                 _wait_cf(12); _pass_turnstile_if_present(); dismiss_alerts(d)
@@ -3121,7 +3152,7 @@ def cafe24_post(site, title, content_html, skip_login=False):
                 except Exception:
                     continue
                 _wait_cf(12); _pass_turnstile_if_present(); dismiss_alerts(d)
-                deadline=time.time()+(28 if _use_sbr else 18)
+                deadline=min(time.time()+(28 if _use_sbr else 18), _entry_deadline)
                 while time.time()<deadline:
                     if _form_ready(): opened=True; break
                     time.sleep(0.5)
