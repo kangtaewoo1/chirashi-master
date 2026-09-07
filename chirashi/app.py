@@ -847,24 +847,12 @@ def pick_phone(cfg):
     return random.choice(get_phones(cfg))
 
 def build_title(r,s,b,cfg,raw=None):
-    """제목을 매번 다른 형태로 변형 — 키워드 순서·전화 위치·연결어·템플릿을 랜덤화해서
-       같은 조합이라도 제목이 반복돼 보이지 않게 한다(대표님 지시: 키워드 계속 변형)."""
+    """★제목 형식 고정(대표님 지시 2026-09-08, 무조건): 메인키워드1 + 번호 + 키워드2 + 키워드3.
+       r=키워드1(메인), s=키워드2, b=키워드3. 순서는 절대 안 바꾼다(셔플·강조어 없음).
+       도배 방지는 전화번호 표기 변형(기호·O/I 랜덤)만으로 처리한다."""
     raw=raw or pick_phone(cfg)
-    ph=format_phone_random(raw)
-    kws=[r,s,b]; random.shuffle(kws)            # 키워드 순서 랜덤
-    e1=random.choice(TITLE_EXTRAS); e2=random.choice(TITLE_EXTRAS)
-    k0,k1,k2=kws
-    templates=[
-        f'{k0} {ph} {e1} {k1} {k2}',
-        f'{k0} {k1} {ph} {k2} {e1}',
-        f'{e1} {k0} {ph} {k1} {e2} {k2}',
-        f'{k0} {k1} {k2} {e1} {ph}',
-        f'{k0} {ph} {k1} {e1} {k2} {e2}',
-        f'{k0} {e1} {k1} {ph} {k2}',
-        f'{k0} {k1} {e1} {k2} {ph} {e2}',
-        f'{ph} {k0} {k1} {e1} {k2}',
-    ]
-    return random.choice(templates).strip()[:140], raw
+    ph=format_phone_random(raw)   # 번호 표기만 매번 살짝 변형(순서·키워드는 고정)
+    return f'{r} {ph} {s} {b}'.strip()[:140], raw
 
 # ==================== 키워드 풀 (엑셀/CSV 랜덤 치환) ====================
 REGION_ORDER=('인천','경기','서울','충남','충북','세종','전북','전남','경상','경북','강원','제주')
