@@ -2751,11 +2751,20 @@ def cafe24_post(site, title, content_html, skip_login=False):
                     el=d.find_element(By.CSS_SELECTOR,"input[name='member_passwd']"); el.send_keys(Keys.RETURN)
                 except Exception: pass
         time.sleep(3); _wait_cf(10); _pass_turnstile_if_present(); dismiss_alerts(d)
-        # 로그인 성공 여부 확인·로그(디버깅: 어디서 막히는지 추적 — 대표님 Cafe24 검증)
+        # 로그인 성공 여부 판정 — ★엄격화(2026-09-07): 기존엔 'mid in _src'로 판정했으나
+        #   로그인 폼에 방금 입력한 아이디 value가 남아 오탐(실패인데 성공 처리)→그 뒤 write 진입이
+        #   비로그인 상태로 홈 리다이렉트돼 '글쓰기 페이지 못찾음'. takago 원인.
+        #   → 로그인 입력폼(member_passwd)이 사라졌고 로그아웃/마이페이지 링크가 있어야 성공.
         try:
-            _b=(d.find_element(By.TAG_NAME,'body').text or '')[:2000]; _src=(d.page_source or '').lower()
-            _logged_in=('로그아웃' in _b or 'logout' in _src or 'mypage' in _src or '마이페이지' in _b or mid.lower() in _src)
-            add_log(f"[Cafe24로그인] {'성공' if _logged_in else '실패/불확실'} — {(site.get('name') or base)[:24]}")
+            still_login_form=bool(d.find_elements(By.CSS_SELECTOR,"input[name='member_passwd']"))
+            _src=(d.page_source or '').lower()
+            has_logout=('member/logout' in _src or '로그아웃' in _src)
+            _logged_in=(has_logout and not still_login_form)
+            add_log(f"[Cafe24로그인] {'성공' if _logged_in else '실패'} — {(site.get('name') or base)[:24]}"
+                    +('' if _logged_in else ' (아이디/비번 확인 필요)'))
+            if not _logged_in:
+                # 로그인 실패면 write 진입은 무의미(홈 리다이렉트) — 즉시 명확한 에러 반환.
+                return False,'Cafe24 로그인 실패 — 저장된 아이디/비밀번호 확인 필요(재입력 후 재시도)'
         except Exception: pass
 
     # 글쓰기 페이지 후보 (bo_table 이 숫자면 board_no, 문자면 board 경로)
