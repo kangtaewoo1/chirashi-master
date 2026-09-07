@@ -1250,26 +1250,36 @@ def send_telegram_doc(cfg, filename, data_bytes, caption=''):
 
 # ==================== 캡차 / 보안 인증 감지 (우회 아님 — 감지해서 제외) ====================
 def detect_captcha(d):
-    """현재 페이지에 캡차/보안 인증이 있는지 감지. 있으면 종류, 없으면 ''.
-       (정책상 자동 해석·우회 없음 — 감지되면 자동발행에서 제외한다.)"""
+    """현재 페이지에 캡차/보안 인증이 '실제로' 있는지 감지. 있으면 종류, 없으면 ''.
+       ★대표님 rental-zon 실측: 로그인 회원 글쓰기엔 캡차가 없는데도 페이지 JS의
+         'captcha' 문자열만 보고 kcaptcha로 오탐 → 있지도 않은 캡차 처리하다 발행 중단.
+         그래서 '보이는 캡차 요소(입력칸/이미지)가 실제로 있을 때만' 캡차로 판정한다."""
+    from selenium.webdriver.common.by import By
     try: html=d.page_source or ''
     except Exception: html=''
     low=html.lower()
-    if 'cf-turnstile' in low or 'turnstile' in low: return 'turnstile'
+    # Turnstile/hCaptcha/reCAPTCHA는 위젯 마크업이 명확할 때만
+    if 'cf-turnstile' in low or ('turnstile' in low and 'sitekey' in low): return 'turnstile'
     if 'h-captcha' in low or 'hcaptcha' in low: return 'hcaptcha'
-    # kcaptcha(그누보드 이미지 캡차) 확실 신호는 recaptcha 문자열보다 먼저 확정한다.
-    # (실제로는 kcaptcha인데 페이지에 'recaptcha' 문자열만 있어 recaptcha로 오판→sitekey 못찾음
-    #  으로 실패하던 문제 수정. kcaptcha는 발행에서 2captcha로 이미 뚫린다.)
-    if 'captcha_key' in low or 'kcaptcha' in low or 'g5_captcha' in low \
-       or '자동등록방지' in html or '자동입력방지' in html:
+    if 'g-recaptcha' in low or 'grecaptcha' in low or 'data-sitekey' in low: return 'recaptcha'
+    # kcaptcha(이미지 캡차): '실제 캡차 입력칸 또는 캡차 이미지 요소'가 DOM에 보일 때만 인정.
+    #  문자열(kcaptcha/captcha/자동등록방지)만으로는 판정하지 않는다(오탐 방지).
+    def _has_visible(css):
+        try:
+            for el in d.find_elements(By.CSS_SELECTOR,css):
+                try:
+                    if el.is_displayed(): return True
+                except Exception: pass
+        except Exception: pass
+        return False
+    has_cap_input=_has_visible("#captcha_key,input[name='captcha_key'],input[name*='captcha'],"
+                               "input[id*='captcha'],input[name='wr_key'],input[name*='secText'],"
+                               "input[name*='보안'],#secret_text")
+    has_cap_img=_has_visible("img#captcha_img,img#captcha_image,img[src*='captcha'],img[src*='kcaptcha'],"
+                             "img[src*='/captcha'],img[alt*='captcha'],img[alt*='보안']")
+    if has_cap_input or has_cap_img:
         return 'kcaptcha'
-    # reCAPTCHA는 실제 위젯/JS 객체가 있을 때만 인정한다(단순 'recaptcha' 문자열은 근거 약함).
-    if 'g-recaptcha' in low or 'grecaptcha' in low or 'data-sitekey' in low:
-        return 'recaptcha'
-    # 그 밖의 약한 신호(보안문자, 일반 'captcha' 문자열)는 그누보드 이미지 캡차로 처리.
-    if '보안문자' in html or 'recaptcha' in low or 'captcha' in low:
-        return 'kcaptcha'
-    return ''
+    return ''   # 보이는 캡차 요소 없음 → 캡차 없음(로그인 회원 글쓰기 등)
 
 # CAPTCHA는 자동 해석하거나 우회하지 않는다. 폼을 모두 채운 뒤 사람이
 # 입력한 값만 같은 Selenium 세션에 전달하여 등록을 계속한다.
