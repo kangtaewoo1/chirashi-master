@@ -2758,10 +2758,22 @@ def cafe24_post(site, title, content_html, skip_login=False):
                 from selenium.webdriver.common.keys import Keys
                 el=d.find_element(By.CSS_SELECTOR,"input[name='member_passwd']"); el.send_keys(Keys.RETURN)
             except Exception: pass
-        # 로그인 응답 페이지가 광고/위젯으로 load가 안 끝나므로(write.html과 동일) 잠깐 대기 후 stop.
-        time.sleep(4)
-        try: d.execute_script("try{window.stop();}catch(e){}")
-        except Exception: pass
+        # ★로그인 제출 후 Cloudflare Turnstile '사람인지 확인' 챌린지가 뜬다(대표님 개발자도구 실측
+        #   2026-09-08: veritas-hub.cafe24.com/challenge + Turnstile 체크박스). 제출→챌린지 이동에
+        #   시간차가 있어 한 번만 호출하면 놓친다 → 챌린지가 뜰 때까지·풀릴 때까지 반복 처리.
+        _tt0=time.time()
+        while time.time()-_tt0<40:
+            try: d.execute_script("try{window.stop();}catch(e){}")
+            except Exception: pass
+            try: cur=(d.current_url or '').lower()
+            except Exception: cur=''
+            try: psrc=(d.page_source or '').lower()
+            except Exception: psrc=''
+            on_challenge=('veritas-hub' in cur or 'challenge' in cur or 'turnstile' in psrc or '사람인지' in psrc or '간단한 확인' in psrc)
+            if on_challenge:
+                _pass_turnstile_if_present()   # 2captcha turnstile 풀어 콜백 제출→복귀
+                time.sleep(3); continue
+            break   # 챌린지 아님 → 로그인 응답으로 진행
         _wait_cf(10); _pass_turnstile_if_present(); dismiss_alerts(d)
         # 로그인 성공 판정 — ★마이페이지 접근으로 확인(2026-09-08 실측: takago는 봇방어 아님,
         #   대표님이 브라우저로 로그인하면 바로 됨=추가보안창 없음. 워커 실패는 로그인 응답 무한로딩으로
