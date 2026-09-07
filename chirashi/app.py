@@ -627,6 +627,10 @@ def load_config():
        # ★Bright Data Web Unlocker API(CF·캡차 자동해결). 주거용은 회사메일 인증 필요라, 개인가입은
        #   Web Unlocker 사용. POST api.brightdata.com/request로 URL 보내면 뚫린 HTML 반환. 1.5$/1000건.
        'unlocker_enabled':False,'unlocker_api_key':'','unlocker_zone':'web_unlocker1',
+       # ★Bright Data Scraping Browser(CF+로그인 사이트용 원격 크롬). Web Unlocker는 로그인 세션
+       #   미지원이라, 타카고 등 로그인 필요 Cafe24는 이걸로. Selenium Remote로 brd.superproxy.io:9515 연결.
+       #   endpoint 예: brd-customer-xxx-zone-scraping_browser:PASS@brd.superproxy.io:9515
+       'sbr_enabled':False,'sbr_endpoint':'',   # 전체 endpoint(user:pass@host:port) 한 줄로 저장
        'log_token':'cae3aaa53d6f3576a1c1f6a258f79129'}   # 읽기전용 로그 조회 토큰(?token= 로 /api/logs·/api/worker-log 접근)
     c=load_json(CONFIG_FILE,None)
     if c is None or not isinstance(c,dict): save_json(CONFIG_FILE,d); return d.copy()
@@ -1967,13 +1971,35 @@ def verify_loop():
 _drivers = {}
 _drv_lock = threading.Lock()
 
-def get_driver():
+def get_driver(remote=False):
+    """remote=True면 Bright Data Scraping Browser(원격 크롬)로 연결 — CF+로그인 사이트(타카고 등)용.
+       원격은 CF·캡차를 Bright Data가 자동처리. 로컬 크롬과 별도 키로 캐시해 섞이지 않게 한다."""
     tid = threading.current_thread().name
+    from selenium import webdriver
+    # ★Scraping Browser 원격 크롬(CF+로그인용). 설정된 경우에만.
+    if remote:
+        cfg=load_config()
+        ep=str(cfg.get('sbr_endpoint') or '').strip()
+        if cfg.get('sbr_enabled') and ep:
+            rkey='__SBR__'+tid
+            with _drv_lock:
+                if rkey in _drivers:
+                    try: _drivers[rkey].current_url; return _drivers[rkey]
+                    except:
+                        try: _drivers[rkey].quit()
+                        except: pass
+                        _drivers.pop(rkey,None)
+                if not ep.startswith('http'): ep='https://'+ep
+                if ':9515' not in ep and not re.search(r':\d+',ep.split('@')[-1]): ep=ep.rstrip('/')+':9515'
+                opts=webdriver.ChromeOptions(); opts.add_argument('--lang=ko-KR')
+                d=webdriver.Remote(command_executor=ep,options=opts)
+                d.set_page_load_timeout(90); d.implicitly_wait(3)
+                _drivers[rkey]=d; return d
+        # 원격 요청인데 미설정이면 로컬로 폴백(발행 안 끊김)
     with _drv_lock:
         if tid in _drivers:
             try: _drivers[tid].current_url; return _drivers[tid]
             except: pass
-        from selenium import webdriver
         from selenium.webdriver.chrome.service import Service
         from webdriver_manager.chrome import ChromeDriverManager
         opts = webdriver.ChromeOptions()
@@ -2177,13 +2203,17 @@ def fill_required_post_fields(d,site):
     return filled,list(dict.fromkeys(missing))
 
 def reset_driver():
-    """현재 워커 스레드의 크롬 드라이버를 종료 → 다음 get_driver() 에서 새로 띄움(자동 재시작)."""
+    """현재 워커 스레드의 크롬 드라이버를 종료 → 다음 get_driver() 에서 새로 띄움(자동 재시작).
+       ★로컬 드라이버뿐 아니라 Scraping Browser 원격 드라이버(__SBR__ 키)도 함께 정리
+       (안 닫으면 원격 세션이 쌓여 Bright Data 비용 누수)."""
     tid=threading.current_thread().name
     with _drv_lock:
         d=_drivers.pop(tid,None)
-    if d:
-        try: d.quit()
-        except: pass
+        rd=_drivers.pop('__SBR__'+tid,None)
+    for x in (d,rd):
+        if x:
+            try: x.quit()
+            except: pass
 
 # ==================== Selenium 그누보드 글쓰기 ====================
 def _robust_fill(d, el, value):
@@ -2749,7 +2779,11 @@ def cafe24_post(site, title, content_html, skip_login=False):
     m=re.match(r'(https?://[^/]+)',url); base=m.group(1) if m else url
     bo=str(site.get('bo_table','') or '').strip()
     mid=site.get('mb_id',''); mpw=site.get('mb_pass','')
-    d=get_driver()
+    # ★Cafe24는 CF+로그인이 잦다. Scraping Browser(원격 크롬)가 설정돼 있으면 그걸로 — CF·캡차·로그인
+    #   세션을 Bright Data가 처리(타카고 등). 미설정이면 로컬 크롬으로 폴백(get_driver 내부에서).
+    _use_sbr=bool(load_config().get('sbr_enabled'))
+    d=get_driver(remote=_use_sbr)
+    if _use_sbr: add_log(f'[Cafe24] Scraping Browser(원격 크롬) 사용 — {(site.get("name") or base)[:24]}')
     # Cloudflare 'Just a moment' 챌린지 대기(rental-zon 등 CF 뒤 Cafe24 — 실제 크롬이 자동 통과)
     def _wait_cf(sec=15):
         for _ in range(int(sec*2)):
@@ -7580,9 +7614,10 @@ def api_cfg():
                   'twocaptcha_price_recaptcha_usd','twocaptcha_price_image_usd','brave_price_per_query_usd',
                   'auto_pipeline_enabled','auto_pipeline_batch',
                   'proxy_enabled','proxy_host','proxy_port','proxy_user','proxy_pass','proxy_only_for_cf',
-                  'unlocker_enabled','unlocker_api_key','unlocker_zone']:
+                  'unlocker_enabled','unlocker_api_key','unlocker_zone',
+                  'sbr_enabled','sbr_endpoint']:
             if k in d:
-                if k in ('openai_key','openai_admin_key','telegram_token','google_api_key','brave_api_key','guest_post_password','twocaptcha_api_key','imap_password','proxy_pass','unlocker_api_key') and d[k]=='***설정됨***': continue  # 마스크 값은 무시(기존 유지)
+                if k in ('openai_key','openai_admin_key','telegram_token','google_api_key','brave_api_key','guest_post_password','twocaptcha_api_key','imap_password','proxy_pass','unlocker_api_key','sbr_endpoint') and d[k]=='***설정됨***': continue  # 마스크 값은 무시(기존 유지)
                 cfg[k]=d[k]
         if d.get('password'): cfg['password']=generate_password_hash(d['password'])  # 해시 저장
         # 완전 자동화: 필수 키(Brave 발굴 + 2captcha)가 채워지면 발굴·파이프라인을 자동 ON.
@@ -7608,6 +7643,7 @@ def api_cfg():
     if c.get('imap_password'): c['imap_password']='***설정됨***'
     if c.get('proxy_pass'): c['proxy_pass']='***설정됨***'   # 프록시 비번 노출 방지
     if c.get('unlocker_api_key'): c['unlocker_api_key']='***설정됨***'   # Web Unlocker API 키 노출 방지
+    if c.get('sbr_endpoint'): c['sbr_endpoint']='***설정됨***'   # Scraping Browser endpoint(비번 포함) 노출 방지
     c.pop('password',None)
     return jsonify(c)
 
@@ -8468,7 +8504,11 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 <hr style="border:none;border-top:1px solid var(--bd);margin:10px 0">
 <label style="display:flex;align-items:center;gap:6px;color:var(--g);font-size:12px;margin-bottom:6px"><input type="checkbox" id="cUnlockerEn" style="width:auto">Web Unlocker API 사용 (CF·캡차 자동해결 · 개인가입 즉시가능 · 권장)</label>
 <div class="row" style="margin-bottom:6px"><div style="flex:2"><small style="color:var(--d)">Web Unlocker API 키</small><input type="password" id="cUnlockerKey" placeholder="변경시만 입력 (Bright Data API Key)"></div><div style="flex:1"><small style="color:var(--d)">존 이름</small><input type="text" id="cUnlockerZone" placeholder="web_unlocker1"></div></div>
-<div style="font-size:10px;color:var(--d)">Web Unlocker는 요청당 과금(약 $1.5/1000건, 성공건만). CF 걸린 Cafe24 게시판 접근에 사용. 키는 화면·API에 노출되지 않습니다.</div></div>
+<div style="font-size:10px;color:var(--d)">Web Unlocker는 요청당 과금(약 $1.5/1000건, 성공건만). CF 걸린 Cafe24 게시판 접근에 사용. 키는 화면·API에 노출되지 않습니다.</div>
+<hr style="border:none;border-top:1px solid var(--bd);margin:10px 0">
+<label style="display:flex;align-items:center;gap:6px;color:var(--g);font-size:12px;margin-bottom:6px"><input type="checkbox" id="cSbrEn" style="width:auto">Scraping Browser 사용 (CF+로그인 사이트 · 타카고 등 로그인형 Cafe24)</label>
+<div style="margin-bottom:6px"><small style="color:var(--d)">Scraping Browser Endpoint</small><input type="password" id="cSbrEp" placeholder="변경시만 입력 (brd-customer-...-zone-scraping_browser:PASS@brd.superproxy.io:9515)"></div>
+<div style="font-size:10px;color:var(--d)">Web Unlocker가 못하는 <b>로그인 세션</b>이 필요한 CF 사이트(타카고 등)용 원격 크롬. Bright Data 대시보드에서 Scraping Browser 존 생성 후 endpoint 입력. GB당 과금(원격 크롬)이라 로그인형 Cafe24에만 사용. endpoint는 화면·API에 노출되지 않습니다.</div></div>
 <div class="card"><h3>🔎 도메인 발굴 (Brave Search API)</h3>
 <div style="margin-bottom:6px"><small style="color:var(--d)">Brave Search API 키</small><input type="password" id="cBraveKey" placeholder="변경시에만 입력"></div>
 <div style="font-size:10px;color:var(--d);margin-bottom:6px"><a href="https://api-dashboard.search.brave.com/" target="_blank" rel="noopener" style="color:var(--p)">Brave API 키 관리</a> · 키는 화면과 API 응답에 노출되지 않습니다.</div>
@@ -8837,10 +8877,14 @@ const ppw=$('cProxyPass').value.trim();d.proxy_pass=(ppw?ppw:'***설정됨***');
 // Web Unlocker
 d.unlocker_enabled=$('cUnlockerEn').checked;d.unlocker_zone=$('cUnlockerZone').value.trim()||'web_unlocker1';
 const uk=$('cUnlockerKey').value.trim();d.unlocker_api_key=(uk?uk:'***설정됨***');
-const pw=$('cPw').value.trim();if(pw)d.password=pw;const gp=$('cGuestPw').value.trim();if(gp)d.guest_post_password=gp;const ok=$('cOpenai').value.trim();if(ok)d.openai_key=ok;const oa=$('cOpenaiAdmin').value.trim();if(oa)d.openai_admin_key=oa;const tg=$('cTgTok').value.trim();if(tg)d.telegram_token=tg;const tc=$('cTwocaptchaKey').value.trim();if(tc)d.twocaptcha_api_key=tc;const r=await api('/config','POST',d);if(r&&r.ok){toast('저장 완료');$('cPw').value='';$('cGuestPw').value='';$('cOpenai').value='';$('cOpenaiAdmin').value='';$('cTgTok').value='';$('cTwocaptchaKey').value='';$('cProxyPass').value='';$('cUnlockerKey').value='';loadOpenAIUsage()}}
+// Scraping Browser
+d.sbr_enabled=$('cSbrEn').checked;
+const sep=$('cSbrEp').value.trim();d.sbr_endpoint=(sep?sep:'***설정됨***');
+const pw=$('cPw').value.trim();if(pw)d.password=pw;const gp=$('cGuestPw').value.trim();if(gp)d.guest_post_password=gp;const ok=$('cOpenai').value.trim();if(ok)d.openai_key=ok;const oa=$('cOpenaiAdmin').value.trim();if(oa)d.openai_admin_key=oa;const tg=$('cTgTok').value.trim();if(tg)d.telegram_token=tg;const tc=$('cTwocaptchaKey').value.trim();if(tc)d.twocaptcha_api_key=tc;const r=await api('/config','POST',d);if(r&&r.ok){toast('저장 완료');$('cPw').value='';$('cGuestPw').value='';$('cOpenai').value='';$('cOpenaiAdmin').value='';$('cTgTok').value='';$('cTwocaptchaKey').value='';$('cProxyPass').value='';$('cUnlockerKey').value='';$('cSbrEp').value='';loadOpenAIUsage()}}
 async function loadCfgUI(){const c=await api('/config','GET');if(!c)return;$('cVideoUrl').value=c.video_url||'';$('cLandingUrl').value=c.landing_url||'';$('cPostEmail').value=c.post_email||'';$('cGuestPw').placeholder=(c.guest_post_password==='***설정됨***')?'설정됨 · 변경시에만 입력':'변경시에만 입력';$('cUseGpt').checked=!!c.use_gpt;$('cNotifyDone').checked=!!c.notify_done;$('cNotifyFail').checked=!!c.notify_fail;$('cTgControl').checked=!!c.telegram_control;$('cVerify').checked=(c.verify_enabled!==false);$('cMixKw').checked=(c.mix_keywords!==false);$('cBlockUnpaid').checked=(c.block_unpaid!==false);$('cDiscoOn').checked=!!c.discover_enabled;if(c.discover_daily_target)$('cDTarget').value=c.discover_daily_target;if(c.discover_query_limit)$('cDQuery').value=c.discover_query_limit;if(typeof c.discover_direct_queries==='string')$('cDDirect').value=c.discover_direct_queries;if($('cExcludedDomains')&&typeof c.excluded_domains==='string')$('cExcludedDomains').value=c.excluded_domains;if($('cImapEmail'))$('cImapEmail').value=c.imap_email||'';if($('cImapHost'))$('cImapHost').value=c.imap_host||'imap.gmail.com';if($('cImapPass'))$('cImapPass').placeholder=(c.imap_password==='***설정됨***')?'설정됨 · 변경시만 입력':'앱 비밀번호 16자리 (변경시만)';$('cBraveKey').placeholder=(c.brave_api_key==='***설정됨***')?'설정됨 · 변경시에만 입력':'Brave API 키 입력';
 if($('cProxyEn')){$('cProxyEn').checked=!!c.proxy_enabled;$('cProxyHost').value=c.proxy_host||'';$('cProxyPort').value=c.proxy_port||'';$('cProxyUser').value=c.proxy_user||'';$('cProxyCfOnly').checked=(c.proxy_only_for_cf!==false);$('cProxyPass').placeholder=(c.proxy_pass==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';}
 if($('cUnlockerEn')){$('cUnlockerEn').checked=!!c.unlocker_enabled;$('cUnlockerZone').value=c.unlocker_zone||'web_unlocker1';$('cUnlockerKey').placeholder=(c.unlocker_api_key==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';}
+if($('cSbrEn')){$('cSbrEn').checked=!!c.sbr_enabled;$('cSbrEp').placeholder=(c.sbr_endpoint==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';}
 if(c.backup_time)$('cBackupTime').value=c.backup_time;if(c.model)$('cModel').value=c.model;if(c.telegram_chat_id)$('cTgChat').value=c.telegram_chat_id;if(typeof c.phones==='string')$('cPhones').value=c.phones;$('cOpenai').placeholder=(c.openai_key==='***설정됨***')?'설정됨 · 변경시만 입력':'sk-... (변경시만)';$('cOpenaiAdmin').placeholder=(c.openai_admin_key==='***설정됨***')?'관리자 키 설정됨 · 변경시만 입력':'관리자 키 없으면 로컬 예상비용 사용';$('cOpenaiBudget').value=c.openai_monthly_budget_usd==null?20:c.openai_monthly_budget_usd;$('cOpenaiInPrice').value=c.openai_input_price_per_million==null?0.15:c.openai_input_price_per_million;$('cOpenaiOutPrice').value=c.openai_output_price_per_million==null?0.60:c.openai_output_price_per_million;$('cTgTok').placeholder=(c.telegram_token==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';$('cTwocaptchaEn').checked=!!c.twocaptcha_enabled;$('cTwocaptchaKey').placeholder=(c.twocaptcha_api_key==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';if(c.brave_price_per_query_usd!=null)$('cBravePrice').value=c.brave_price_per_query_usd;if(c.twocaptcha_price_recaptcha_usd!=null)$('cCapRePrice').value=c.twocaptcha_price_recaptcha_usd;if(c.twocaptcha_price_image_usd!=null)$('cCapImgPrice').value=c.twocaptcha_price_image_usd;loadOpenAIUsage();api('/rejected-domains','GET').then(r=>{if(r&&r.ok&&$('rejCount'))$('rejCount').textContent=r.count})}
 async function showRejected(){const box=$('rejList');if(!box)return;if(box.style.display!=='none'){box.style.display='none';return}box.style.display='block';box.innerHTML='불러오는 중…';const r=await api('/rejected-domains','GET');if(!r||!r.ok){box.innerHTML='조회 실패';return}if($('rejCount'))$('rejCount').textContent=r.count;const logmap={};(r.log||[]).forEach(x=>{if(!logmap[x.domain])logmap[x.domain]=x.reason||''});box.innerHTML='<div style="color:var(--r);margin-bottom:6px">총 '+r.count+'개 · 발굴 자동 제외됨 (재활성화하려면 옆 ↺ 클릭)</div>'+(r.domains||[]).map(d=>'<div style="display:flex;justify-content:space-between;gap:8px;padding:2px 0;border-bottom:1px solid #17202e"><span><b style="color:var(--t)">'+esc(d)+'</b> <span style="color:var(--d)">'+esc((logmap[d]||'').slice(0,30))+'</span></span><span style="cursor:pointer;color:var(--g)" title="재활성화(제외 해제)" onclick="unrejectDomain(\''+esc(d)+'\')">↺</span></div>').join('')}
 async function unrejectDomain(dom){if(!confirm(dom+' 을(를) 자동 탈락에서 해제할까요? (다시 발굴 대상이 됩니다)'))return;const r=await api('/rejected-domains','POST',{remove:dom});if(r&&r.ok){toast('해제됨 · '+dom,'ok');showRejected();showRejected()}else toast('실패','er')}
