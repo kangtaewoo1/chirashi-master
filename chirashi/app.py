@@ -1194,12 +1194,21 @@ def generate_post_gpt(keywords, cfg, workroom_id=None):
          f'<p style="font-size:12px;color:#999;text-align:right;margin:16px 0 8px;">최신 업데이트 · {_upd} 기준</p>')
     return header+body+cta, title
 
+_GPT_SKIP_UNTIL=[0.0]   # time.time()까지 GPT 스킵(429 서킷브레이커)
+
 def _gen_once(keywords, cfg, workroom_id=None):
-    if cfg.get('use_gpt') and cfg.get('openai_key'):
+    # GPT 429(레이트리밋) 서킷브레이커: 429가 나면 5분간 GPT를 건너뛰고 템플릿 직행.
+    #  (매 발행마다 GPT 호출→429 대기→폴백 반복이 발행을 느리게 해 타임아웃 유발 — 대표님 지적)
+    if cfg.get('use_gpt') and cfg.get('openai_key') and time.time() >= _GPT_SKIP_UNTIL[0]:
         try:
             return generate_post_gpt(keywords,cfg,workroom_id=workroom_id)
         except Exception as e:
-            add_log(f'[GPT 실패→템플릿] {str(e)[:80]}')
+            _msg=str(e)
+            if '429' in _msg or 'Too Many' in _msg or 'rate limit' in _msg.lower():
+                _GPT_SKIP_UNTIL[0]=time.time()+300   # 5분간 GPT 스킵
+                add_log('[GPT 429→5분간 템플릿 사용] OpenAI 레이트리밋 — 발행 속도 유지 위해 잠시 GPT 끔')
+            else:
+                add_log(f'[GPT 실패→템플릿] {_msg[:80]}')
     return generate_rich_html(keywords,cfg,workroom_id=workroom_id)
 
 def generate_article(keywords, cfg, unique=True, workroom_id=None):
