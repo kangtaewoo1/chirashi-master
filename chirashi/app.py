@@ -624,6 +624,9 @@ def load_config():
        #   Residential Proxies 또는 Web Unlocker의 호스트/포트/유저/비번. CF 사이트에만 선택적 사용(비용↓).
        'proxy_enabled':False,'proxy_host':'','proxy_port':'','proxy_user':'','proxy_pass':'',
        'proxy_only_for_cf':True,   # True=Cloudflare 감지된 사이트에만 프록시 사용(비용 절약), False=전체
+       # ★Bright Data Web Unlocker API(CF·캡차 자동해결). 주거용은 회사메일 인증 필요라, 개인가입은
+       #   Web Unlocker 사용. POST api.brightdata.com/request로 URL 보내면 뚫린 HTML 반환. 1.5$/1000건.
+       'unlocker_enabled':False,'unlocker_api_key':'','unlocker_zone':'web_unlocker1',
        'log_token':'cae3aaa53d6f3576a1c1f6a258f79129'}   # 읽기전용 로그 조회 토큰(?token= 로 /api/logs·/api/worker-log 접근)
     c=load_json(CONFIG_FILE,None)
     if c is None or not isinstance(c,dict): save_json(CONFIG_FILE,d); return d.copy()
@@ -703,6 +706,31 @@ def proxy_get(url, cfg=None, use_proxy=None, **kw):
         if proxies:   # 프록시 실패 → 직접연결 폴백
             try: return _rq.get(url,proxies=None,**kw)
             except Exception: return None
+        return None
+
+def unlocker_enabled(cfg=None):
+    cfg=cfg or load_config()
+    return bool(cfg.get('unlocker_enabled') and str(cfg.get('unlocker_api_key') or '').strip())
+
+def unlocker_fetch(url, cfg=None, timeout=90):
+    """Bright Data Web Unlocker로 url을 요청해 CF·캡차 통과된 HTML(문자열)을 반환. 실패시 None.
+       (CF 걸린 Cafe24 게시판 GET 검증·글목록 확인용. 실제 폼 제출 로그인은 별도.)
+       ★2026-09-08 신설: 대표님이 Web Unlocker 존 생성(요청당 과금, CAPTCHA 자동해결)."""
+    import requests as _rq
+    cfg=cfg or load_config()
+    key=str(cfg.get('unlocker_api_key') or '').strip()
+    zone=str(cfg.get('unlocker_zone') or 'web_unlocker1').strip()
+    if not key: return None
+    try:
+        r=_rq.post('https://api.brightdata.com/request',
+                   headers={'Content-Type':'application/json','Authorization':f'Bearer {key}'},
+                   json={'zone':zone,'url':url,'format':'raw'},timeout=timeout)
+        if r.status_code>=400:
+            add_log(f'[Unlocker] 오류 {r.status_code}: {(r.text or "")[:80]}','발행')
+            return None
+        return r.text or ''
+    except Exception as e:
+        add_log(f'[Unlocker] 예외: {str(e)[:80]}','발행')
         return None
 
 TWOCAPTCHA_CACHE_FILE=os.path.join(DATA_DIR,'twocaptcha_balance.json')
@@ -7546,9 +7574,10 @@ def api_cfg():
                   'twocaptcha_api_key','twocaptcha_enabled',
                   'twocaptcha_price_recaptcha_usd','twocaptcha_price_image_usd','brave_price_per_query_usd',
                   'auto_pipeline_enabled','auto_pipeline_batch',
-                  'proxy_enabled','proxy_host','proxy_port','proxy_user','proxy_pass','proxy_only_for_cf']:
+                  'proxy_enabled','proxy_host','proxy_port','proxy_user','proxy_pass','proxy_only_for_cf',
+                  'unlocker_enabled','unlocker_api_key','unlocker_zone']:
             if k in d:
-                if k in ('openai_key','openai_admin_key','telegram_token','google_api_key','brave_api_key','guest_post_password','twocaptcha_api_key','imap_password','proxy_pass') and d[k]=='***설정됨***': continue  # 마스크 값은 무시(기존 유지)
+                if k in ('openai_key','openai_admin_key','telegram_token','google_api_key','brave_api_key','guest_post_password','twocaptcha_api_key','imap_password','proxy_pass','unlocker_api_key') and d[k]=='***설정됨***': continue  # 마스크 값은 무시(기존 유지)
                 cfg[k]=d[k]
         if d.get('password'): cfg['password']=generate_password_hash(d['password'])  # 해시 저장
         # 완전 자동화: 필수 키(Brave 발굴 + 2captcha)가 채워지면 발굴·파이프라인을 자동 ON.
@@ -7573,6 +7602,7 @@ def api_cfg():
     if c.get('twocaptcha_api_key'): c['twocaptcha_api_key']='***설정됨***'
     if c.get('imap_password'): c['imap_password']='***설정됨***'
     if c.get('proxy_pass'): c['proxy_pass']='***설정됨***'   # 프록시 비번 노출 방지
+    if c.get('unlocker_api_key'): c['unlocker_api_key']='***설정됨***'   # Web Unlocker API 키 노출 방지
     c.pop('password',None)
     return jsonify(c)
 
@@ -8398,7 +8428,11 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 <div class="row" style="margin-bottom:6px"><div style="flex:2"><small style="color:var(--d)">Host</small><input type="text" id="cProxyHost" placeholder="예: brd.superproxy.io"></div><div style="flex:1"><small style="color:var(--d)">Port</small><input type="text" id="cProxyPort" placeholder="예: 22225"></div></div>
 <div class="row" style="margin-bottom:6px"><div style="flex:1"><small style="color:var(--d)">Username</small><input type="text" id="cProxyUser" placeholder="brd-customer-...-zone-..."></div><div style="flex:1"><small style="color:var(--d)">Password</small><input type="password" id="cProxyPass" placeholder="변경시만 입력"></div></div>
 <label style="display:flex;align-items:center;gap:6px;color:var(--d);font-size:11px;margin-bottom:6px"><input type="checkbox" id="cProxyCfOnly" style="width:auto">Cloudflare 걸린 사이트에만 프록시 사용 (비용 절약 · 권장)</label>
-<div style="font-size:10px;color:var(--d)"><a href="https://brightdata.com/" target="_blank" rel="noopener" style="color:var(--p)">Bright Data 대시보드</a> · Residential Proxies 또는 Web Unlocker의 접속 정보. 비번은 화면·API에 노출되지 않습니다. 프록시 실패 시 직접연결로 자동 폴백됩니다.</div></div>
+<div style="font-size:10px;color:var(--d)"><a href="https://brightdata.com/" target="_blank" rel="noopener" style="color:var(--p)">Bright Data 대시보드</a> · Residential Proxies 접속 정보(주거용, 회사메일 인증 필요). 비번은 화면·API에 노출되지 않습니다. 프록시 실패 시 직접연결로 자동 폴백됩니다.</div>
+<hr style="border:none;border-top:1px solid var(--bd);margin:10px 0">
+<label style="display:flex;align-items:center;gap:6px;color:var(--g);font-size:12px;margin-bottom:6px"><input type="checkbox" id="cUnlockerEn" style="width:auto">Web Unlocker API 사용 (CF·캡차 자동해결 · 개인가입 즉시가능 · 권장)</label>
+<div class="row" style="margin-bottom:6px"><div style="flex:2"><small style="color:var(--d)">Web Unlocker API 키</small><input type="password" id="cUnlockerKey" placeholder="변경시만 입력 (Bright Data API Key)"></div><div style="flex:1"><small style="color:var(--d)">존 이름</small><input type="text" id="cUnlockerZone" placeholder="web_unlocker1"></div></div>
+<div style="font-size:10px;color:var(--d)">Web Unlocker는 요청당 과금(약 $1.5/1000건, 성공건만). CF 걸린 Cafe24 게시판 접근에 사용. 키는 화면·API에 노출되지 않습니다.</div></div>
 <div class="card"><h3>🔎 도메인 발굴 (Brave Search API)</h3>
 <div style="margin-bottom:6px"><small style="color:var(--d)">Brave Search API 키</small><input type="password" id="cBraveKey" placeholder="변경시에만 입력"></div>
 <div style="font-size:10px;color:var(--d);margin-bottom:6px"><a href="https://api-dashboard.search.brave.com/" target="_blank" rel="noopener" style="color:var(--p)">Brave API 키 관리</a> · 키는 화면과 API 응답에 노출되지 않습니다.</div>
@@ -8755,9 +8789,13 @@ const bk=$('cBraveKey').value.trim();if(bk)d.brave_api_key=bk;
 // 프록시(Bright Data): 비번은 입력했을 때만 전송(빈칸이면 마스크값으로 기존 유지).
 d.proxy_enabled=$('cProxyEn').checked;d.proxy_host=$('cProxyHost').value.trim();d.proxy_port=$('cProxyPort').value.trim();d.proxy_user=$('cProxyUser').value.trim();d.proxy_only_for_cf=$('cProxyCfOnly').checked;
 const ppw=$('cProxyPass').value.trim();d.proxy_pass=(ppw?ppw:'***설정됨***');
-const pw=$('cPw').value.trim();if(pw)d.password=pw;const gp=$('cGuestPw').value.trim();if(gp)d.guest_post_password=gp;const ok=$('cOpenai').value.trim();if(ok)d.openai_key=ok;const oa=$('cOpenaiAdmin').value.trim();if(oa)d.openai_admin_key=oa;const tg=$('cTgTok').value.trim();if(tg)d.telegram_token=tg;const tc=$('cTwocaptchaKey').value.trim();if(tc)d.twocaptcha_api_key=tc;const r=await api('/config','POST',d);if(r&&r.ok){toast('저장 완료');$('cPw').value='';$('cGuestPw').value='';$('cOpenai').value='';$('cOpenaiAdmin').value='';$('cTgTok').value='';$('cTwocaptchaKey').value='';$('cProxyPass').value='';loadOpenAIUsage()}}
+// Web Unlocker
+d.unlocker_enabled=$('cUnlockerEn').checked;d.unlocker_zone=$('cUnlockerZone').value.trim()||'web_unlocker1';
+const uk=$('cUnlockerKey').value.trim();d.unlocker_api_key=(uk?uk:'***설정됨***');
+const pw=$('cPw').value.trim();if(pw)d.password=pw;const gp=$('cGuestPw').value.trim();if(gp)d.guest_post_password=gp;const ok=$('cOpenai').value.trim();if(ok)d.openai_key=ok;const oa=$('cOpenaiAdmin').value.trim();if(oa)d.openai_admin_key=oa;const tg=$('cTgTok').value.trim();if(tg)d.telegram_token=tg;const tc=$('cTwocaptchaKey').value.trim();if(tc)d.twocaptcha_api_key=tc;const r=await api('/config','POST',d);if(r&&r.ok){toast('저장 완료');$('cPw').value='';$('cGuestPw').value='';$('cOpenai').value='';$('cOpenaiAdmin').value='';$('cTgTok').value='';$('cTwocaptchaKey').value='';$('cProxyPass').value='';$('cUnlockerKey').value='';loadOpenAIUsage()}}
 async function loadCfgUI(){const c=await api('/config','GET');if(!c)return;$('cVideoUrl').value=c.video_url||'';$('cLandingUrl').value=c.landing_url||'';$('cPostEmail').value=c.post_email||'';$('cGuestPw').placeholder=(c.guest_post_password==='***설정됨***')?'설정됨 · 변경시에만 입력':'변경시에만 입력';$('cUseGpt').checked=!!c.use_gpt;$('cNotifyDone').checked=!!c.notify_done;$('cNotifyFail').checked=!!c.notify_fail;$('cTgControl').checked=!!c.telegram_control;$('cVerify').checked=(c.verify_enabled!==false);$('cMixKw').checked=(c.mix_keywords!==false);$('cBlockUnpaid').checked=(c.block_unpaid!==false);$('cDiscoOn').checked=!!c.discover_enabled;if(c.discover_daily_target)$('cDTarget').value=c.discover_daily_target;if(c.discover_query_limit)$('cDQuery').value=c.discover_query_limit;if(typeof c.discover_direct_queries==='string')$('cDDirect').value=c.discover_direct_queries;if($('cExcludedDomains')&&typeof c.excluded_domains==='string')$('cExcludedDomains').value=c.excluded_domains;if($('cImapEmail'))$('cImapEmail').value=c.imap_email||'';if($('cImapHost'))$('cImapHost').value=c.imap_host||'imap.gmail.com';if($('cImapPass'))$('cImapPass').placeholder=(c.imap_password==='***설정됨***')?'설정됨 · 변경시만 입력':'앱 비밀번호 16자리 (변경시만)';$('cBraveKey').placeholder=(c.brave_api_key==='***설정됨***')?'설정됨 · 변경시에만 입력':'Brave API 키 입력';
 if($('cProxyEn')){$('cProxyEn').checked=!!c.proxy_enabled;$('cProxyHost').value=c.proxy_host||'';$('cProxyPort').value=c.proxy_port||'';$('cProxyUser').value=c.proxy_user||'';$('cProxyCfOnly').checked=(c.proxy_only_for_cf!==false);$('cProxyPass').placeholder=(c.proxy_pass==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';}
+if($('cUnlockerEn')){$('cUnlockerEn').checked=!!c.unlocker_enabled;$('cUnlockerZone').value=c.unlocker_zone||'web_unlocker1';$('cUnlockerKey').placeholder=(c.unlocker_api_key==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';}
 if(c.backup_time)$('cBackupTime').value=c.backup_time;if(c.model)$('cModel').value=c.model;if(c.telegram_chat_id)$('cTgChat').value=c.telegram_chat_id;if(typeof c.phones==='string')$('cPhones').value=c.phones;$('cOpenai').placeholder=(c.openai_key==='***설정됨***')?'설정됨 · 변경시만 입력':'sk-... (변경시만)';$('cOpenaiAdmin').placeholder=(c.openai_admin_key==='***설정됨***')?'관리자 키 설정됨 · 변경시만 입력':'관리자 키 없으면 로컬 예상비용 사용';$('cOpenaiBudget').value=c.openai_monthly_budget_usd==null?20:c.openai_monthly_budget_usd;$('cOpenaiInPrice').value=c.openai_input_price_per_million==null?0.15:c.openai_input_price_per_million;$('cOpenaiOutPrice').value=c.openai_output_price_per_million==null?0.60:c.openai_output_price_per_million;$('cTgTok').placeholder=(c.telegram_token==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';$('cTwocaptchaEn').checked=!!c.twocaptcha_enabled;$('cTwocaptchaKey').placeholder=(c.twocaptcha_api_key==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';if(c.brave_price_per_query_usd!=null)$('cBravePrice').value=c.brave_price_per_query_usd;if(c.twocaptcha_price_recaptcha_usd!=null)$('cCapRePrice').value=c.twocaptcha_price_recaptcha_usd;if(c.twocaptcha_price_image_usd!=null)$('cCapImgPrice').value=c.twocaptcha_price_image_usd;loadOpenAIUsage();api('/rejected-domains','GET').then(r=>{if(r&&r.ok&&$('rejCount'))$('rejCount').textContent=r.count})}
 async function showRejected(){const box=$('rejList');if(!box)return;if(box.style.display!=='none'){box.style.display='none';return}box.style.display='block';box.innerHTML='불러오는 중…';const r=await api('/rejected-domains','GET');if(!r||!r.ok){box.innerHTML='조회 실패';return}if($('rejCount'))$('rejCount').textContent=r.count;const logmap={};(r.log||[]).forEach(x=>{if(!logmap[x.domain])logmap[x.domain]=x.reason||''});box.innerHTML='<div style="color:var(--r);margin-bottom:6px">총 '+r.count+'개 · 발굴 자동 제외됨 (재활성화하려면 옆 ↺ 클릭)</div>'+(r.domains||[]).map(d=>'<div style="display:flex;justify-content:space-between;gap:8px;padding:2px 0;border-bottom:1px solid #17202e"><span><b style="color:var(--t)">'+esc(d)+'</b> <span style="color:var(--d)">'+esc((logmap[d]||'').slice(0,30))+'</span></span><span style="cursor:pointer;color:var(--g)" title="재활성화(제외 해제)" onclick="unrejectDomain(\''+esc(d)+'\')">↺</span></div>').join('')}
 async function unrejectDomain(dom){if(!confirm(dom+' 을(를) 자동 탈락에서 해제할까요? (다시 발굴 대상이 됩니다)'))return;const r=await api('/rejected-domains','POST',{remove:dom});if(r&&r.ok){toast('해제됨 · '+dom,'ok');showRejected();showRejected()}else toast('실패','er')}
