@@ -4711,6 +4711,26 @@ def web_search(cfg, query, start=1, num=10):
     provider=(cfg.get('search_provider') or 'brave').lower()
     return google_search(cfg,query,start,num) if provider=='google' else brave_search(cfg,query,start,num)
 
+def _cafe24_board_map(html, page_url=''):
+    """Cafe24 페이지 HTML에서 게시판 경로 매핑을 추출. 반환: {board_no(str): 경로(str)}.
+       예: <a href="/board/product2/list.html?board_no=6"> → {'6':'product2'}.
+       /article/SEO-URL 사이트의 실제 write 경로 자동탐지용(경로가 product·product2·free 등 제각각).
+       board_no 없는 경로별 링크(/board/free/)는 board_no=1로 간주(Cafe24 기본)."""
+    m={}
+    if not html: return m
+    try:
+        # 1) board_no 명시된 링크 — 가장 신뢰. list/write 어느 쪽이든 경로+번호가 드러난다.
+        for path,no in re.findall(r'/board/([A-Za-z0-9_]+)/(?:list|write|read|view)\.html\?[^"\'>]*board_no=(\d+)',html,re.I):
+            if path.lower() not in ('write','list','read','view'):   # 경로 자리에 잘못 걸린 것 방지
+                m.setdefault(no,path)
+        # 2) board_no 없는 경로 링크(/board/free/list.html) — board_no=1로 간주(중복이면 위 매핑 우선)
+        for path in re.findall(r'/board/([A-Za-z0-9_]+)/(?:list|write)\.html(?![?][^"\'>]*board_no)',html,re.I):
+            if path.lower() not in ('write','list','read','view'):
+                m.setdefault('1',path)
+    except Exception:
+        pass
+    return m
+
 def screen_candidate(url, cfg=None):
     """HTTP 1~3회로 후보 자동 검수. 반환: 검수 결과 dict."""
     import requests as _rq
@@ -4806,14 +4826,34 @@ def screen_candidate(url, cfg=None):
         if ('write.php' in hl and ('bo_table=' in hl or 'bo_id=' in hl)) or ('/board/write.html' in hl and 'board_no=' in hl):
             wurls.append(urljoin(r.url,href))
     if res['platform']=='cafe24':
-        wurls.append(base+'/board/write.html?board_no=1')
+        # ★Cafe24 write URL 자동탐지(2026-09-08 대표님 지시). /article/SEO-URL 황금사이트(jinaedeul 등)는
+        #   실제 게시판 경로가 product/product2/free/faq/gallery 등 사이트마다 다르고, board_no도 6·4 등 제각각.
+        #   기존엔 board_no=1만 찍어 못 찾았다. → 홈/현재 HTML의 /board/{경로}/list.html?board_no=N 링크를
+        #   긁어 board_no→실제경로 매핑을 만들고, 후보 URL(/article/.../N/)의 N에 맞는 write.html을 생성한다.
+        #   (CF 걸린 사이트도 이 GET은 get()의 unlocker_fetch 폴백으로 통과되므로 링크를 볼 수 있다)
+        bmap=_cafe24_board_map(html, r.url)                 # {board_no: 경로}
+        if not bmap:                                        # 현재 페이지에 없으면 홈에서 한 번 더 긁는다
+            hr=get(base+'/')
+            if hr and (hr.text or ''): bmap=_cafe24_board_map(hr.text, hr.url)
+        # 후보 URL이 /article/카테고리/N/ 형태면 그 N이 목표 board_no
+        ano=re.search(r'/article/[^/]+/(\d+)/?',url or '')
+        art_no=ano.group(1) if ano else None
+        added=False
+        if art_no and art_no in bmap:                       # 정확 매핑 — 최우선
+            wurls.append(base+f'/board/{bmap[art_no]}/write.html?board_no={art_no}'); added=True
+        for _no,_path in bmap.items():                      # 나머지 매핑도 후보로(방치·개방 게시판 우선순위는 뒤)
+            wurls.append(base+f'/board/{_path}/write.html?board_no={_no}')
+        if art_no and not added:                            # 매핑엔 없지만 board_no는 아는 경우 흔한 경로로 시도
+            for _p in ('product','free','board'):
+                wurls.append(base+f'/board/{_p}/write.html?board_no={art_no}')
+        wurls.append(base+'/board/write.html?board_no=1')   # 최후 폴백(기존 동작 유지)
     else:
         bo=res['bo_table'] or 'free'
         bp=res.get('bo_param','bo_table')   # bo_id 사이트는 그 파라미터명 그대로(codeb.dhu 등)
         wurls.append(base+f'/bbs/write.php?{bp}={bo}')
         if bp!='bo_table':   # 혹시 표준도 되는지 함께 시도
             wurls.append(base+f'/bbs/write.php?bo_table={bo}')
-    wurls=list(dict.fromkeys(wurls))[:6]
+    wurls=list(dict.fromkeys(wurls))[:8]
     for wu in wurls:
         wr=get(wu)
         if not wr or wr.status_code>=400: continue
@@ -6602,7 +6642,7 @@ def chk():
     #  /api/logs·/api/worker-log = 읽기전용 로그. /api/sites·/api/candidates = 사이트/후보 관리.
     #  /api/test/* = 발행 테스트 트리거(등록 사이트에 실제 글1건 발행해 검증).
     _p=request.path
-    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/candidates','/api/unlocker/test') or _p.startswith('/api/test/'):
+    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/candidates','/api/unlocker/test','/api/sbr/test') or _p.startswith('/api/test/'):
         tok=(request.args.get('token') or '').strip()
         cfgtok=(load_config().get('log_token') or '').strip()
         if cfgtok and tok==cfgtok:
@@ -7825,6 +7865,59 @@ def api_unlocker_test():
                     'verdict':('CF 통과 성공(게시판 로드됨)' if (not cf_blocked and has_board) else
                                'CF 여전히 막힘' if cf_blocked else '응답은 왔으나 게시판 아님(URL 확인)'),
                     'sample':html[:200]})
+
+@app.route('/api/sbr/test',methods=['GET','POST'])
+def api_sbr_test():
+    """Scraping Browser(원격 크롬)가 이 환경에서 실제로 연결·페이지로드 되는지 실측 진단. 토큰 접근 가능.
+       ★타카고 CF+로그인 발행을 재시도하기 전, '이번엔 되는지'를 근거로 판정하기 위한 것.
+       (이전 보류 사유=한국VPS↔해외 Bright Data 프록시 왕복지연으로 원격크롬 renderer timeout.)
+       각 단계 소요시간(연결/get/제목확보)을 반환해 병목이 연결인지 렌더인지 구분한다."""
+    from selenium.webdriver.common.by import By
+    cfg=load_config()
+    ep=str(cfg.get('sbr_endpoint') or '').strip()
+    if not (cfg.get('sbr_enabled') and ep):
+        return jsonify({'ok':False,'error':'Scraping Browser 미설정(설정에서 활성화+endpoint 입력 필요)'})
+    target=(request.args.get('url') or 'https://takago.store/board/product/list.html?board_no=6').strip()
+    steps={}; t0=time.time()
+    d=None
+    try:
+        d=get_driver(remote=True)                       # 원격 크롬 연결(브라우저 세션 생성)
+        steps['connect_sec']=round(time.time()-t0,1)
+        # get — pageLoadStrategy='none'이라 즉시 반환. 이후 <title>/요소를 폴링한다.
+        tg=time.time()
+        try: d.get(target)
+        except Exception as e: steps['get_error']=str(e)[:120]
+        steps['get_return_sec']=round(time.time()-tg,1)
+        # 제목/URL 확보까지 폴링(원격+CF 처리 대비 최대 40초). 여기서 timeout이면 이전과 동일 벽.
+        tp=time.time(); title=''; cur=''
+        while time.time()-tp<40:
+            try:
+                title=(d.title or ''); cur=(d.current_url or '')
+                if title or (cur and cur!='data:,' and cur!='about:blank'): break
+            except Exception: pass
+            time.sleep(1)
+        steps['page_ready_sec']=round(time.time()-tp,1)
+        try: psrc=(d.page_source or '')
+        except Exception: psrc=''
+        low=psrc.lower()
+        cf_blocked=any(k in low for k in ['just a moment','cf-chl','challenge-platform','_cf_chl'])
+        has_form=any(k in psrc for k in ['상품','게시','글쓰기','list','write','제목','member'])
+        got_page=bool(title) or len(psrc)>2000
+        verdict=('연결·페이지로드 성공 — CF+로그인 재시도 가치 있음' if got_page and not cf_blocked else
+                 'CF 잔존(원격이 CF 못 넘음)' if cf_blocked else
+                 '연결됐으나 페이지 못 받음(renderer timeout 의심 — 이전 벽 그대로)')
+        return jsonify({'ok':True,'url':target,'steps':steps,'total_sec':round(time.time()-t0,1),
+                        'title':title[:80],'current_url':cur[:120],'bytes':len(psrc),
+                        'cf_blocked':cf_blocked,'looks_usable':has_form,'verdict':verdict})
+    except Exception as e:
+        return jsonify({'ok':False,'error':f'원격 연결/실행 예외: {str(e)[:200]}',
+                        'steps':steps,'total_sec':round(time.time()-t0,1),
+                        'hint':'연결 자체 실패면 endpoint(비번 포함)·잔액·계정상태 확인'})
+    finally:
+        # 진단 세션은 남기지 않는다(스레드별 __SBR__ 드라이버가 발행에 재사용되지 않게 정리).
+        try:
+            if d: reset_driver()
+        except Exception: pass
 
 @app.route('/api/openai/usage',methods=['GET'])
 def api_openai_usage():
