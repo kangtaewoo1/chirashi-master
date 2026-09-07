@@ -4574,9 +4574,23 @@ def screen_candidate(url, cfg=None):
          'write_form':False,'captcha':'','login_required':False,'ad_banned':False,'promo_hint':False,
          'last_post_days':None,'reachable':False,'note':'',
          'parked':False,'illegal':False}
+    _cfg_sc=load_config()
     def get(u):
-        try: return _rq.get(u,timeout=12,verify=False,headers=UA,allow_redirects=True)
-        except Exception: return None
+        try: rr=_rq.get(u,timeout=12,verify=False,headers=UA,allow_redirects=True)
+        except Exception: rr=None
+        # ★CF 챌린지에 막히면(just a moment 등) Web Unlocker로 재시도 — CF 걸린 Cafe24 검수 통과용.
+        #   (대표님 지시 2026-09-08: 비회원 게시판부터 Web Unlocker 연결. CF 사이트만 선택적 사용=비용↓)
+        try:
+            _blocked=(rr is None) or (rr.status_code in (403,503)) or \
+                     ('just a moment' in (rr.text or '')[:3000].lower() or 'cf-chl' in (rr.text or '')[:3000].lower() or '_cf_chl' in (rr.text or '')[:3000].lower())
+        except Exception: _blocked=True
+        if _blocked and unlocker_enabled(_cfg_sc):
+            uhtml=unlocker_fetch(u,_cfg_sc,timeout=90)
+            if uhtml:
+                class _UResp:   # requests.Response 흉내(검수 코드가 .text/.status_code/.url 사용)
+                    def __init__(s,t,u): s.text=t; s.status_code=200; s.url=u
+                return _UResp(uhtml,u)
+        return rr
     # bo_table 추출 — ★비표준 파라미터(bo_id 등)도 인식(대표님 제보 codeb.dhu.ac.kr: bo_id=qna).
     #   글쓰기 URL은 그 사이트가 쓰는 파라미터명 그대로 만들어야 하므로 bo_param에 기록.
     res['bo_param']='bo_table'
