@@ -2006,8 +2006,18 @@ def get_driver(remote=False):
                 if not ep.startswith('http'): ep='https://'+ep
                 if ':9515' not in ep and not re.search(r':\d+',ep.split('@')[-1]): ep=ep.rstrip('/')+':9515'
                 opts=webdriver.ChromeOptions(); opts.add_argument('--lang=ko-KR')
-                d=webdriver.Remote(command_executor=ep,options=opts)
-                d.set_page_load_timeout(90); d.implicitly_wait(3)
+                # ★타임아웃 넉넉히(2026-09-08 대표님 제보 renderer timeout): Scraping Browser 원격 크롬은
+                #   CF·캡차 자동처리로 응답이 느려 기본 command timeout(60s 안팎)에 걸림.
+                #   RemoteConnection의 명령 응답 타임아웃을 300초로 늘려 renderer timeout 방지.
+                try:
+                    from selenium.webdriver.remote.remote_connection import RemoteConnection
+                    conn=RemoteConnection(ep,keep_alive=True)
+                    try: conn.set_timeout(300)   # 명령 응답 대기 최대 300초
+                    except Exception: pass
+                    d=webdriver.Remote(command_executor=conn,options=opts)
+                except Exception:
+                    d=webdriver.Remote(command_executor=ep,options=opts)
+                d.set_page_load_timeout(180); d.implicitly_wait(5)   # 페이지 로드도 넉넉히(CF 처리)
                 _drivers[rkey]=d; return d
         # 원격 요청인데 미설정이면 로컬로 폴백(발행 안 끊김)
     with _drv_lock:
