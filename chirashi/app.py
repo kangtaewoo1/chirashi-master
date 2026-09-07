@@ -2006,18 +2006,24 @@ def get_driver(remote=False):
                 if not ep.startswith('http'): ep='https://'+ep
                 if ':9515' not in ep and not re.search(r':\d+',ep.split('@')[-1]): ep=ep.rstrip('/')+':9515'
                 opts=webdriver.ChromeOptions(); opts.add_argument('--lang=ko-KR')
-                # ★타임아웃 넉넉히(2026-09-08 대표님 제보 renderer timeout): Scraping Browser 원격 크롬은
-                #   CF·캡차 자동처리로 응답이 느려 기본 command timeout(60s 안팎)에 걸림.
-                #   RemoteConnection의 명령 응답 타임아웃을 300초로 늘려 renderer timeout 방지.
+                # ★renderer timeout 근본해결(2026-09-08 대표님 '원격크롬 방식 재검토'): pageLoadStrategy='none'.
+                #   기본(normal)은 d.get()이 페이지 완전로드까지 대기 → 원격크롬+CF처리+해외지연이 겹쳐
+                #   renderer timeout. 'none'이면 get이 로드완료 안기다리고 즉시반환 → 요소를 폴링하면 됨.
+                #   (CF는 Bright Data가 백그라운드로 처리하므로 로드완료 신호 없어도 폼은 그려짐)
+                opts.page_load_strategy='none'
+                # command 응답 타임아웃도 넉넉히(해외 왕복 대비).
                 try:
                     from selenium.webdriver.remote.remote_connection import RemoteConnection
                     conn=RemoteConnection(ep,keep_alive=True)
-                    try: conn.set_timeout(300)   # 명령 응답 대기 최대 300초
+                    try: conn.set_timeout(180)
                     except Exception: pass
                     d=webdriver.Remote(command_executor=conn,options=opts)
                 except Exception:
                     d=webdriver.Remote(command_executor=ep,options=opts)
-                d.set_page_load_timeout(180); d.implicitly_wait(5)   # 페이지 로드도 넉넉히(CF 처리)
+                # none 전략이라 page_load_timeout은 사실상 무의미하나 안전값. implicitly_wait로 요소대기.
+                try: d.set_page_load_timeout(120)
+                except Exception: pass
+                d.implicitly_wait(5)
                 _drivers[rkey]=d; return d
         # 원격 요청인데 미설정이면 로컬로 폴백(발행 안 끊김)
     with _drv_lock:
@@ -2823,11 +2829,20 @@ def cafe24_post(site, title, content_html, skip_login=False):
     # ★원격 크롬(Scraping Browser)은 CF를 백그라운드로 푸느라 d.get()이 page_load 완료를 못 받아
     #   renderer timeout(대표님 제보). → 원격일 때 page_load_timeout 짧게(45s) + get 예외무시+window.stop.
     #   CF는 Bright Data가 처리하므로 로드 완료 안 기다리고 폼을 폴링하면 됨.
-    def _nav(u):
+    def _nav(u, wait_sel=None, wait_sec=30):
+        """원격 크롬(pageLoadStrategy=none)은 get이 즉시 반환하므로, wait_sel 요소가
+           나타날 때까지 폴링(최대 wait_sec). CF 처리·해외지연 대비. 로컬은 짧게."""
         try: d.get(u)
         except Exception: pass
-        try: d.execute_script("try{window.stop();}catch(e){}")
-        except Exception: pass
+        if wait_sel:
+            _w0=time.time(); _lim=wait_sec if _use_sbr else 8
+            while time.time()-_w0<_lim:
+                try:
+                    if d.find_elements(By.CSS_SELECTOR,wait_sel): break
+                except Exception: pass
+                time.sleep(0.7)
+        else:
+            time.sleep(4 if _use_sbr else 1.5)
     if _use_sbr:
         try: d.set_page_load_timeout(45)
         except Exception: pass
@@ -2863,7 +2878,9 @@ def cafe24_post(site, title, content_html, skip_login=False):
 
     # 로그인 (skip_login=True면 가입 직후 로그인 세션 재사용 → 재로그인 건너뜀)
     if mid and not skip_login:
-        _nav(base+'/member/login.html'); time.sleep(2); _wait_cf(15); _pass_turnstile_if_present()
+        # 원격은 로그인폼(member_passwd)이 뜰 때까지 폴링(CF 처리 대기). 로컬은 짧게.
+        _nav(base+'/member/login.html', wait_sel="input[name='member_passwd']", wait_sec=40)
+        _wait_cf(15); _pass_turnstile_if_present()
         _fill_first(d,["input[name='member_id']","input[name='login_id']","input[name='id']",
                        "#member_id","#loginId","input#id"],mid)
         _fill_first(d,["input[name='member_passwd']","input[name='passwd']","input[name='password']",
