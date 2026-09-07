@@ -631,6 +631,7 @@ def load_config():
        #   미지원이라, 타카고 등 로그인 필요 Cafe24는 이걸로. Selenium Remote로 brd.superproxy.io:9515 연결.
        #   endpoint 예: brd-customer-xxx-zone-scraping_browser:PASS@brd.superproxy.io:9515
        'sbr_enabled':False,'sbr_endpoint':'',   # 전체 endpoint(user:pass@host:port) 한 줄로 저장
+       'sbr_country':'kr',   # ★Scraping Browser 접속국가(username에 -country-XX 주입). kr=한국프록시(왕복지연↓)
        # ★자동가입 고정계정(대표님 지시 2026-09-08: 랜덤 대신 통일). 비면 기존 랜덤 생성.
        #   설정 시 모든 자동가입에 이 아이디/비번 사용(대표님이 관리·중복ID 감소).
        'signup_fixed_id':'','signup_fixed_pw':'',
@@ -2042,6 +2043,14 @@ def get_driver(remote=False):
                         _drivers.pop(rkey,None)
                 if not ep.startswith('http'): ep='https://'+ep
                 if ':9515' not in ep and not re.search(r':\d+',ep.split('@')[-1]): ep=ep.rstrip('/')+':9515'
+                # ★한국 geo 고정(대표님 지시 2026-09-08): username 뒤에 -country-kr 삽입.
+                #   Bright Data 공식형식 https://USER-country-kr:PASS@brd.superproxy.io:9515 —
+                #   한국VPS↔한국프록시가 되어 왕복지연↓(이전 renderer timeout 근본원인 우회).
+                #   endpoint(비번 포함)는 원본 그대로 두고 연결시점에만 주입 → 저장값 무손상.
+                _cc=str(cfg.get('sbr_country') or 'kr').strip().lower()
+                if _cc and '-country-' not in ep:
+                    _mm=re.match(r'(https?://)([^:@/]+)(.*)$',ep)   # 스킴 / username / 나머지(:pass@host:port)
+                    if _mm: ep=f'{_mm.group(1)}{_mm.group(2)}-country-{_cc}{_mm.group(3)}'
                 opts=webdriver.ChromeOptions(); opts.add_argument('--lang=ko-KR')
                 # ★renderer timeout 근본해결(2026-09-08 대표님 '원격크롬 방식 재검토'): pageLoadStrategy='none'.
                 #   기본(normal)은 d.get()이 페이지 완전로드까지 대기 → 원격크롬+CF처리+해외지연이 겹쳐
@@ -3967,6 +3976,22 @@ def history_update(hid,**fields):
                 break
         save_json(HISTORY_FILE,h)
 
+def _purge_site_history(site):
+    """삭제되는 사이트의 미완료/실패 결과 이력(failed·queued·retry·skipped)을 결과탭에서 제거.
+       ★'안 되는 사이트' 삭제 시 결과탭에 그 사이트 failed가 계속 남아 '자꾸 실패'처럼 보이던
+       것 방지(대표님 지시 2026-09-08). 성공(done)·검증된 이력은 기록보존을 위해 남긴다."""
+    sid=site.get('id'); su=str(site.get('site_url') or ''); dom=_domain_of(su)
+    if not (sid or dom): return 0
+    drop_st={'failed','fail','queued','retry','skipped','error'}
+    with JOB_LOCK:
+        h=load_json(HISTORY_FILE,[]); before=len(h)
+        def _match(r):
+            same=(r.get('site_id')==sid) or (dom and _domain_of(str(r.get('site_url') or ''))==dom)
+            return same and str(r.get('status','')).lower() in drop_st
+        h=[r for r in h if not _match(r)]
+        if len(h)!=before: save_json(HISTORY_FILE,h)
+        return before-len(h)
+
 # ---- 미완료 작업 영속화 (재시작 복구) ----
 def _persist_add(job):
     with JOB_LOCK:
@@ -4129,15 +4154,27 @@ def reconcile_sites():
                     s['write_test_status']='failed'; s['verified_post_url']=''
                     s['last_fail_reason']='가짜 검증(글번호 없음) 무효화 — 실제 글 미등록. 재검증 필요'
             verified=str(s.get('verified_post_url') or '').startswith(('http://','https://'))
-            # ★대표님이 직접 계정 넣어 추가한 사이트(manual_admin)는 자동삭제 보호 —
-            #   테스트 실패로 rejected 돼도 목록에서 지우지 않는다(계정·설정 유지, 재시도 가능).
+            # ★대표님이 직접 계정 넣어 추가한 사이트(manual_admin) 처리.
+            #   원칙: 일시적 실패(타임아웃·도배방지)로는 삭제/잠금하지 않고 보호(계정·설정 유지).
+            #   단 '진짜 안 되는 것'(비일시적 실패 15회+ & 검증URL 없음)은 대표님 지시로 아예 삭제.
             if s.get('registration_source')=='manual_admin' and not edr:
                 if s.get('status')=='rejected': s['status']='idle'   # 재시도 가능하게 상태 완화
-                # 단, 연속 실패가 심하면(15회+) permission만 꺼서 발행 순회에서 제외 — 실패로그 도배 방지.
-                #   삭제가 아니라 잠금이라 계정·설정 유지되고, 대표님이 원인 고친 뒤 다시 켤 수 있음.
-                if int(s.get('fail_streak',0) or 0)>=FAIL_STREAK_LOCK and s.get('permission'):
+                _fs=int(s.get('fail_streak',0) or 0)
+                _lfr=str(s.get('last_fail_reason') or '')
+                # classify_fail 3번째 반환값=일시적 여부. 타임아웃/도배방지면 True(보호).
+                try: _temp=classify_fail(_lfr)[2]
+                except Exception: _temp=False
+                _has_verified=str(s.get('verified_post_url') or '').startswith(('http://','https://'))
+                # ★안 되는 사이트 아예 삭제(대표님 지시 2026-09-08): 비일시적 실패 15회+ & 검증 안 됨.
+                #   (게시판못찾음·차단·로그인실패 등. 타임아웃 같은 일시적 실패는 아래 잠금으로만.)
+                if _fs>=FAIL_STREAK_LOCK and not _temp and not _has_verified:
+                    removed.append(s); dropped_doms.append(_domain_of(s.get('site_url','')))
+                    _purge_site_history(s)   # 결과탭의 그 사이트 failed/queued 이력 정리(도배 제거)
+                    continue
+                # 일시적 실패로 15회+면 삭제 대신 잠금만(계정·설정 유지, 원인 해소 후 재허용).
+                if _fs>=FAIL_STREAK_LOCK and s.get('permission'):
                     s['permission']=False
-                    s['auto_drop_reason']=f'연속 실패 {s.get("fail_streak")}회 — 발행 잠금(원인 확인 후 재허용)'
+                    s['auto_drop_reason']=f'연속 실패 {s.get("fail_streak")}회(일시적) — 발행 잠금(원인 확인 후 재허용)'
                     s['auto_dropped_at']=now; locked+=1
                 kept.append(s); continue
             # 검증된 사이트는 오류/데모가 아닌 한 보호(일시 실패로 삭제 안 함)
@@ -7802,7 +7839,7 @@ def api_cfg():
                   'auto_pipeline_enabled','auto_pipeline_batch',
                   'proxy_enabled','proxy_host','proxy_port','proxy_user','proxy_pass','proxy_only_for_cf',
                   'unlocker_enabled','unlocker_api_key','unlocker_zone',
-                  'sbr_enabled','sbr_endpoint','signup_fixed_id','signup_fixed_pw']:
+                  'sbr_enabled','sbr_endpoint','sbr_country','signup_fixed_id','signup_fixed_pw']:
             if k in d:
                 if k in ('openai_key','openai_admin_key','telegram_token','google_api_key','brave_api_key','guest_post_password','twocaptcha_api_key','imap_password','proxy_pass','unlocker_api_key','sbr_endpoint','signup_fixed_pw') and d[k]=='***설정됨***': continue  # 마스크 값은 무시(기존 유지)
                 cfg[k]=d[k]
