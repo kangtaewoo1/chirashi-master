@@ -631,6 +631,9 @@ def load_config():
        #   미지원이라, 타카고 등 로그인 필요 Cafe24는 이걸로. Selenium Remote로 brd.superproxy.io:9515 연결.
        #   endpoint 예: brd-customer-xxx-zone-scraping_browser:PASS@brd.superproxy.io:9515
        'sbr_enabled':False,'sbr_endpoint':'',   # 전체 endpoint(user:pass@host:port) 한 줄로 저장
+       # ★자동가입 고정계정(대표님 지시 2026-09-08: 랜덤 대신 통일). 비면 기존 랜덤 생성.
+       #   설정 시 모든 자동가입에 이 아이디/비번 사용(대표님이 관리·중복ID 감소).
+       'signup_fixed_id':'','signup_fixed_pw':'',
        'log_token':'cae3aaa53d6f3576a1c1f6a258f79129'}   # 읽기전용 로그 조회 토큰(?token= 로 /api/logs·/api/worker-log 접근)
     c=load_json(CONFIG_FILE,None)
     if c is None or not isinstance(c,dict): save_json(CONFIG_FILE,d); return d.copy()
@@ -7458,7 +7461,13 @@ def api_sites_limits():
     return jsonify({'ok':True,'daily_limit':daily,'min_interval_minutes':interval})
 
 def _signup_credentials(site, rules=None):
-    """사이트별 제약을 반영한 충돌 가능성이 낮은 가입정보를 생성한다."""
+    """사이트별 제약을 반영한 충돌 가능성이 낮은 가입정보를 생성한다.
+       ★고정계정(config signup_fixed_id/pw)이 설정돼 있으면 그걸 그대로 사용(대표님 지시 통일)."""
+    _cfgc=load_config()
+    _fid=str(_cfgc.get('signup_fixed_id') or '').strip()
+    _fpw=str(_cfgc.get('signup_fixed_pw') or '').strip()
+    if _fid and _fpw:
+        return _fid,_fpw
     profile={'id_min':4,'id_max':16,'password_min':10,'require_special':False} if site.get('platform')=='cafe24' \
         else {'id_min':3,'id_max':20,'password_min':10,'require_special':False}
     profile.update(site.get('signup_rules') or {}); profile.update(rules or {}); rules=profile
@@ -7726,9 +7735,9 @@ def api_cfg():
                   'auto_pipeline_enabled','auto_pipeline_batch',
                   'proxy_enabled','proxy_host','proxy_port','proxy_user','proxy_pass','proxy_only_for_cf',
                   'unlocker_enabled','unlocker_api_key','unlocker_zone',
-                  'sbr_enabled','sbr_endpoint']:
+                  'sbr_enabled','sbr_endpoint','signup_fixed_id','signup_fixed_pw']:
             if k in d:
-                if k in ('openai_key','openai_admin_key','telegram_token','google_api_key','brave_api_key','guest_post_password','twocaptcha_api_key','imap_password','proxy_pass','unlocker_api_key','sbr_endpoint') and d[k]=='***설정됨***': continue  # 마스크 값은 무시(기존 유지)
+                if k in ('openai_key','openai_admin_key','telegram_token','google_api_key','brave_api_key','guest_post_password','twocaptcha_api_key','imap_password','proxy_pass','unlocker_api_key','sbr_endpoint','signup_fixed_pw') and d[k]=='***설정됨***': continue  # 마스크 값은 무시(기존 유지)
                 cfg[k]=d[k]
         if d.get('password'): cfg['password']=generate_password_hash(d['password'])  # 해시 저장
         # 완전 자동화: 필수 키(Brave 발굴 + 2captcha)가 채워지면 발굴·파이프라인을 자동 ON.
@@ -7755,6 +7764,7 @@ def api_cfg():
     if c.get('proxy_pass'): c['proxy_pass']='***설정됨***'   # 프록시 비번 노출 방지
     if c.get('unlocker_api_key'): c['unlocker_api_key']='***설정됨***'   # Web Unlocker API 키 노출 방지
     if c.get('sbr_endpoint'): c['sbr_endpoint']='***설정됨***'   # Scraping Browser endpoint(비번 포함) 노출 방지
+    if c.get('signup_fixed_pw'): c['signup_fixed_pw']='***설정됨***'   # 자동가입 고정비번 노출 방지
     c.pop('password',None)
     return jsonify(c)
 
@@ -8620,6 +8630,10 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 <label style="display:flex;align-items:center;gap:6px;color:var(--g);font-size:12px;margin-bottom:6px"><input type="checkbox" id="cSbrEn" style="width:auto">Scraping Browser 사용 (CF+로그인 사이트 · 타카고 등 로그인형 Cafe24)</label>
 <div style="margin-bottom:6px"><small style="color:var(--d)">Scraping Browser Endpoint</small><input type="password" id="cSbrEp" placeholder="변경시만 입력 (brd-customer-...-zone-scraping_browser:PASS@brd.superproxy.io:9515)"></div>
 <div style="font-size:10px;color:var(--d)">Web Unlocker가 못하는 <b>로그인 세션</b>이 필요한 CF 사이트(타카고 등)용 원격 크롬. Bright Data 대시보드에서 Scraping Browser 존 생성 후 endpoint 입력. GB당 과금(원격 크롬)이라 로그인형 Cafe24에만 사용. endpoint는 화면·API에 노출되지 않습니다.</div></div>
+<div class="card"><h3>🔑 자동가입 고정 계정</h3>
+<div style="font-size:10px;color:var(--d);margin-bottom:8px">자동가입 시 매번 랜덤 계정 대신 <b>고정 아이디/비번</b>으로 통일합니다(대표님 관리·중복ID 감소). 비우면 기존 랜덤 생성.</div>
+<div class="row" style="margin-bottom:6px"><div style="flex:1"><small style="color:var(--d)">고정 아이디</small><input type="text" id="cSignupId" placeholder="예: ghdakseovy"></div><div style="flex:1"><small style="color:var(--d)">고정 비밀번호</small><input type="password" id="cSignupPw" placeholder="변경시만 입력"></div></div>
+<div style="font-size:10px;color:var(--d)">비번은 화면·API에 노출되지 않습니다. 게시판마다 아이디 규칙(글자수)이 달라 가끔 안 맞을 수 있습니다.</div></div>
 <div class="card"><h3>🔎 도메인 발굴 (Brave Search API)</h3>
 <div style="margin-bottom:6px"><small style="color:var(--d)">Brave Search API 키</small><input type="password" id="cBraveKey" placeholder="변경시에만 입력"></div>
 <div style="font-size:10px;color:var(--d);margin-bottom:6px"><a href="https://api-dashboard.search.brave.com/" target="_blank" rel="noopener" style="color:var(--p)">Brave API 키 관리</a> · 키는 화면과 API 응답에 노출되지 않습니다.</div>
@@ -8991,11 +9005,15 @@ const uk=$('cUnlockerKey').value.trim();d.unlocker_api_key=(uk?uk:'***설정됨*
 // Scraping Browser
 d.sbr_enabled=$('cSbrEn').checked;
 const sep=$('cSbrEp').value.trim();d.sbr_endpoint=(sep?sep:'***설정됨***');
-const pw=$('cPw').value.trim();if(pw)d.password=pw;const gp=$('cGuestPw').value.trim();if(gp)d.guest_post_password=gp;const ok=$('cOpenai').value.trim();if(ok)d.openai_key=ok;const oa=$('cOpenaiAdmin').value.trim();if(oa)d.openai_admin_key=oa;const tg=$('cTgTok').value.trim();if(tg)d.telegram_token=tg;const tc=$('cTwocaptchaKey').value.trim();if(tc)d.twocaptcha_api_key=tc;const r=await api('/config','POST',d);if(r&&r.ok){toast('저장 완료');$('cPw').value='';$('cGuestPw').value='';$('cOpenai').value='';$('cOpenaiAdmin').value='';$('cTgTok').value='';$('cTwocaptchaKey').value='';$('cProxyPass').value='';$('cUnlockerKey').value='';$('cSbrEp').value='';loadOpenAIUsage()}}
+// 자동가입 고정계정
+d.signup_fixed_id=$('cSignupId').value.trim();
+const spw=$('cSignupPw').value.trim();d.signup_fixed_pw=(spw?spw:'***설정됨***');
+const pw=$('cPw').value.trim();if(pw)d.password=pw;const gp=$('cGuestPw').value.trim();if(gp)d.guest_post_password=gp;const ok=$('cOpenai').value.trim();if(ok)d.openai_key=ok;const oa=$('cOpenaiAdmin').value.trim();if(oa)d.openai_admin_key=oa;const tg=$('cTgTok').value.trim();if(tg)d.telegram_token=tg;const tc=$('cTwocaptchaKey').value.trim();if(tc)d.twocaptcha_api_key=tc;const r=await api('/config','POST',d);if(r&&r.ok){toast('저장 완료');$('cPw').value='';$('cGuestPw').value='';$('cOpenai').value='';$('cOpenaiAdmin').value='';$('cTgTok').value='';$('cTwocaptchaKey').value='';$('cProxyPass').value='';$('cUnlockerKey').value='';$('cSbrEp').value='';$('cSignupPw').value='';loadOpenAIUsage()}}
 async function loadCfgUI(){const c=await api('/config','GET');if(!c)return;$('cVideoUrl').value=c.video_url||'';$('cLandingUrl').value=c.landing_url||'';$('cPostEmail').value=c.post_email||'';$('cGuestPw').placeholder=(c.guest_post_password==='***설정됨***')?'설정됨 · 변경시에만 입력':'변경시에만 입력';$('cUseGpt').checked=!!c.use_gpt;$('cNotifyDone').checked=!!c.notify_done;$('cNotifyFail').checked=!!c.notify_fail;$('cTgControl').checked=!!c.telegram_control;$('cVerify').checked=(c.verify_enabled!==false);$('cMixKw').checked=(c.mix_keywords!==false);$('cBlockUnpaid').checked=(c.block_unpaid!==false);$('cDiscoOn').checked=!!c.discover_enabled;if(c.discover_daily_target)$('cDTarget').value=c.discover_daily_target;if(c.discover_query_limit)$('cDQuery').value=c.discover_query_limit;if(typeof c.discover_direct_queries==='string')$('cDDirect').value=c.discover_direct_queries;if($('cExcludedDomains')&&typeof c.excluded_domains==='string')$('cExcludedDomains').value=c.excluded_domains;if($('cImapEmail'))$('cImapEmail').value=c.imap_email||'';if($('cImapHost'))$('cImapHost').value=c.imap_host||'imap.gmail.com';if($('cImapPass'))$('cImapPass').placeholder=(c.imap_password==='***설정됨***')?'설정됨 · 변경시만 입력':'앱 비밀번호 16자리 (변경시만)';$('cBraveKey').placeholder=(c.brave_api_key==='***설정됨***')?'설정됨 · 변경시에만 입력':'Brave API 키 입력';
 if($('cProxyEn')){$('cProxyEn').checked=!!c.proxy_enabled;$('cProxyHost').value=c.proxy_host||'';$('cProxyPort').value=c.proxy_port||'';$('cProxyUser').value=c.proxy_user||'';$('cProxyCfOnly').checked=(c.proxy_only_for_cf!==false);$('cProxyPass').placeholder=(c.proxy_pass==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';}
 if($('cUnlockerEn')){$('cUnlockerEn').checked=!!c.unlocker_enabled;$('cUnlockerZone').value=c.unlocker_zone||'web_unlocker1';$('cUnlockerKey').placeholder=(c.unlocker_api_key==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';}
 if($('cSbrEn')){$('cSbrEn').checked=!!c.sbr_enabled;$('cSbrEp').placeholder=(c.sbr_endpoint==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';}
+if($('cSignupId')){$('cSignupId').value=c.signup_fixed_id||'';$('cSignupPw').placeholder=(c.signup_fixed_pw==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';}
 if(c.backup_time)$('cBackupTime').value=c.backup_time;if(c.model)$('cModel').value=c.model;if(c.telegram_chat_id)$('cTgChat').value=c.telegram_chat_id;if(typeof c.phones==='string')$('cPhones').value=c.phones;$('cOpenai').placeholder=(c.openai_key==='***설정됨***')?'설정됨 · 변경시만 입력':'sk-... (변경시만)';$('cOpenaiAdmin').placeholder=(c.openai_admin_key==='***설정됨***')?'관리자 키 설정됨 · 변경시만 입력':'관리자 키 없으면 로컬 예상비용 사용';$('cOpenaiBudget').value=c.openai_monthly_budget_usd==null?20:c.openai_monthly_budget_usd;$('cOpenaiInPrice').value=c.openai_input_price_per_million==null?0.15:c.openai_input_price_per_million;$('cOpenaiOutPrice').value=c.openai_output_price_per_million==null?0.60:c.openai_output_price_per_million;$('cTgTok').placeholder=(c.telegram_token==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';$('cTwocaptchaEn').checked=!!c.twocaptcha_enabled;$('cTwocaptchaKey').placeholder=(c.twocaptcha_api_key==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';if(c.brave_price_per_query_usd!=null)$('cBravePrice').value=c.brave_price_per_query_usd;if(c.twocaptcha_price_recaptcha_usd!=null)$('cCapRePrice').value=c.twocaptcha_price_recaptcha_usd;if(c.twocaptcha_price_image_usd!=null)$('cCapImgPrice').value=c.twocaptcha_price_image_usd;loadOpenAIUsage();api('/rejected-domains','GET').then(r=>{if(r&&r.ok&&$('rejCount'))$('rejCount').textContent=r.count})}
 async function showRejected(){const box=$('rejList');if(!box)return;if(box.style.display!=='none'){box.style.display='none';return}box.style.display='block';box.innerHTML='불러오는 중…';const r=await api('/rejected-domains','GET');if(!r||!r.ok){box.innerHTML='조회 실패';return}if($('rejCount'))$('rejCount').textContent=r.count;const logmap={};(r.log||[]).forEach(x=>{if(!logmap[x.domain])logmap[x.domain]=x.reason||''});box.innerHTML='<div style="color:var(--r);margin-bottom:6px">총 '+r.count+'개 · 발굴 자동 제외됨 (재활성화하려면 옆 ↺ 클릭)</div>'+(r.domains||[]).map(d=>'<div style="display:flex;justify-content:space-between;gap:8px;padding:2px 0;border-bottom:1px solid #17202e"><span><b style="color:var(--t)">'+esc(d)+'</b> <span style="color:var(--d)">'+esc((logmap[d]||'').slice(0,30))+'</span></span><span style="cursor:pointer;color:var(--g)" title="재활성화(제외 해제)" onclick="unrejectDomain(\''+esc(d)+'\')">↺</span></div>').join('')}
 async function unrejectDomain(dom){if(!confirm(dom+' 을(를) 자동 탈락에서 해제할까요? (다시 발굴 대상이 됩니다)'))return;const r=await api('/rejected-domains','POST',{remove:dom});if(r&&r.ok){toast('해제됨 · '+dom,'ok');showRejected();showRejected()}else toast('실패','er')}
