@@ -2736,30 +2736,44 @@ def cafe24_post(site, title, content_html, skip_login=False):
         clicked=_click_first(d,["a.btnSubmit","#btnLogin","a.btnLogin",".btnEm","button[type='submit']",
                         "input[type='submit']","a[onclick*='login']","a[data-ez-item='login']",
                         ".ec-base-button a","button.btnSubmit"])
-        if not clicked:
-            # 폼 직접 제출(action=/exec/front/Member/login/) 또는 Enter — Cafe24 표준 로그인
-            try:
+        # ★takago 실측(2026-09-07): 로그인버튼 <a data-ez-item=login>은 onclick 없이 JS 이벤트
+        #   리스너로 폼 제출 → 셀레늄 클릭으론 리스너가 안 걸려 제출 실패(로그인 안 됨). 반면
+        #   폼(action=/exec/front/Member/login/) requestSubmit()은 확실히 서버 제출됨(실측 확인).
+        #   → 클릭이 됐든 안 됐든, 로그인폼이 아직 남아있으면 폼을 직접 requestSubmit으로 강제 제출.
+        time.sleep(2)
+        try:
+            if d.find_elements(By.CSS_SELECTOR,"input[name='member_passwd']"):
                 d.execute_script("""
                     var f=document.querySelector("form[action*='Member/login']")||document.querySelector("form[action*='login']")||
                           (document.querySelector("input[name='member_passwd']")||{}).form;
                     if(f){ if(typeof f.requestSubmit==='function')f.requestSubmit(); else f.submit(); }
                     else if(typeof fnLogin==='function'){fnLogin();}
                 """)
-            except Exception:
-                try:
-                    from selenium.webdriver.common.keys import Keys
-                    el=d.find_element(By.CSS_SELECTOR,"input[name='member_passwd']"); el.send_keys(Keys.RETURN)
-                except Exception: pass
-        time.sleep(3); _wait_cf(10); _pass_turnstile_if_present(); dismiss_alerts(d)
+        except Exception:
+            try:
+                from selenium.webdriver.common.keys import Keys
+                el=d.find_element(By.CSS_SELECTOR,"input[name='member_passwd']"); el.send_keys(Keys.RETURN)
+            except Exception: pass
+        # 로그인 응답 페이지도 광고/위젯으로 load가 안 끝나는 경우가 있어(write.html과 동일)
+        # 짧게 폴링하며 로그인폼이 사라지길 기다린 뒤 stop.
+        _t0=time.time()
+        while time.time()-_t0<12:
+            try:
+                if not d.find_elements(By.CSS_SELECTOR,"input[name='member_passwd']"): break
+            except Exception: pass
+            time.sleep(0.5)
+        try: d.execute_script("try{window.stop();}catch(e){}")
+        except Exception: pass
+        _wait_cf(10); _pass_turnstile_if_present(); dismiss_alerts(d)
         # 로그인 성공 여부 판정 — ★엄격화(2026-09-07): 기존엔 'mid in _src'로 판정했으나
         #   로그인 폼에 방금 입력한 아이디 value가 남아 오탐(실패인데 성공 처리)→그 뒤 write 진입이
         #   비로그인 상태로 홈 리다이렉트돼 '글쓰기 페이지 못찾음'. takago 원인.
         #   → 로그인 입력폼(member_passwd)이 사라졌고 로그아웃/마이페이지 링크가 있어야 성공.
         try:
+            # 로그인폼(member_passwd)이 사라졌으면 성공(로그인 페이지를 벗어남). 남아있으면 실패.
+            #   page_source 전체 읽기는 무한로딩 시 느려서 폼 존재 여부로만 판정(가볍고 견고).
             still_login_form=bool(d.find_elements(By.CSS_SELECTOR,"input[name='member_passwd']"))
-            _src=(d.page_source or '').lower()
-            has_logout=('member/logout' in _src or '로그아웃' in _src)
-            _logged_in=(has_logout and not still_login_form)
+            _logged_in=not still_login_form
             add_log(f"[Cafe24로그인] {'성공' if _logged_in else '실패'} — {(site.get('name') or base)[:24]}"
                     +('' if _logged_in else ' (아이디/비번 확인 필요)'))
             if not _logged_in:
