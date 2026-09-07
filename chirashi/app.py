@@ -4868,6 +4868,34 @@ def web_search(cfg, query, start=1, num=10):
     provider=(cfg.get('search_provider') or 'brave').lower()
     return google_search(cfg,query,start,num) if provider=='google' else brave_search(cfg,query,start,num)
 
+def _post_read_block_reason(url):
+    """발행된 글 URL을 '비로그인'으로 열어 실제 본문이 읽히는지 확인. 읽기 차단이면 사유 문자열,
+       정상 읽힘이면 ''. ★잇츠키친처럼 포인트/권한 제한으로 글읽기가 막히는 게시판 감지용
+       (글번호는 나와도 구글이 본문을 못 읽어 SEO 0 = 헛발행). 대표님 지시 2026-09-08."""
+    import requests as _rq
+    UA={'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36'}
+    try:
+        r=_rq.get(url,timeout=12,verify=False,headers=UA,allow_redirects=True)
+    except Exception:
+        return ''   # 조회 자체 실패는 판정 보류(정상으로 두고 발행)
+    h=r.text or ''
+    # 오류/제한 안내 신호(그누보드 wrest.php 계열 알림 + 제목). 본문이 정상이면 이 문구들이 없다.
+    # 1) 포인트/열람권한 제한
+    if '포인트' in h and any(k in h for k in ['불가','모자라','부족']) and any(k in h for k in ['글읽기','글 읽기','열람','조회','읽기']):
+        return '포인트 부족(글읽기 제한)'
+    # 2) 오류안내 페이지로 튕김(제목 기반)
+    tm=re.search(r'<title[^>]*>(.*?)</title>',h,re.S|re.I)
+    title=re.sub(r'\s+',' ',(tm.group(1) if tm else '')).strip()
+    if any(k in title for k in ['오류안내','오류 안내','접근할 수 없','권한','로그인']):
+        return f'오류안내({title[:20]})'
+    # 3) 로그인/권한 안내 본문
+    if any(k in h for k in ['로그인 후 이용','권한이 없','열람 권한','회원만','로그인이 필요']) and len(h)<8000:
+        return '로그인/열람권한 필요'
+    # 4) 페이지가 사실상 비어있음(정상 글이면 최소 수 KB)
+    if len(h)<1500:
+        return '본문 없음(빈 페이지)'
+    return ''
+
 def _cafe24_board_map(html, page_url=''):
     """Cafe24 페이지 HTML에서 게시판 경로 매핑을 추출. 반환: {board_no(str): 경로(str)}.
        예: <a href="/board/product2/list.html?board_no=6"> → {'6':'product2'}.
@@ -8258,10 +8286,20 @@ def _run_write_test(sid):
         except Exception: pass
         result_url=msg if ok and str(msg).startswith(('http://','https://')) else ''
         now=_kst_now().strftime('%Y-%m-%d %H:%M')
+        # ★의미없는 발행 방지(대표님 지시 2026-09-08): 글번호가 나와도 '비로그인으로 실제 읽히는지'
+        #   확인. 잇츠키친처럼 포인트/권한 제한으로 글읽기가 막히면 구글도 본문을 못 읽어 SEO 0 →
+        #   발행 성공으로 인정하지 않는다(발행처에서 제외). 목록엔 떠도 본문 조회 차단이면 헛발행.
+        _read_block=''
         if ok and result_url:
+            _read_block=_post_read_block_reason(result_url)
+        if ok and result_url and not _read_block:
             set_site_flag(sid,status='done',write_test_status='passed',verified_at=now,
                           verified_post_url=result_url,last_structure_check=now,last_fail_reason='')
             add_log(f'[발행테스트 성공] {site.get("name") or site.get("site_url","")} → {result_url}')
+        elif ok and result_url and _read_block:
+            set_site_flag(sid,status='failed',write_test_status='failed',permission=False,
+                          verified_post_url='',last_fail_reason=f'읽기제한 게시판 — {_read_block}(글 올라가도 조회차단·SEO0)')
+            add_log(f'[발행테스트 실패] {site.get("name")}: 읽기제한({_read_block}) — 헛발행이라 제외')
         elif ok:
             set_site_flag(sid,status='failed',write_test_status='failed',
                           verification_fail_reason='결과 URL/게시물 검색 결과 없음',last_fail_reason='결과 URL 없음')
