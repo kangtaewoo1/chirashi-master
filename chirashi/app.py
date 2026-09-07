@@ -1001,6 +1001,40 @@ def _split_main_keyword(main):
             return m[:-len(suf)].strip(), suf
     return m, ''
 
+def _fix_dong(region):
+    """지역명이 행정구역 접미사(동/읍/면/리/가/구/시/군/역)로 안 끝나고 숫자로도 안 끝나면 '동' 붙임.
+       (대표님 지시 2026-09-08: 풍세→풍세동)"""
+    r=str(region or '').strip()
+    if r and not re.search(r'(동|읍|면|리|가|구|시|군|역)$',r) and not re.search(r'\d$',r):
+        return r+'동'
+    return r
+
+def _fix_kw_dong(kw):
+    """직접입력 3개 조합에서 '지역 접두어'를 찾아 '동' 삽입. 업종 약칭 목록에 의존하면 오교정
+       (부여읍하퍼→부여읍하퍼동 같은)이 나므로, 3개 키워드의 '공통 앞부분'을 지역으로 본다.
+       예) 풍세미러룸/풍세풀싸롱/풍세유흥주점 → 공통 '풍세' → '풍세동'으로 각 키워드 앞부분 치환.
+       (대표님 지시 2026-09-08). 공통접두어가 2글자 이상이고 행정접미사 없을 때만 적용(안전)."""
+    if not isinstance(kw,dict): return kw
+    vals=[str(kw.get(f) or '').strip() for f in ('지역','서비스','브랜드')]
+    present=[v for v in vals if v]
+    if len(present)<2: return kw   # 조합 아니면(자동생성 등) 건드리지 않음
+    # 공통 접두어 계산
+    pre=present[0]
+    for v in present[1:]:
+        i=0
+        while i<len(pre) and i<len(v) and pre[i]==v[i]: i+=1
+        pre=pre[:i]
+    pre=pre.strip()
+    # 공통 접두어가 지역명답고(2~5글자) 행정접미사·숫자로 안 끝나면 '동' 삽입
+    if 2<=len(pre)<=5 and not re.search(r'(동|읍|면|리|가|구|시|군|역)$',pre) and not re.search(r'\d$',pre):
+        newpre=pre+'동'
+        out=dict(kw)
+        for f in ('지역','서비스','브랜드'):
+            v=str(out.get(f) or '')
+            if v.startswith(pre): out[f]=newpre+v[len(pre):]
+        return out
+    return kw
+
 def _auto_subkeywords(main):
     """메인 1개에서 {지역,서비스,브랜드} 조합을 생성. 서브2·3은 그 구/동에 맞춰 랜덤.
        - 지역 = 구/동 (예: 교동)
@@ -5965,7 +5999,7 @@ def _publish_one_combo(kw, wname, rid, cfg, writer_name=''):
         if not under_daily_limit(fresh,cfg): continue
         if not under_min_interval(fresh)[0]: continue
         # '메인만 한 줄' 모드면 사이트마다 서브2·3을 그 구/동에 맞춰 새로 랜덤 생성(반복 방지).
-        pub_kw=_auto_subkeywords(kw.get('_main','')) if kw.get('_main_only') else kw
+        pub_kw=_auto_subkeywords(kw.get('_main','')) if kw.get('_main_only') else _fix_kw_dong(kw)
         try:
             html,title=generate_article(pub_kw,cfg,unique=True,workroom_id=rid)
         except Exception as e:
