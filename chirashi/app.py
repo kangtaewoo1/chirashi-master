@@ -3065,22 +3065,60 @@ def cafe24_post(site, title, content_html, skip_login=False):
     if not _use_sbr:   # 원격(Scraping Browser)은 시작부 45s 유지 — 짧게 덮으면 CF 처리중 타임아웃
         try: d.set_page_load_timeout(8)   # get()이 오래 블록되지 않게 (finally에서 25로 복원)
         except Exception: pass
+    def _settle_nav(sec=8):
+        """★원격(pageLoadStrategy=none)은 d.get()이 about:blank로 즉시 반환 → current_url을
+           너무 일찍 읽으면 about:blank라 오판(리다이렉트 skip 오작동). 실제 네비게이션이
+           about:blank를 벗어날 때까지 짧게 폴링. 로컬은 거의 즉시라 짧게."""
+        _s0=time.time(); _lim=sec if _use_sbr else 3
+        while time.time()-_s0<_lim:
+            try:
+                c=(d.current_url or '')
+                if c and c not in ('about:blank','data:,'): return c
+            except Exception: pass
+            time.sleep(0.4)
+        try: return (d.current_url or '')
+        except Exception: return ''
+    def _scrape_article_path():
+        """로그인 세션 홈에서 /article/게시판명/board_no/ 링크를 찾아 그 글목록을 list_urls 최우선에
+           추가하고 article_board_name 저장(대표님 발견: 이 SEO-URL엔 로그인 시 글쓰기 버튼 있음).
+           page_source 대신 JS로 링크만 추출(가벼움). 반환: 찾은 게시판명 or None."""
+        try:
+            d.get(base+'/'); _settle_nav()
+            _hrefs=d.execute_script(
+                "return Array.from(document.querySelectorAll(\"a[href*='/article/']\")).map(a=>a.getAttribute('href')).slice(0,300);"
+            ) or []
+        except Exception: _hrefs=[]
+        for _h in _hrefs:
+            _am=re.search(r'/article/([^/"\']+)/'+re.escape(bo)+r'/', str(_h or ''))
+            if _am:
+                _an=_am.group(1); _aurl=base+f'/article/{_an}/{bo}/'
+                if _aurl not in list_urls: list_urls.insert(0,_aurl)
+                try: set_site_flag(site.get('id'),article_board_name=_an); site['article_board_name']=_an
+                except Exception: pass
+                add_log(f"[Cafe24경로탐지] 홈에서 글목록 발견 — /article/{_an}/{bo}/")
+                return _an
+        return None
     try:
+        # ★SBR(원격)+board_no 숫자면, 대표님 발견 /article/ 경유가 write.html 직접보다 안정적 →
+        #   먼저 홈에서 /article/ 경로를 찾아 list_urls 최우선에 넣는다(저장된 게 없을 때 1회).
+        if _use_sbr and bo.isdigit() and not _art_name:
+            _art_name=_scrape_article_path() or _art_name
         for wu in write_urls:
-            if time.time()>_entry_deadline: break
+            if opened or time.time()>_entry_deadline: break
             try: d.get(wu)
             except Exception: pass          # 로드 미완료(load 이벤트 지연) 타임아웃은 정상 — 폼 폴링으로 판정
+            _cur=_settle_nav()              # ★about:blank 벗어날 때까지 대기 후 실제 URL 판정
             # 첫 진입 시 Turnstile/CF 챌린지면 통과 후 복귀
             _wait_cf(12); _pass_turnstile_if_present()
             dismiss_alerts(d)
             # ★진단(2026-09-08): 어느 write_url에서 어디로 갔는지 로그 — 홈 리다이렉트/미렌더 구분용.
-            try: _cur=(d.current_url or '')
-            except Exception: _cur=''
+            try: _cur=(d.current_url or _cur)
+            except Exception: pass
             add_log(f"[Cafe24글쓰기시도] {wu.split('/board/')[-1][:40]} → 현재:{_cur.split('//')[-1][:50]}")
             # ★홈으로 리다이렉트됐으면(경로에 board/write/article 없음) 폼 폴링 낭비 말고 즉시 다음 후보로.
             #   (takago 등은 write.html 직접 get이 홈으로 튕김 — 28초 폴링 소모 방지, article경유에 시간 확보.)
             _cl=_cur.lower()
-            if _cur and not any(k in _cl for k in ('/board/','write','/article/','board_no','bo_table')):
+            if _cur and _cur not in ('about:blank','data:,') and not any(k in _cl for k in ('/board/','write','/article/','board_no','bo_table')):
                 continue
             # subject 입력칸이 나타날 때까지 폴링(폼은 JS로 그려짐 — 로딩 끊지 않음). 원격은 넉넉히.
             #   단 전체 시간상한(_entry_deadline)을 넘지 않게 캡.
@@ -3095,40 +3133,20 @@ def cafe24_post(site, title, content_html, skip_login=False):
                 time.sleep(1)
                 if _form_ready(): opened=True
             if opened: break
-        # ★목록 경유 폴백 — write.html 직접접근이 홈으로 리다이렉트되는 스킨(takago 등) 대비.
-        #   실측(2026-09-07): takago는 write.html 직접 get 시 홈으로 튕기나, 목록의 '글쓰기'
-        #   링크(a[href*='write.html']) 클릭으로는 정상 진입됨(로그인 세션 유지).
-        # ★로그인 세션의 홈에서 /article/게시판명/board_no/ 링크를 긁어 그 글목록을 클릭경유 후보에 추가.
-        #   (대표님 발견: 이 SEO-URL 글목록/글 페이지에 로그인 시 '글쓰기' 버튼이 있어 세션유지 진입됨.
-        #    write.html 직접 get은 홈으로 튕기지만 이 경로는 됨.) 저장된 게 없을 때만 1회 시도.
-        if not opened and bo.isdigit() and not _art_name:
-            try:
-                d.get(base+'/')
-                # ★시간최적화: 대용량 page_source 대신 JS로 /article/…/board_no/ 링크만 추출(가벼움·hang방지).
-                _an=None
-                try:
-                    _hrefs=d.execute_script(
-                        "return Array.from(document.querySelectorAll(\"a[href*='/article/']\")).map(a=>a.getAttribute('href')).slice(0,200);"
-                    ) or []
-                except Exception: _hrefs=[]
-                for _h in _hrefs:
-                    _am=re.search(r'/article/([^/"\']+)/'+re.escape(bo)+r'/', str(_h or ''))
-                    if _am: _an=_am.group(1); break
-                if _an:
-                    _aurl=base+f'/article/{_an}/{bo}/'
-                    if _aurl not in list_urls: list_urls.insert(0,_aurl)
-                    try: set_site_flag(site.get('id'),article_board_name=_an); site['article_board_name']=_an
-                    except Exception: pass
-                    add_log(f"[Cafe24경로탐지] 홈에서 글목록 발견 — /article/{_an}/{bo}/")
-            except Exception: pass
+        # ★목록/글 경유 폴백 — write.html 직접접근이 홈으로 리다이렉트되는 스킨(takago 등) 대비.
+        #   목록의 '글쓰기' 링크 클릭은 세션/리퍼러 유지돼 진입됨. /article/ 경로는 위에서 이미 탐지.
+        #   (SBR는 진입 전 _scrape_article_path 실행됨. 로컬인데 아직 안 했으면 여기서 1회.)
+        if not opened and not _use_sbr and bo.isdigit() and not _art_name:
+            _art_name=_scrape_article_path() or _art_name
         if not opened:
             for lu in list_urls:
                 if time.time()>_entry_deadline: break
                 try: d.get(lu)
                 except Exception: pass
+                _lc=_settle_nav()   # ★about:blank 벗어날 때까지 대기(원격 조기판정 방지)
                 _wait_cf(12); _pass_turnstile_if_present(); dismiss_alerts(d)
-                try: _lc=(d.current_url or '')
-                except Exception: _lc=''
+                try: _lc=(d.current_url or _lc)
+                except Exception: pass
                 # 목록/글 페이지의 '글쓰기' 링크 클릭(직접 get이 아니라 클릭이라 세션/리퍼러 유지).
                 #   href[write] 뿐 아니라 Cafe24 스킨의 글쓰기 버튼(board_write·onclick·텍스트)도 폭넓게.
                 try:
