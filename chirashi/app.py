@@ -5856,6 +5856,7 @@ def _publish_one_combo(kw, wname, rid, cfg, writer_name=''):
         history_add({'id':jid,'time':now,'updated':now,'site_id':fresh.get('id'),
             'site_name':fresh.get('name') or fresh.get('site_url',''),'site_url':fresh.get('site_url',''),
             'bo_table':fresh.get('bo_table',''),'title':title,'region':pub_kw.get('지역',''),'service':pub_kw.get('서비스',''),
+            'brand':pub_kw.get('브랜드',''),   # 키워드3 — 결과 표 '키워드' 열에 3개 다 보이게(대표님 지시)
             'workroom_id':rid,'workroom_name':wname,'status':'posting','result_url':'','message':'','attempts':0})
         ok=False; msg=''
         for attempt in range(1,4):
@@ -8515,14 +8516,23 @@ function getAllSiteIds(){return Array.from(document.querySelectorAll('#siteList 
 async function postSel(){const t=$('gTitle').value.trim();const c=$('gContent').value.trim();if(!t||!c){toast('제목/본문 입력','er');return}const ids=getSiteIds();if(!ids.length){toast('사이트 선택','er');return}const r=await api('/post','POST',{site_ids:ids,title:t,content:c,region:$('k1').value.trim(),service:$('k2').value.trim(),brand:$('k3').value.trim()});if(r&&r.ok)toast(r.queued+'개 큐 등록'+(r.blocked?` · 미허용 ${r.blocked}개 제외`:''),r.queued?'ok':'er')}
 async function postAll(){const t=$('gTitle').value.trim();const c=$('gContent').value.trim();if(!t||!c){toast('제목/본문 입력','er');return}const ids=getAllSiteIds();if(!ids.length){toast('사이트 없음','er');return}const r=await api('/post','POST',{site_ids:ids,title:t,content:c,region:$('k1').value.trim(),service:$('k2').value.trim(),brand:$('k3').value.trim()});if(r&&r.ok)toast(r.queued+'개 큐 등록'+(r.blocked?` · 미허용 ${r.blocked}개 제외`:''),r.queued?'ok':'er')}
 // ---- 발행 이력 렌더 ----
-function histRow(h){const stc=h.status==='done'?'ok':(h.status==='failed'?'f':(h.status==='retry'?'y':'i'));const rurl=h.result_url?`<a href="${esc(h.result_url)}" target="_blank" rel="noopener" title="${esc(h.result_url)}" style="color:var(--p);word-break:break-all;display:block;max-width:260px;line-height:1.4">🔗 ${esc(h.result_url)}</a>`:'<span style="color:var(--d)">-</span>';
-const stt=h.status==='retry'?'재시도':(h.status||'');
+function histRow(h){const stc=h.status==='done'?'ok':(h.status==='failed'?'f':(h.status==='retry'?'y':'i'));
+// 상태 한국어(대표님 지시)
+const STMAP={done:'완료',posting:'발행중',failed:'실패',retry:'재시도',queued:'대기',skipped:'건너뜀'};
+const stt=STMAP[h.status]||h.status||'';
 const av=h.alive==='yes'?'<span class="st st-ok">생존</span>':(h.alive==='no'?'<span class="st st-f">삭제</span>':(h.status==='done'?'<span style="color:var(--d)">-</span>':''));
 const fr=h.fail_reason_ko?`<span style="color:var(--r)">${esc(h.fail_reason_ko)}</span>`:'';
-return `<tr><td style="color:var(--d);white-space:nowrap">${esc((h.time||'').slice(5,16))}</td><td>${esc(h.site_name||'')}</td><td style="color:var(--d)">${esc(h.region||'')} ${esc(h.service||'')}</td><td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(h.title||'')}">${esc(h.title||'')}</td><td><span class="st st-${stc}">${esc(stt)}</span></td><td>${fr}</td><td>${av}</td><td>${rurl}</td><td style="color:var(--d);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(h.message||'')}">${esc(h.message||'')}</td></tr>`}
+// 사용 키워드 3개: 메인1(지역)·키2(서비스)·키3(브랜드). title에서 못 뽑으면 region/service.
+const kws=[h.region,h.service,h.brand].filter(Boolean).join(' / ')||(esc(h.region||'')+' '+esc(h.service||''));
+// 제목=발행글 링크(대표님 지시: URL/열기 열 합침). result_url 있으면 클릭시 그 글로 이동.
+const ttl=esc(h.title||'(제목없음)');
+const titleCell=h.result_url
+  ? `<a href="${esc(h.result_url)}" target="_blank" rel="noopener" title="${esc(h.result_url)}" style="color:var(--p);text-decoration:none">🔗 ${ttl}</a>`
+  : ttl;
+return `<tr><td style="color:var(--d);white-space:nowrap">${esc((h.time||'').slice(5,16))}</td><td style="color:var(--t)">${esc(kws)}</td><td style="max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${ttl}">${titleCell}</td><td><span class="st st-${stc}">${esc(stt)}</span></td><td>${fr}</td><td>${av}</td><td style="color:var(--d);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(h.message||'')}">${esc(h.message||'')}</td></tr>`}
 async function renderHistory(){const h=await api('/history','GET');if(!Array.isArray(h))return;$('histCount').textContent=h.length+'건';
 if(!h.length){$('histList').innerHTML='<p style="color:var(--d);padding:30px;text-align:center">아직 발행 이력이 없습니다</p>';return}
-$('histList').innerHTML='<table><thead><tr><th>시간</th><th>사이트</th><th>지역/서비스</th><th>제목</th><th>상태</th><th>실패원인</th><th>생존</th><th>글 주소</th><th>메시지</th></tr></thead><tbody>'+h.map(histRow).join('')+'</tbody></table>'}
+$('histList').innerHTML='<table><thead><tr><th>시간</th><th>키워드</th><th>제목(클릭시 글로 이동)</th><th>상태</th><th>실패원인</th><th>생존</th><th>메시지</th></tr></thead><tbody>'+h.map(histRow).join('')+'</tbody></table>'}
 async function submitCaptcha(id){const el=$('cap_'+id);const value=(el&&el.value||'').trim();if(!value){toast('CAPTCHA 값을 입력하세요','er');return}const r=await api('/manual-checks/'+id+'/submit','POST',{value});if(r&&r.ok){toast('입력 완료 · 자동 발행을 계속합니다');renderCaptchaTasks()}else toast((r&&r.error)||'전달 실패','er')}
 async function cancelCaptcha(id){const r=await api('/manual-checks/'+id+'/cancel','POST',{});if(r&&r.ok){toast('CAPTCHA 작업 취소됨');renderCaptchaTasks()}}
 async function renderCaptchaTasks(){const box=$('captchaTasks');if(!box)return;const r=await api('/manual-checks','GET');if(!r||!r.ok)return;const waiting=(r.tasks||[]).filter(t=>['waiting_input','input_received','submitting'].includes(t.status));if(!waiting.length){box.innerHTML='';return}box.innerHTML=waiting.map(t=>'<div class="card" style="border-color:#a16207;background:#171205"><h3 style="color:var(--y)">🧩 '+esc(t.site_name)+' · CAPTCHA 입력 후 자동 발행</h3><div class="row">'+(t.image_data?'<img src="'+t.image_data+'" alt="CAPTCHA" style="max-width:240px;max-height:90px;background:#fff;border-radius:4px;padding:4px">':'<span style="color:var(--y)">이미지 캡처 실패 — 사이트 화면에서 CAPTCHA를 확인하세요.</span>')+'<input id="cap_'+esc(t.id)+'" autocomplete="off" placeholder="보이는 문자를 직접 입력" style="width:220px" '+(t.status!=='waiting_input'?'disabled':'')+'><button class="btn btn-g" onclick="submitCaptcha(\''+esc(t.id)+'\')" '+(t.status!=='waiting_input'?'disabled':'')+'>입력 후 자동 발행</button><button class="btn btn-r btn-xs" onclick="cancelCaptcha(\''+esc(t.id)+'\')">취소</button></div><div style="color:var(--d);font-size:10px;margin-top:6px">'+esc(t.message||'')+' · 만료 '+esc(t.expires_at||'')+'</div></div>').join('')}
