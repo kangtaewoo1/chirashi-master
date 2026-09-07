@@ -7294,7 +7294,11 @@ def api_wk_stats():
                         and str(s.get('verified_post_url') or '').startswith(('http://','https://')))
     except Exception:
         goal=500; publishable=0
+    # 실제 발행 주체는 작업실 워커(_WR_SLOTS의 독립 크롬 스레드)다. 살아있는 슬롯 수를 센다.
+    try: wr_workers=sum(1 for t in _WR_SLOTS.values() if t and t.is_alive())
+    except Exception: wr_workers=0
     return jsonify({**wk_stats,'active':wk_active,'paused':wk_paused,
+                    'wr_workers':wr_workers,
                     'site_goal':goal,'site_done':publishable})
 
 @app.route('/api/workers/reset',methods=['POST'])
@@ -8013,7 +8017,7 @@ LOGIN_HTML=r'''<div style="display:flex;align-items:center;justify-content:cente
 </form></div></div>'''
 
 DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
-<div class="stats" id="live"><span>큐:<b id="q">0</b></span><span>성공:<b id="ok" style="color:var(--g)">0</b></span><span>실패:<b id="fl" style="color:var(--r)">0</b></span><span>스킵:<b id="sk" style="color:var(--y)">0</b></span><span>워커:<b id="ws" style="color:{{'var(--g)' if wk_on else 'var(--d)'}}">{{'ON' if wk_on else 'OFF'}}</b></span><span style="margin-left:10px;padding-left:10px;border-left:1px solid var(--b)">🎯 발행가능 <b id="siteGoal" style="color:var(--p)">-</b></span></div>
+<div class="stats" id="live"><span>큐:<b id="q">0</b></span><span>성공:<b id="ok" style="color:var(--g)">0</b></span><span>실패:<b id="fl" style="color:var(--r)">0</b></span><span>스킵:<b id="sk" style="color:var(--y)">0</b></span><span>발행워커:<b id="ws" style="color:var(--d)">-</b></span><span style="margin-left:10px;padding-left:10px;border-left:1px solid var(--b)">🎯 발행가능 <b id="siteGoal" style="color:var(--p)">-</b></span></div>
 <a href="/logout" class="btn-xs" style="background:var(--b);color:var(--d);text-decoration:none">로그아웃</a></header>
 
 <div class="tabs"><button id="tab-gen" class="tab" onclick="T('gen')" style="display:none">글 생성</button><button class="tab on" onclick="T('kw')">키워드</button><button class="tab" onclick="T('wlog')">워커 실행로그</button><button class="tab" onclick="T('images')">이미지 저장</button><button class="tab" onclick="T('sites')">사이트 (<span id="siteTabCount">{{sites|length}}</span>)</button><button class="tab" onclick="T('res')">결과</button><button class="tab" onclick="T('disco')">발굴</button><button id="tab-mem" class="tab" onclick="T('mem')" style="display:none">회원·정산</button><button class="tab" onclick="T('stats')">통계</button><button class="tab" onclick="T('cost')">API 비용</button><button class="tab" onclick="T('set')">설정</button></div>
@@ -8841,7 +8845,7 @@ async function purgeDeadSites(){
 async function poll(){const r=await api('/workers/stats','GET');if(!r)return;
 $('q').textContent=r.queued||0;$('ok').textContent=r.success||0;$('fl').textContent=r.fail||0;$('sk').textContent=r.skipped||0;
 if(r.site_goal){const sg=$('siteGoal');if(sg){const done=r.site_done||0,goal=r.site_goal;const pct=Math.round(done/goal*100);sg.textContent=done+'/'+goal+' ('+pct+'%)';sg.style.color=done>=goal?'var(--g)':'var(--p)'}}
-const wstate=r.paused?'PAUSE':(r.active?'ON':'OFF');$('ws').textContent=wstate;$('ws').style.color=r.paused?'var(--y)':(r.active?'var(--g)':'var(--d)');
+const wn=(r.wr_workers==null?null:r.wr_workers);if(wn!=null){$('ws').textContent=wn>0?(wn+'개 발행중'):'정지';$('ws').style.color=wn>0?'var(--g)':'var(--d)';}else{const wstate=r.paused?'PAUSE':(r.active?'ON':'OFF');$('ws').textContent=wstate;$('ws').style.color=r.paused?'var(--y)':(r.active?'var(--g)':'var(--d)');}
 const total=r.total||0,done=r.done||0;
 if(total>0){$('progCard').style.display='block';const pct=Math.round(done/total*100);$('progBar').style.width=pct+'%';$('progText').textContent=`${done} / ${total} (${pct}%)`+(r.skipped?` · 스킵 ${r.skipped}`:'')}else{$('progCard').style.display='none'}
 if($('p-res').classList.contains('on'))renderHistory();if($('p-wlog').classList.contains('on')){renderWorkerLog();renderCaptchaTasks()}}
