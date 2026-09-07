@@ -4592,6 +4592,28 @@ def screen_candidate(url, cfg=None):
             res['login_required']=True
         if any(w in wh for w in AD_BAN_WORDS): res['ad_banned']=True
         if res['write_form']: break
+    # ★자동가입 사전 판정(2026-09-08 대표님 지시): 로그인 필요 게시판이면 가입폼을 미리 읽어
+    #   이메일 인증·본인인증(휴대폰) 필요 여부를 검수 단계에서 판정한다. 필요하면 auto_pipeline이
+    #   자동가입을 건너뛰고 '수동가입 대기(manual_signup)'로 분류 → 크롬·2captcha 낭비 0.
+    #   (비회원 글쓰기 가능하면 가입 자체가 불필요하므로 login_required일 때만 검사.)
+    res['signup_email_verify']=False; res['signup_phone_cert']=False
+    if res.get('login_required') and not res.get('write_form'):
+        signup_urls=[base+'/bbs/register.php', base+'/member/join.html',
+                     base+'/bbs/register_form.php', base+'/shop/member.php?type=join']
+        for su in signup_urls:
+            sr=get(su)
+            if not sr or sr.status_code>=400: continue
+            sh=sr.text or ''
+            # 본인인증(휴대폰/실명) 신호
+            if any(k in sh for k in ['win_hp_cert','nice본인인증','checkplus','휴대폰 본인인증','휴대폰본인인증',
+                                     'nice_ok','본인인증','실명인증','SMS 인증','아이핀','ipin']):
+                res['signup_phone_cert']=True
+            # 이메일 인증 필수 신호(learn_signup의 강제 신호 패턴과 동일 기준 — 오탐 축소)
+            if (re.search(r'(?:e-?mail|이메일)\s*(?:주소)?\s*(?:인증|확인)(?:을|를|이|가)?\s*(?:반드시|필수|해야|하셔야|완료해야|하여야)',sh,re.I)
+                or re.search(r'(?:인증\s*(?:메일|이메일)|인증\s*링크).{0,40}(?:발송|보냈|전송|클릭|확인)',sh,re.I)):
+                res['signup_email_verify']=True
+            if re.search(r'wr_subject|mb_id|mb_password',sh,re.I) or res['signup_phone_cert'] or res['signup_email_verify']:
+                break   # 가입폼(또는 인증신호) 찾음 → 더 볼 필요 없음
     return res
 
 def score_candidate(c):
@@ -5493,6 +5515,16 @@ def auto_pipeline_once(limit=5):
     for _c in cands:
         if _c.get('status') in ('ready','new') and any(k in str(_c.get('title') or '') for k in ERROR_PAGE_HINTS):
             try: _cand_set(_c['id'],status='rejected',reject_reason='오류안내 페이지'); _c['status']='rejected'
+            except Exception: pass
+    # ★이메일 인증·본인인증(휴대폰) 필요 후보는 자동가입 시도 안 하고 '수동가입 대기'로 분류
+    #   (대표님 지시 2026-09-08: 자동불가라 크롬·2captcha 낭비. 대표님이 직접 계정 넣으면 발행가능).
+    #   검수(screen_candidate)가 미리 판정한 signup_email_verify·signup_phone_cert 사용.
+    for _c in cands:
+        if _c.get('status') in ('ready','approved') and (_c.get('signup_email_verify') or _c.get('signup_phone_cert')):
+            _why='본인인증(휴대폰) 필요' if _c.get('signup_phone_cert') else '이메일 인증 필요'
+            try:
+                _cand_set(_c['id'],status='manual_signup',reject_reason=f'{_why} — 자동가입 불가, 대표님 수동가입 대기')
+                _c['status']='manual_signup'
             except Exception: pass
     # 쿨다운: 최근 20분 내 시도한 후보는 제외 → 한 사이트(예: 김정은)가 실패/hang해도
     # 곧바로 다시 잡혀 루프를 독점하지 않게. 다른 후보에게 순서가 돌아간다.
