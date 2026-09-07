@@ -2770,34 +2770,38 @@ def cafe24_post(site, title, content_html, skip_login=False):
     else:
         write_urls=[base+'/board/product/write.html?board_no=1',
                     base+'/board/write.html?board_no=1', base+'/board/free/write.html']
-    # ★rental-zon 등 일부 Cafe24 스킨의 write.html은 광고/위젯 스크립트로 '로드 완료'에
-    #   영영 도달하지 못한다(실측: JS·요소검색 전부 45초 타임아웃). eager 전략으로도
-    #   d.get()이 page_load_timeout(25초)만큼 블록되다 예외 → write_urls 3개 × 25초 헛돌다 실패.
-    #   → 로드 완료를 기다리지 않고(get 타임아웃 짧게+window.stop) subject 입력칸만 폴링한다.
-    #   폼 DOM 자체는 초반에 들어오므로(무한로딩은 위젯 탓) 입력은 가능.
+    # ★rental-zon 등 Cafe24 스킨의 write.html은 광고/로그위젯 iframe으로 페이지 'load'
+    #   이벤트가 늦거나 안 온다. eager로도 d.get()이 page_load_timeout(25초) 블록되다
+    #   예외 → write_urls 3개 × 25초 헛돌다 실패했다(rental-zon fail_streak).
+    #   실측(2026-09-07 Chrome): subject·textarea[content]·SmartEditor(iframe#content_IFRAME)는
+    #   JS로 그려지며 ~8초면 DOM에 나타나고 readyState=complete에도 도달한다.
+    #   → get 타임아웃만 짧게(8초) 두고, 로딩을 성급히 끊지 말고 subject를 폴링한다.
+    #     (window.stop을 get 직후 걸면 폼 렌더가 중단돼 오히려 실패 — 폴링 소진 후에만 최후로 시도)
     _SUBJ_SEL="input[name='subject'],#subject,input[name='title'],input[name='board_subject']"
     def _form_ready():
         try: return bool(d.find_elements(By.CSS_SELECTOR,_SUBJ_SEL))
         except Exception: return False
-    def _stop_load():
-        try: d.execute_script("try{window.stop();}catch(e){}")
-        except Exception: pass
     opened=False
     try: d.set_page_load_timeout(8)   # get()이 오래 블록되지 않게 (finally에서 25로 복원)
     except Exception: pass
     try:
         for wu in write_urls:
             try: d.get(wu)
-            except Exception: pass          # 로드 미완료 타임아웃은 정상 — 아래에서 폼 폴링
-            _stop_load()                    # 끝없는 로딩 강제 중단
+            except Exception: pass          # 로드 미완료(load 이벤트 지연) 타임아웃은 정상 — 폼 폴링으로 판정
             # 첫 진입 시 Turnstile/CF 챌린지면 통과 후 복귀
-            _wait_cf(12); _pass_turnstile_if_present(); _stop_load()
+            _wait_cf(12); _pass_turnstile_if_present()
             dismiss_alerts(d)
-            # subject 입력칸이 나타날 때까지 최대 ~15초 폴링(로드 완료와 무관하게 DOM만 확인)
-            deadline=time.time()+15
+            # subject 입력칸이 나타날 때까지 최대 ~18초 폴링(폼은 JS로 그려짐 — 로딩 끊지 않음)
+            deadline=time.time()+18
             while time.time()<deadline:
                 if _form_ready(): opened=True; break
                 time.sleep(0.5)
+            if not opened:
+                # 여기까지 안 뜨면 진짜 무한로딩 의심 — 한 번 stop 후 마지막 확인
+                try: d.execute_script("try{window.stop();}catch(e){}")
+                except Exception: pass
+                time.sleep(1)
+                if _form_ready(): opened=True
             if opened: break
     finally:
         try: d.set_page_load_timeout(25)
