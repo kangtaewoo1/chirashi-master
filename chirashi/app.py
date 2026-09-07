@@ -2740,18 +2740,21 @@ def cafe24_post(site, title, content_html, skip_login=False):
         clicked=_click_first(d,["a.btnSubmit","#btnLogin","a.btnLogin",".btnEm","button[type='submit']",
                         "input[type='submit']","a[onclick*='login']","a[data-ez-item='login']",
                         ".ec-base-button a","button.btnSubmit"])
-        # ★takago 실측(2026-09-07): 로그인버튼 <a data-ez-item=login>은 onclick 없이 JS 이벤트
-        #   리스너로 폼 제출 → 셀레늄 클릭으론 리스너가 안 걸려 제출 실패(로그인 안 됨). 반면
-        #   폼(action=/exec/front/Member/login/) requestSubmit()은 확실히 서버 제출됨(실측 확인).
-        #   → 클릭이 됐든 안 됐든, 로그인폼이 아직 남아있으면 폼을 직접 requestSubmit으로 강제 제출.
+        # ★takago 실측(2026-09-08 브라우저 재현): 로그인버튼 <a data-ez-item=login> 클릭도,
+        #   form.requestSubmit()도 제출이 안 됨(로그인 페이지 그대로). Cafe24 정식 로그인 실행함수
+        #   window.useLoginKeepingSubmit()를 호출해야 제출됨(호출하니 홈으로 이동=제출 성공 확인).
+        #   → 이 함수를 최우선 호출하고, 없으면 fnLogin/폼 requestSubmit 폴백.
         time.sleep(2)
         try:
             if d.find_elements(By.CSS_SELECTOR,"input[name='member_passwd']"):
                 d.execute_script("""
+                    // 1) Cafe24 정식 로그인 제출 함수(신형 스킨) — 최우선.
+                    if(typeof useLoginKeepingSubmit==='function'){ try{ useLoginKeepingSubmit(); return; }catch(e){} }
+                    if(typeof fnLogin==='function'){ try{ fnLogin(); return; }catch(e){} }
+                    // 2) 폴백: 로그인 폼 직접 제출.
                     var f=document.querySelector("form[action*='Member/login']")||document.querySelector("form[action*='login']")||
                           (document.querySelector("input[name='member_passwd']")||{}).form;
                     if(f){ if(typeof f.requestSubmit==='function')f.requestSubmit(); else f.submit(); }
-                    else if(typeof fnLogin==='function'){fnLogin();}
                 """)
         except Exception:
             try:
