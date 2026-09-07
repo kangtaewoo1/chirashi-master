@@ -6731,13 +6731,22 @@ def api_cand_discover():
 
 @app.route('/api/candidates/manual',methods=['POST'])
 def api_cand_manual():
-    """수동 URL 붙여넣기 → 후보 등록 + 검수 (API 없이도 사용 가능)."""
+    """수동 URL 붙여넣기 → 후보 등록 + 검수 + ★즉시 발행테스트까지(대표님 지시 2026-09-08:
+       수동 추가 도메인은 파이프라인 주기 기다리지 말고 바로 검수→가입→발행테스트).
+       source='manual'은 auto_pipeline이 최우선 처리하므로, 검수 직후 파이프라인 1회를 바로 돌린다."""
     d=request.get_json() or {}; cfg=load_config()
     urls=[x.strip() for x in (d.get('urls','') or '').splitlines() if x.strip().startswith('http')]
     if not urls: return jsonify({'ok':False,'error':'http로 시작하는 URL을 한 줄에 하나씩 넣으세요'})
     n=add_candidates_from([{'url':u} for u in urls],cfg,source='manual')
-    threading.Thread(target=screen_pending,kwargs={'limit':len(urls)},daemon=True).start()
-    return jsonify({'ok':True,'added':n,'screening':True})
+    def _screen_then_pipeline():
+        try: screen_pending(limit=len(urls))          # 1) 검수(글쓰기폼 확인)
+        except Exception as e: add_log(f'[수동추가 검수오류] {str(e)[:80]}')
+        try:
+            add_log(f'[수동추가] {len(urls)}개 검수 완료 → 즉시 발행테스트 시작(대표님 수동추가는 바로 처리)')
+            auto_pipeline_once(limit=max(len(urls),3))  # 2) 가입·발행테스트(manual은 최우선 처리)
+        except Exception as e: add_log(f'[수동추가 파이프라인오류] {str(e)[:80]}')
+    threading.Thread(target=_screen_then_pipeline,daemon=True).start()
+    return jsonify({'ok':True,'added':n,'screening':True,'auto_test':True})
 
 @app.route('/api/rejected-domains',methods=['GET','POST'])
 def api_rejected_domains():
@@ -8871,7 +8880,7 @@ async function pipelineRun(){
   }finally{ restore(); }
 }
 async function rescreenAll(){toast('전체 재검수 중...(최대 2분)');const r=await api('/candidates/screen','POST',{rescreen:true,limit:40});if(r&&r.ok){toast(r.screened+'건 재검수 완료');renderCands()}}
-async function addManual(){const u=$('dcUrls').value;if(!u.trim()){toast('URL 입력','er');return}const r=await api('/candidates/manual','POST',{urls:u});if(r&&r.ok){toast(r.added+'개 추가 · 검수 시작(잠시 후 새로고침)');$('dcUrls').value='';setTimeout(renderCands,3000);renderCands()}else toast((r&&r.error)||'실패','er')}
+async function addManual(){const u=$('dcUrls').value;if(!u.trim()){toast('URL 입력','er');return}const r=await api('/candidates/manual','POST',{urls:u});if(r&&r.ok){toast(r.added+'개 추가 · 검수→발행테스트 바로 시작(1~2분 후 결과탭 확인)','ok');$('dcUrls').value='';setTimeout(renderCands,3000);renderCands()}else toast((r&&r.error)||'실패','er')}
 async function setCand(id,st){await api('/candidates/status','POST',{id:id,status:st});renderCands()}
 async function clearRejected(){await api('/candidates','DELETE',{clear:'rejected'});renderCands()}
 async function approveCand(id){const c=_cands.find(x=>x.id===id);if(!c)return;
