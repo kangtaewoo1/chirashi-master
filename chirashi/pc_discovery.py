@@ -34,13 +34,25 @@ try:
 except ImportError:
     print("requests 모듈이 없습니다. 먼저:  pip install requests"); sys.exit(1)
 
+# Windows 콘솔에서 한글·특수문자(—, ⚡)가 깨지거나 크래시하지 않게 stdout을 UTF-8로(파이썬 3.7+).
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+# https 검증 생략 경고(InsecureRequestWarning) 억제 — 콘솔 깔끔하게.
+try:
+    requests.packages.urllib3.disable_warnings()
+except Exception:
+    pass
+
 # ─────────────────────── CONFIG ───────────────────────
 SERVER      = os.environ.get("CHIRASHI_SERVER", "https://google.twseo.kr")
 SERVER_TOKEN= os.environ.get("CHIRASHI_TOKEN", "")   # 찌라시 설정탭 '로그 토큰'
-# 검색 제공자: 'brave' 또는 'google'. PC에서 쓸 키를 넣는다(서버와 별도 쿼터).
-SEARCH_PROVIDER = os.environ.get("PC_SEARCH_PROVIDER", "brave")
-BRAVE_KEY   = os.environ.get("BRAVE_KEY", "")        # brave 사용 시
-GOOGLE_KEY  = os.environ.get("GOOGLE_KEY", "")       # google 사용 시
+# 검색 제공자: 'ddg'(무료·키불필요, 기본) / 'brave' / 'google'. PC는 대표님 실제 IP라
+#  DuckDuckGo 무료 검색이 서버보다 훨씬 덜 차단됨 → 키 없이 발굴 가능(대표님 지시 '키없이 무료').
+SEARCH_PROVIDER = os.environ.get("PC_SEARCH_PROVIDER", "ddg")
+BRAVE_KEY   = os.environ.get("BRAVE_KEY", "")        # brave 사용 시(선택)
+GOOGLE_KEY  = os.environ.get("GOOGLE_KEY", "")       # google 사용 시(선택)
 GOOGLE_CX   = os.environ.get("GOOGLE_CX", "")        # google 사용 시(검색엔진 ID)
 # ──────────────────────────────────────────────────────
 
@@ -57,7 +69,13 @@ SKIP_HOSTS = ("naver.com", "daum.net", "tistory.com", "blog.", "news.", "youtube
 
 
 def log(msg):
-    print(time.strftime("[%H:%M:%S] ") + msg, flush=True)
+    line = time.strftime("[%H:%M:%S] ") + str(msg)
+    try:
+        print(line, flush=True)
+    except UnicodeEncodeError:
+        # Windows 콘솔(cp949)이 못 그리는 문자(—, ⚡ 등)는 안전하게 치환해 출력(크래시 방지).
+        enc = (sys.stdout.encoding or "utf-8")
+        print(line.encode(enc, "replace").decode(enc, "replace"), flush=True)
 
 
 def server_get(path, **params):
@@ -107,10 +125,31 @@ def google_search(query, num=10):
         log(f"  Google 예외: {str(e)[:80]}"); return []
 
 
-def do_search(query):
-    if SEARCH_PROVIDER == "google":
+def ddg_search(query):
+    """DuckDuckGo HTML 검색 — API 키 불필요(무료). PC의 실제 IP라 봇차단 약함.
+       결과 URL 리스트 반환. (대표님 지시: 키 없이 무료 발굴)"""
+    try:
+        r = requests.post("https://html.duckduckgo.com/html/",
+                          data={"q": query, "kl": "kr-kr"},
+                          headers={**UA, "Accept-Language": "ko-KR,ko;q=0.9"},
+                          timeout=20, verify=False)
+        if r.status_code >= 400:
+            log(f"  DDG {r.status_code}"); return []
+        out = []
+        for u in re.findall(r'<a[^>]+class="result__a"[^>]+href="([^"]+)"', r.text):
+            m = re.search(r'uddg=([^&]+)', u)          # DDG 리다이렉트 언랩
+            out.append(urllib.parse.unquote(m.group(1)) if m else u)
+        return out
+    except Exception as e:
+        log(f"  DDG 예외: {str(e)[:80]}"); return []
+
+
+def do_search(query, prov="ddg"):
+    if prov == "google" and GOOGLE_KEY:
         return google_search(query)
-    return brave_search(query)
+    if prov == "brave" and BRAVE_KEY:
+        return brave_search(query)
+    return ddg_search(query)   # 기본: 무료 DuckDuckGo
 
 
 def domain_of(url):
@@ -137,11 +176,11 @@ def run_once(max_queries):
     if not SERVER_TOKEN:
         log("SERVER_TOKEN이 비어 있습니다. 환경변수 CHIRASHI_TOKEN 또는 파일 CONFIG를 채우세요.")
         return
-    key_ok = (SEARCH_PROVIDER == "brave" and BRAVE_KEY) or \
-             (SEARCH_PROVIDER == "google" and GOOGLE_KEY and GOOGLE_CX)
-    if not key_ok:
-        log(f"검색 키가 없습니다({SEARCH_PROVIDER}). BRAVE_KEY 또는 GOOGLE_KEY/GOOGLE_CX를 채우세요.")
-        return
+    # ddg(무료)는 키 불필요. brave/google을 명시했는데 키가 없으면 자동으로 ddg로 폴백.
+    prov = SEARCH_PROVIDER
+    if prov == "brave" and not BRAVE_KEY: prov = "ddg"
+    if prov == "google" and not (GOOGLE_KEY and GOOGLE_CX): prov = "ddg"
+    log(f"검색 방식: {prov}{'(무료·키불필요)' if prov=='ddg' else ''}")
     log("서버에서 검색어·아는 도메인 받는 중…")
     try:
         info = server_get("/api/discovery/queries")
@@ -151,11 +190,11 @@ def run_once(max_queries):
         log(f"서버 응답 오류: {info.get('error')}"); return
     queries = info.get("queries", [])[:max_queries]
     skip = set(info.get("known_domains", [])) | set(info.get("rejected_domains", []))
-    log(f"검색어 {len(queries)}개 · 스킵 도메인 {len(skip)}개 · 제공자 {SEARCH_PROVIDER}")
+    log(f"검색어 {len(queries)}개 · 스킵 도메인 {len(skip)}개 · 제공자 {prov}")
 
     found = {}     # domain → url (도메인당 1개만; 서버가 게시판 축약)
     for i, q in enumerate(queries, 1):
-        urls = do_search(q)
+        urls = do_search(q, prov)
         new_here = 0
         for u in urls:
             if not looks_like_board(u):
