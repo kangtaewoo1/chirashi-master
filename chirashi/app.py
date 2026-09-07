@@ -2600,8 +2600,12 @@ def gnuboard_post(site, title, content_html, skip_login=False):
         while time.time()<deadline:
             _safe(lambda: dismiss_alerts(d))
             curl=_safe(lambda: d.current_url,'') or ''
-            # 1) 등록 성공 = 뷰/목록으로 이동
-            if 'wr_id=' in curl or 'board.php' in curl:
+            # 1) 등록 성공 = 실제 글번호(wr_id>=1)가 있는 뷰로 이동.
+            #   ★버그수정(2026-09-08 대표님 제보 "글 안 올라가는데 성공뜸"): 기존엔 'board.php' 문자열만
+            #     있어도 성공 처리 → 발행 실패 후 목록(board.php?bo_table=free)이나 wr_id=0으로 튕겨도
+            #     '성공'으로 오판, verified_post_url에 wr_id=0 저장(마짱 등 가짜성공). 실제 글번호 필수.
+            _m=re.search(r'[?&]wr_id=(\d+)',curl)
+            if 'write_update' not in curl and _m and int(_m.group(1))>0:
                 finish_captcha_task(captcha_tid,True,curl)
                 return True,curl
             # 2) write_update.php에 머물면 에러페이지(캡차불일치·금지단어 등) → 본문 확인
@@ -3901,6 +3905,15 @@ def reconcile_sites():
         sites=load_sites()
         for s in sites:
             edr=_is_error_or_demo_site(s)
+            # ★가짜 검증 무효화(2026-09-08 대표님 제보): gnuboard(board.php) verified_post_url인데
+            #   wr_id가 없거나 0이면 실제 글이 안 올라간 것(목록/에러페이지로 튕긴 걸 성공 오판).
+            #   → 검증 취소해서 발행 목록에서 빼고 재검증 유도(마짱 wr_id=0 등 가짜성공 제거).
+            _vpu=str(s.get('verified_post_url') or '')
+            if 'board.php' in _vpu and s.get('write_test_status')=='passed':
+                _wm=re.search(r'[?&]wr_id=(\d+)',_vpu)
+                if not _wm or int(_wm.group(1))<=0:
+                    s['write_test_status']='failed'; s['verified_post_url']=''
+                    s['last_fail_reason']='가짜 검증(글번호 없음) 무효화 — 실제 글 미등록. 재검증 필요'
             verified=str(s.get('verified_post_url') or '').startswith(('http://','https://'))
             # ★대표님이 직접 계정 넣어 추가한 사이트(manual_admin)는 자동삭제 보호 —
             #   테스트 실패로 rejected 돼도 목록에서 지우지 않는다(계정·설정 유지, 재시도 가능).
