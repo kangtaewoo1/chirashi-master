@@ -4558,7 +4558,14 @@ CAFE24_FRAGMENTS=['board/free/list.html 홍보','board/free/write.html 비회원
                   'article write 자유게시판 홍보','cafe24 커뮤니티 게시판 홍보 글쓰기','board/free 광고 환영 비회원',
                   'cafe24 쇼핑몰 자유게시판 글쓰기','cafe24 게시판 홍보 후기 등록','board write.html 비회원 홍보 환영',
                   'cafe24 자유게시판 업체등록 무료','cafe24 홍보게시판 010 문의','cafe24 게시판 광고 게시 가능',
-                  'board list.html 자유 홍보 010','cafe24 자유게시판 링크 등록']
+                  'board list.html 자유 홍보 010','cafe24 자유게시판 링크 등록',
+                  # ★황금사이트 패턴(2026-09-08 samjinvalve 분석·nimble 검증): 정상도메인+방치 개방게시판.
+                  #   실측: 아래 검색어로 samjinvalve·jinaedeul·selenus 등 상위노출 사이트 무더기 적중.
+                  'inurl:mod=document 홍보','inurl:mod=document 노래방','mod=document 홍보 게시판',
+                  'article 상품-qa 홍보','article 상품문의 홍보 010','article qa 노래방 홍보',
+                  'article 상품-사용후기 홍보','article voices-of-customers 홍보',
+                  '채용공고 홍보 노래방','채용공고 010 유흥','공지사항 홍보 글쓰기 010',
+                  'kboard 자유게시판 홍보','kboard mod=document 홍보']
 
 # ★Cafe24 게시판 '이름' × 업종 검색 (대표님 지시 2026-09-07):
 #  이런 사이트들은 URL이 /article/상품-qa/ 처럼 '게시판 이름'을 담는다. 그래서 구글/Brave에
