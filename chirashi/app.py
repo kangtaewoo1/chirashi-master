@@ -6431,7 +6431,7 @@ def chk():
     #  /api/logs·/api/worker-log = 읽기전용 로그. /api/sites·/api/candidates = 사이트/후보 관리.
     #  /api/test/* = 발행 테스트 트리거(등록 사이트에 실제 글1건 발행해 검증).
     _p=request.path
-    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/candidates') or _p.startswith('/api/test/'):
+    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/candidates','/api/unlocker/test') or _p.startswith('/api/test/'):
         tok=(request.args.get('token') or '').strip()
         cfgtok=(load_config().get('log_token') or '').strip()
         if cfgtok and tok==cfgtok:
@@ -7605,6 +7605,27 @@ def api_cfg():
     if c.get('unlocker_api_key'): c['unlocker_api_key']='***설정됨***'   # Web Unlocker API 키 노출 방지
     c.pop('password',None)
     return jsonify(c)
+
+@app.route('/api/unlocker/test',methods=['GET','POST'])
+def api_unlocker_test():
+    """Web Unlocker로 지정 URL(기본 타카고 게시판)을 불러와 CF 통과 여부를 진단. 토큰 접근 가능.
+       실제 발행 연결 전, Web Unlocker가 작동하는지+계정 검토 완료됐는지 확인용."""
+    cfg=load_config()
+    if not unlocker_enabled(cfg):
+        return jsonify({'ok':False,'error':'Web Unlocker 미설정(설정에서 활성화+API키 입력 필요)'})
+    target=(request.args.get('url') or 'https://takago.store/board/상품-qa/6/').strip()
+    html=unlocker_fetch(target,cfg,timeout=90)
+    if html is None:
+        return jsonify({'ok':False,'error':'Web Unlocker 요청 실패(로그 [Unlocker] 확인 — 계정 검토중이거나 잔액/키 문제)'})
+    low=html.lower()
+    # CF 챌린지 잔존 여부(뚫렸으면 'just a moment'·turnstile 없어야 함)
+    cf_blocked=any(k in low for k in ['just a moment','cf-chl','challenge-platform','_cf_chl','turnstile','사람인지'])
+    has_board=any(k in html for k in ['상품','게시','글쓰기','list','write','제목'])
+    return jsonify({'ok':True,'url':target,'bytes':len(html),
+                    'cf_blocked':cf_blocked,'looks_like_board':has_board,
+                    'verdict':('CF 통과 성공(게시판 로드됨)' if (not cf_blocked and has_board) else
+                               'CF 여전히 막힘' if cf_blocked else '응답은 왔으나 게시판 아님(URL 확인)'),
+                    'sample':html[:200]})
 
 @app.route('/api/openai/usage',methods=['GET'])
 def api_openai_usage():
