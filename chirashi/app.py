@@ -4768,6 +4768,20 @@ def screen_candidate(url, cfg=None):
     hint_blob=html+' '+title+' '+(url or '')+' '+res['bo_table']
     res['promo_hint']=(any(w in hint_blob for w in PROMO_WORDS)
                        or bool(re.search(r'bo_table=(promotion|hongbo|ad|link|partner|banner)',url or '',re.I)))
+    # ★황금사이트 신호(대표님 지시 2026-09-08): 게시판 목록에 전화번호(010 등)가 여러 개 있으면
+    #   이미 업자들이 활발히 홍보 중 = 발행 성공 확률 높은 방치·개방 게시판(samjinvalve식).
+    #   010-xxxx-xxxx / O1O / 공백·점·하이픈 구분 다 잡는다. 8개+면 '황금'으로 강가점.
+    try:
+        # 홍보글 전화번호는 010/O1O/공일공 + 임의 구분자(기호/공백 무엇이든) + 4자리 + 4자리.
+        # 예: 010 6613 4800, O1O+2748+5884, [010_5603◆7569], O1O—56O3=7569
+        #  → 숫자/O를 [0-9Oo] 로, 구분자를 비숫자 0~2글자로 넓게.  뒤 8자리(4+4) 핵심.
+        _sep=r'[^0-9A-Za-z가-힣]{0,3}'
+        _d=r'[0-9OoIl]'   # 0→O, 1→I/l 치환 흔함
+        pat=re.compile(_d+'1'+_d+_sep+_d+r'{3,4}'+_sep+_d+r'{4}')
+        found=set(pat.findall(html))
+        res['promo_phone_count']=len(found)
+    except Exception:
+        res['promo_phone_count']=0
     # 최근 글(날짜 패턴에서 가장 최근)
     try:
         ds=re.findall(r'(20\d{2})[-.](\d{1,2})[-.](\d{1,2})',html)
@@ -4851,6 +4865,12 @@ def score_candidate(c):
         elif lp>365: s-=10
     if not c.get('captcha'): s+=10
     if c.get('platform') in ('gnuboard','cafe24'): s+=5
+    # ★황금사이트 가점(대표님 지시): 게시판에 전화번호 홍보글 많으면 발행 성공확률↑.
+    #   8개+ = 확실한 활발 게시판(강가점 40), 3개+ = 가능성 있음(20), 1개+ = 약간(8).
+    _pc=int(c.get('promo_phone_count',0) or 0)
+    if _pc>=8: s+=40
+    elif _pc>=3: s+=20
+    elif _pc>=1: s+=8
     if c.get('ad_banned'): s-=50
     if c.get('captcha'): s-=30
     if c.get('login_required'): s-=20
