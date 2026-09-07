@@ -3952,7 +3952,9 @@ ERROR_PAGE_HINTS=('오류안내','오류 안내','에러페이지','에러 페�
                   '삭제된 페이지','접근할 수 없','잘못된 접근','not found','error page','forbidden','access denied',
                   # 대표님 지시: 글 없음/삭제/이동 안내가 뜨면 발행 무의미 → 즉시 탈락
                   '글이 존재하지 않','존재하지 않습니다','삭제되었거나 이동','삭제 되었거나','게시물이 존재하지',
-                  '게시글이 존재하지','원본글이 존재하지','이미 삭제된','삭제된 게시')
+                  '게시글이 존재하지','원본글이 존재하지','이미 삭제된','삭제된 게시',
+                  # 대표님 지시(2026-09-08): Cafe24 '다시 한번 확인해주세요 / 사라졌거나 변경' 안내 = 즉시 탈락
+                  '다시 한번 확인해주세요','다시 한 번 확인','사라졌거나 다른 페이지','주소를 다시 확인','페이지로 변경되었')
 DEMO_HOST_HINTS=('demo.','sample.','example.','sandbox.')   # 서브도메인 라벨(데모/샘플)
 DEMO_HOST_EXACT=('demo.webtro.kr','demo.sir.kr','webtro.kr','www.webtro.kr','g5.demo.sir.kr')
 
@@ -7602,10 +7604,20 @@ def api_unlocker_test():
     cfg=load_config()
     if not unlocker_enabled(cfg):
         return jsonify({'ok':False,'error':'Web Unlocker 미설정(설정에서 활성화+API키 입력 필요)'})
-    target=(request.args.get('url') or 'https://takago.store/board/상품-qa/6/').strip()
-    html=unlocker_fetch(target,cfg,timeout=90)
-    if html is None:
-        return jsonify({'ok':False,'error':'Web Unlocker 요청 실패(로그 [Unlocker] 확인 — 계정 검토중이거나 잔액/키 문제)'})
+    target=(request.args.get('url') or 'https://takago.store/board/product/list.html?board_no=6').strip()
+    # 진단은 raw 응답을 직접 받아 에러 상세를 그대로 노출(로그가 잘려 원인 파악 어려움).
+    import requests as _rq
+    key=str(cfg.get('unlocker_api_key') or '').strip(); zone=str(cfg.get('unlocker_zone') or 'web_unlocker1').strip()
+    try:
+        _r=_rq.post('https://api.brightdata.com/request',
+            headers={'Content-Type':'application/json','Authorization':f'Bearer {key}'},
+            json={'zone':zone,'url':target,'format':'raw'},timeout=90)
+    except Exception as e:
+        return jsonify({'ok':False,'error':f'요청 예외: {str(e)[:150]}','zone':zone})
+    if _r.status_code>=400:
+        return jsonify({'ok':False,'status':_r.status_code,'zone':zone,
+                        'error':'Web Unlocker 거부','detail':(_r.text or '')[:400]})
+    html=_r.text or ''
     low=html.lower()
     # CF 챌린지 잔존 여부(뚫렸으면 'just a moment'·turnstile 없어야 함)
     cf_blocked=any(k in low for k in ['just a moment','cf-chl','challenge-platform','_cf_chl','turnstile','사람인지'])
