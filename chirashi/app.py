@@ -2820,6 +2820,17 @@ def cafe24_post(site, title, content_html, skip_login=False):
     _use_sbr=bool(load_config().get('sbr_enabled'))
     d=get_driver(remote=_use_sbr)
     if _use_sbr: add_log(f'[Cafe24] Scraping Browser(원격 크롬) 사용 — {(site.get("name") or base)[:24]}')
+    # ★원격 크롬(Scraping Browser)은 CF를 백그라운드로 푸느라 d.get()이 page_load 완료를 못 받아
+    #   renderer timeout(대표님 제보). → 원격일 때 page_load_timeout 짧게(45s) + get 예외무시+window.stop.
+    #   CF는 Bright Data가 처리하므로 로드 완료 안 기다리고 폼을 폴링하면 됨.
+    def _nav(u):
+        try: d.get(u)
+        except Exception: pass
+        try: d.execute_script("try{window.stop();}catch(e){}")
+        except Exception: pass
+    if _use_sbr:
+        try: d.set_page_load_timeout(45)
+        except Exception: pass
     # Cloudflare 'Just a moment' 챌린지 대기(rental-zon 등 CF 뒤 Cafe24 — 실제 크롬이 자동 통과)
     def _wait_cf(sec=15):
         for _ in range(int(sec*2)):
@@ -2852,7 +2863,7 @@ def cafe24_post(site, title, content_html, skip_login=False):
 
     # 로그인 (skip_login=True면 가입 직후 로그인 세션 재사용 → 재로그인 건너뜀)
     if mid and not skip_login:
-        d.get(base+'/member/login.html'); time.sleep(2); _wait_cf(15); _pass_turnstile_if_present()
+        _nav(base+'/member/login.html'); time.sleep(2); _wait_cf(15); _pass_turnstile_if_present()
         _fill_first(d,["input[name='member_id']","input[name='login_id']","input[name='id']",
                        "#member_id","#loginId","input#id"],mid)
         _fill_first(d,["input[name='member_passwd']","input[name='passwd']","input[name='password']",
@@ -2904,21 +2915,23 @@ def cafe24_post(site, title, content_html, skip_login=False):
         #   판정을 놓친 것). 로그인폼 유무 판정은 무한로딩·리다이렉트에 취약 → 마이페이지를 직접 열어
         #   로그인폼으로 튕기는지로 확정한다. 로그인됐으면 마이페이지가 열리고, 아니면 로그인폼이 뜬다.
         try:
-            try: d.set_page_load_timeout(8)
-            except Exception: pass
+            if not _use_sbr:   # 원격은 시작부에서 45s로 설정 유지(짧게 덮으면 CF 처리중 타임아웃)
+                try: d.set_page_load_timeout(8)
+                except Exception: pass
             try: d.get(base+'/myshop/index.html')
             except Exception: pass
             try: d.execute_script("try{window.stop();}catch(e){}")
             except Exception: pass
             _mp0=time.time(); on_login_form=True
-            while time.time()-_mp0<12:
+            while time.time()-_mp0<(20 if _use_sbr else 12):
                 try:
                     on_login_form=bool(d.find_elements(By.CSS_SELECTOR,"input[name='member_passwd']"))
                     if not on_login_form: break
                 except Exception: pass
                 time.sleep(0.5)
-            try: d.set_page_load_timeout(25)
-            except Exception: pass
+            if not _use_sbr:
+                try: d.set_page_load_timeout(25)
+                except Exception: pass
             # 마이페이지가 로그인폼으로 안 튕겼으면 로그인 성공.
             _logged_in=not on_login_form
             add_log(f"[Cafe24로그인] {'성공' if _logged_in else '실패'} — {(site.get('name') or base)[:24]}"
@@ -2957,8 +2970,9 @@ def cafe24_post(site, title, content_html, skip_login=False):
         try: return bool(d.find_elements(By.CSS_SELECTOR,_SUBJ_SEL))
         except Exception: return False
     opened=False
-    try: d.set_page_load_timeout(8)   # get()이 오래 블록되지 않게 (finally에서 25로 복원)
-    except Exception: pass
+    if not _use_sbr:   # 원격(Scraping Browser)은 시작부 45s 유지 — 짧게 덮으면 CF 처리중 타임아웃
+        try: d.set_page_load_timeout(8)   # get()이 오래 블록되지 않게 (finally에서 25로 복원)
+        except Exception: pass
     try:
         for wu in write_urls:
             try: d.get(wu)
@@ -3006,8 +3020,9 @@ def cafe24_post(site, title, content_html, skip_login=False):
                     add_log(f"[Cafe24글쓰기폼] 목록경유 진입 성공 — {(site.get('name') or base)[:24]}")
                     break
     finally:
-        try: d.set_page_load_timeout(25)
-        except Exception: pass
+        if not _use_sbr:
+            try: d.set_page_load_timeout(25)
+            except Exception: pass
     if not opened:
         return False,'Cafe24 글쓰기 페이지 못찾음 — Turnstile/로그인/게시판번호 확인'
     add_log(f"[Cafe24글쓰기폼] 진입 성공 — {(site.get('name') or base)[:24]}")
