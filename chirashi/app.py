@@ -3164,6 +3164,20 @@ def cafe24_post(site, title, content_html, skip_login=False):
             try: d.set_page_load_timeout(25)
             except Exception: pass
     if not opened:
+        # ★진단(2026-09-08): 폼 못찾을 때 현재 페이지 URL·제목·입력필드명을 덤프 → 실제 셀렉터 파악.
+        #   (subject 셀렉터가 이 스킨과 안 맞는지, write.html이 폼을 안 그리는지 구분.)
+        try:
+            _du=d.execute_script("""
+              var q=function(s){return Array.from(document.querySelectorAll(s)).map(function(e){
+                  return (e.name||e.id||e.getAttribute('data-name')||'').slice(0,24);}).filter(Boolean);};
+              return {url:location.href,title:document.title.slice(0,50),
+                      inputs:q('input').slice(0,20),textareas:q('textarea').slice(0,6),
+                      iframes:q('iframe').slice(0,6),forms:q('form').slice(0,6)};
+            """) or {}
+            add_log(f"[Cafe24폼진단] url={str(_du.get('url',''))[:60]} title={_du.get('title','')}")
+            add_log(f"[Cafe24폼진단] inputs={_du.get('inputs')} textarea={_du.get('textareas')} iframe={_du.get('iframes')}")
+        except Exception as _e:
+            add_log(f"[Cafe24폼진단] 덤프실패 {str(_e)[:60]}")
         return False,'Cafe24 글쓰기 페이지 못찾음 — Turnstile/로그인/게시판번호 확인'
     add_log(f"[Cafe24글쓰기폼] 진입 성공 — {(site.get('name') or base)[:24]}")
     # ★대표님 지시(2026-09-08): 진짜 글쓰기 진입 성공한 경로를 사이트에 저장 → 다음부터 최우선 재사용
