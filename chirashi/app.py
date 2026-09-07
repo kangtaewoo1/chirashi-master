@@ -7478,18 +7478,31 @@ def api_usage():
                     'usdkrw':_usd_krw(cfg),  # USD→KRW 실시간 환율(원화 표시용)
                     'note':'금액은 관리자키 실측(OpenAI)을 제외하면 설정 단가 기준 추정치입니다. 횟수는 정확합니다.'})
 
+# ★발행 테스트는 '전용 워커(TEST1 스레드)'에서 직렬로만 실행 (대표님 지시).
+#   - 전용 스레드명 → get_driver가 그 스레드의 크롬 1개를 재사용(테스트마다 새 크롬 안 띄움).
+#   - 락으로 동시 1건만 → 크롬 난립으로 본 발행 워커(WR1·WR2)까지 죽던 문제 방지.
+_TEST_LOCK=threading.Lock()
+_TEST_BUSY=[False]
+
 def _run_write_test(sid):
-    """발행 테스트를 '끝까지' 수행하고 결과를 사이트에 기록. (백그라운드 스레드에서 실행 —
-       느린 게시판(Cafe24+Turnstile 등)이 100초 넘어 Cloudflare 524로 요청이 끊겨도
-       발행이 중간에 죽지 않도록. 대표님 rental-zon: 캡차까지 풀렸는데 524로 중단되던 문제 해결)."""
-    site=next((s for s in load_sites() if s.get('id')==sid),None)
-    if not site: return
+    """전용 테스트 워커에서 발행 테스트를 끝까지 수행하고 결과를 사이트에 기록.
+       do_post가 get_driver()를 부르면 이 스레드(이름 TEST1)의 전용 크롬을 재사용한다."""
+    got=_TEST_LOCK.acquire(blocking=False)
+    if not got:
+        return   # 이미 다른 테스트 진행 중 — 직렬화(동시 테스트 금지)
+    _TEST_BUSY[0]=True
     try:
+        site=next((s for s in load_sites() if s.get('id')==sid),None)
+        if not site: return
         cfg=load_config()
         set_site_flag(sid,status='testing',write_test_started_at=_kst_now().strftime('%Y-%m-%d %H:%M'))
         html,title=generate_article({'지역':'테스트','서비스':'테스트'},cfg)
-        ok,msg=do_post(site,title,html)
-        finalize_post(site,ok,fail_reason=('' if ok else str(msg)))
+        try:
+            ok,msg=do_post(site,title,html)
+        except Exception as e:
+            ok,msg=False,f'테스트 예외: {str(e)[:150]}'
+        try: finalize_post(site,ok,fail_reason=('' if ok else str(msg)))
+        except Exception: pass
         result_url=msg if ok and str(msg).startswith(('http://','https://')) else ''
         now=_kst_now().strftime('%Y-%m-%d %H:%M')
         if ok and result_url:
@@ -7497,7 +7510,6 @@ def _run_write_test(sid):
                           verified_post_url=result_url,last_structure_check=now,last_fail_reason='')
             add_log(f'[발행테스트 성공] {site.get("name") or site.get("site_url","")} → {result_url}')
         elif ok:
-            # 성공했다지만 URL 확인 불가 — manual_admin은 삭제 안 하고 상태만 표시.
             set_site_flag(sid,status='failed',write_test_status='failed',
                           verification_fail_reason='결과 URL/게시물 검색 결과 없음',last_fail_reason='결과 URL 없음')
             add_log(f'[발행테스트] {site.get("name")}: 성공응답이나 결과 URL 없음')
@@ -7505,8 +7517,15 @@ def _run_write_test(sid):
             set_site_flag(sid,status='failed',write_test_status='failed',last_fail_reason=str(msg)[:200])
             add_log(f'[발행테스트 실패] {site.get("name")}: {str(msg)[:80]}')
     except Exception as e:
-        set_site_flag(sid,status='failed',last_fail_reason=f'테스트 예외: {str(e)[:150]}')
+        try: set_site_flag(sid,status='failed',last_fail_reason=f'테스트 예외: {str(e)[:150]}')
+        except Exception: pass
         add_log(f'[발행테스트 오류] {str(e)[:80]}')
+    finally:
+        # 테스트 전용 크롬만 정리(본 발행 워커 WR1·WR2 크롬은 안 건드림)
+        try: reset_driver()
+        except Exception: pass
+        _TEST_BUSY[0]=False
+        _TEST_LOCK.release()
 
 @app.route('/api/test/<sid>',methods=['POST'])
 def api_test(sid):
@@ -7520,12 +7539,12 @@ def api_test(sid):
     interval_ok,remain=under_min_interval(site)
     if not interval_ok:
         return jsonify({'ok':False,'error':f'사이트 최소 발행 간격 미충족 ({max(1,(remain+59)//60)}분 남음)'})
-    # ★비동기 실행: 발행을 백그라운드 스레드에서 끝까지 수행하고 즉시 응답(524 회피).
-    #   결과는 사이트 상태(write_test_status·verified_post_url·last_fail_reason)로 확인.
-    if str(site.get('status'))=='testing':
-        return jsonify({'ok':True,'async':True,'message':'이미 테스트 진행 중입니다 — 잠시 후 사이트 상태 확인'})
-    threading.Thread(target=_run_write_test,args=(sid,),daemon=True).start()
-    return jsonify({'ok':True,'async':True,'message':'발행 테스트를 백그라운드에서 시작했습니다 — 1~2분 후 사이트 목록/상태에서 결과 확인'})
+    # 전용 테스트 워커가 이미 바쁘면 대기 안내(동시 테스트 금지 — 크롬 난립 방지)
+    if _TEST_BUSY[0]:
+        return jsonify({'ok':True,'async':True,'busy':True,'message':'다른 발행 테스트가 진행 중입니다 — 끝난 뒤 다시 시도하세요(테스트는 1건씩만).'})
+    # ★전용 스레드명 TEST1로 실행 → 그 스레드의 크롬 1개 재사용, 본 발행 워커와 격리.
+    threading.Thread(target=_run_write_test,args=(sid,),name='TEST1',daemon=True).start()
+    return jsonify({'ok':True,'async':True,'message':'전용 테스트 워커에서 발행 테스트 시작 — 1~2분 후 사이트 상태에서 결과 확인(본 발행에 영향 없음)'})
 
 # ---- 사이트 대량등록 (CSV: url,이름,게시판,아이디,비번,허용) ----
 @app.route('/api/sites/bulk',methods=['POST'])
