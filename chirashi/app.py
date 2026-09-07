@@ -1285,9 +1285,13 @@ def _kcaptcha_force_load(d):
        실제 kcaptcha_image.php 를 src에 강제 로드한 뒤 디코딩까지 기다린다.
        실이미지가 뜨면 True, 아니면 False(다른 플랫폼이면 조용히 False).
        세션 정합성: kcaptcha_session.php가 세션에 정답을 심고 kcaptcha_image.php는
-       그 정답을 그릴 뿐이므로, 심기 실패 시 stale 이미지를 풀지 않도록 abort한다."""
+       그 정답을 그릴 뿐이므로, 심기 실패 시 stale 이미지를 풀지 않도록 abort한다.
+       ★Cafe24 등 그누보드 아님(g5_captcha_url 없음)이면 아무것도 안 하고 즉시 False."""
     import time
     try:
+        # Cafe24 등 비그누보드 페이지에서 이 그누보드 전용 로직이 캡차를 건드리지 않게 조기 차단
+        if not d.execute_script("return typeof g5_captcha_url!=='undefined';"):
+            return False
         # 이미 진짜 이미지가 떠 있으면(dot.gif 아니고 naturalWidth>0) 세션 재생성 불필요
         already=d.execute_script("""
             var i=document.getElementById('captcha_img');
@@ -1566,6 +1570,8 @@ def _captcha_image_data(d):
             });
             return out;
         """) or []
+        try: add_log(f"[캡차fetch] img src 후보 {len(srcs)}개" + (f" · 예:{srcs[0][:50]}" if srcs else ""))
+        except Exception: pass
         if srcs:
             import requests as _rq, base64 as _b64
             from urllib.parse import urljoin as _uj
@@ -1582,10 +1588,12 @@ def _captcha_image_data(d):
                 try:
                     au=u if u.startswith('http') else _uj(cur or (d.current_url or ''),u)
                     rr=sess.get(au,timeout=12,verify=False)
-                    if rr.status_code<400 and rr.content and len(rr.content)>200:
-                        ct=(rr.headers.get('Content-Type') or 'image/png').split(';')[0]
-                        if ct.startswith('image') or True:
-                            return 'data:'+ct+';base64,'+_b64.b64encode(rr.content).decode()
+                    ct=(rr.headers.get('Content-Type') or '').split(';')[0].lower()
+                    try: add_log(f"[캡차fetch] GET {rr.status_code} ct={ct} bytes={len(rr.content or b'')}")
+                    except Exception: pass
+                    # 이미지 Content-Type이면서 충분히 크면 캡차로 인정(HTML 챌린지 회신 배제)
+                    if rr.status_code<400 and rr.content and len(rr.content)>200 and ct.startswith('image'):
+                        return 'data:'+(ct or 'image/png')+';base64,'+_b64.b64encode(rr.content).decode()
                 except Exception: continue
     except Exception:
         pass
