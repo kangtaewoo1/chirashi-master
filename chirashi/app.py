@@ -4559,9 +4559,15 @@ def screen_candidate(url, cfg=None):
     def get(u):
         try: return _rq.get(u,timeout=12,verify=False,headers=UA,allow_redirects=True)
         except Exception: return None
-    # bo_table 추출
+    # bo_table 추출 — ★비표준 파라미터(bo_id 등)도 인식(대표님 제보 codeb.dhu.ac.kr: bo_id=qna).
+    #   글쓰기 URL은 그 사이트가 쓰는 파라미터명 그대로 만들어야 하므로 bo_param에 기록.
+    res['bo_param']='bo_table'
     bm=re.search(r'bo_table=([A-Za-z0-9_]+)',url or '')
-    if bm: res['bo_table']=bm.group(1)
+    if bm:
+        res['bo_table']=bm.group(1)
+    else:
+        bi=re.search(r'\bbo_id=([A-Za-z0-9_]+)',url or '')
+        if bi: res['bo_table']=bi.group(1); res['bo_param']='bo_id'
     r=get(url)
     if not r or r.status_code>=400:
         res['note']=f'접속 실패({r.status_code if r else "timeout"})'; return res
@@ -4605,13 +4611,16 @@ def screen_candidate(url, cfg=None):
         wurls.append(url)
     for href in re.findall(r'href=["\']([^"\']+)["\']',html,re.I):
         hl=href.lower()
-        if ('write.php' in hl and 'bo_table=' in hl) or ('/board/write.html' in hl and 'board_no=' in hl):
+        if ('write.php' in hl and ('bo_table=' in hl or 'bo_id=' in hl)) or ('/board/write.html' in hl and 'board_no=' in hl):
             wurls.append(urljoin(r.url,href))
     if res['platform']=='cafe24':
         wurls.append(base+'/board/write.html?board_no=1')
     else:
         bo=res['bo_table'] or 'free'
-        wurls.append(base+f'/bbs/write.php?bo_table={bo}')
+        bp=res.get('bo_param','bo_table')   # bo_id 사이트는 그 파라미터명 그대로(codeb.dhu 등)
+        wurls.append(base+f'/bbs/write.php?{bp}={bo}')
+        if bp!='bo_table':   # 혹시 표준도 되는지 함께 시도
+            wurls.append(base+f'/bbs/write.php?bo_table={bo}')
     wurls=list(dict.fromkeys(wurls))[:6]
     for wu in wurls:
         wr=get(wu)
