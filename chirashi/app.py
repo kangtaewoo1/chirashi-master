@@ -2084,9 +2084,21 @@ def enable_html_mode(d):
             blob+=' '+(parent.text or '').lower()
         except Exception: pass
         if 'html' not in blob: continue
+        # ★cocobrony 등: <input name="html" onclick="html_auto_br(this)" value=""> — JS onclick이 걸려있어
+        #   execute_script 클릭은 리스너를 안 태워 체크만 되고 서버 html 모드가 안 켜질 수 있다.
+        #   → 실제 el.click()으로 onclick(html_auto_br) 발화시키고, 안 되면 JS폴백. 체크 상태 확정.
         try:
-            if not el.is_selected(): d.execute_script('arguments[0].click()',el)
-            return bool(el.is_selected())
+            if not el.is_selected():
+                try: el.click()                       # 실제 클릭 — onclick 리스너 발화
+                except Exception:
+                    try: d.execute_script('arguments[0].click()',el)
+                    except Exception: pass
+            # value가 빈칸이면 그누보드가 html모드로 못 받을 수 있어 강제로 'html1' 세팅.
+            try:
+                if el.is_selected() and not (el.get_attribute('value') or '').strip():
+                    d.execute_script("arguments[0].value='html1';",el)
+            except Exception: pass
+            if el.is_selected(): return True
         except Exception: continue
     # WordPress/KBoard 클래식 에디터는 HTML 체크박스 대신
     # '비주얼 / 코드' 탭을 제공한다. 코드 탭을 누르면 실제 제출용
