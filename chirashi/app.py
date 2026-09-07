@@ -3021,6 +3021,20 @@ def cafe24_post(site, title, content_html, skip_login=False):
         write_urls=[base+'/board/product/write.html?board_no=1',
                     base+'/board/write.html?board_no=1', base+'/board/free/write.html']
         list_urls=[base+'/board/product/list.html?board_no=1']
+    # ★대표님 지시(2026-09-08): '메인도메인만 저장 말고 진짜 글 쓸 수 있는 링크까지 저장'.
+    #   지난 발행/검증에서 진입 성공한 경로(write_entry_url)가 저장돼 있으면 그걸 최우선으로 쓴다
+    #   (매번 추측해 홈으로 튕기던 문제 해결). Cafe24 /article/게시판명/board_no/ SEO-URL(글목록)에는
+    #   로그인 시 '글쓰기' 버튼이 있어 세션 유지된 채 진입된다(대표님 발견 /article/상품-qa/6/...).
+    _saved_entry=str(site.get('write_entry_url') or '').strip()
+    if _saved_entry.startswith('http'):
+        if 'write' in _saved_entry.lower():
+            write_urls.insert(0,_saved_entry)      # 저장된 게 write.html이면 write 최우선
+        else:
+            list_urls.insert(0,_saved_entry)       # 저장된 게 목록/글 페이지면 클릭경유 최우선
+    # /article/게시판명/board_no/ 형태 글목록도 클릭경유 후보로(로그인 세션에서 글쓰기 버튼 노출).
+    _art_name=str(site.get('article_board_name') or '').strip()
+    if _art_name and bo.isdigit():
+        list_urls.insert(0, base+f'/article/{_art_name}/{bo}/')
     # ★rental-zon 등 Cafe24 스킨의 write.html은 광고/로그위젯 iframe으로 페이지 'load'
     #   이벤트가 늦거나 안 온다. eager로도 d.get()이 page_load_timeout(25초) 블록되다
     #   예외 → write_urls 3개 × 25초 헛돌다 실패했다(rental-zon fail_streak).
@@ -3062,6 +3076,21 @@ def cafe24_post(site, title, content_html, skip_login=False):
         # ★목록 경유 폴백 — write.html 직접접근이 홈으로 리다이렉트되는 스킨(takago 등) 대비.
         #   실측(2026-09-07): takago는 write.html 직접 get 시 홈으로 튕기나, 목록의 '글쓰기'
         #   링크(a[href*='write.html']) 클릭으로는 정상 진입됨(로그인 세션 유지).
+        # ★로그인 세션의 홈에서 /article/게시판명/board_no/ 링크를 긁어 그 글목록을 클릭경유 후보에 추가.
+        #   (대표님 발견: 이 SEO-URL 글목록/글 페이지에 로그인 시 '글쓰기' 버튼이 있어 세션유지 진입됨.
+        #    write.html 직접 get은 홈으로 튕기지만 이 경로는 됨.) 저장된 게 없을 때만 1회 시도.
+        if not opened and bo.isdigit() and not _art_name:
+            try:
+                d.get(base+'/'); _wait_cf(10); _pass_turnstile_if_present()
+                _home=d.page_source or ''
+                _am=re.search(r'/article/([^/"\']+)/'+re.escape(bo)+r'/', _home)
+                if _am:
+                    _an=_am.group(1); _aurl=base+f'/article/{_an}/{bo}/'
+                    if _aurl not in list_urls: list_urls.insert(0,_aurl)
+                    try: set_site_flag(site.get('id'),article_board_name=_an); site['article_board_name']=_an
+                    except Exception: pass
+                    add_log(f"[Cafe24경로탐지] 홈에서 글목록 발견 — /article/{_an}/{bo}/")
+            except Exception: pass
         if not opened:
             for lu in list_urls:
                 try: d.get(lu)
@@ -3069,9 +3098,19 @@ def cafe24_post(site, title, content_html, skip_login=False):
                 _wait_cf(12); _pass_turnstile_if_present(); dismiss_alerts(d)
                 try: _lc=(d.current_url or '')
                 except Exception: _lc=''
-                # 목록 페이지의 '글쓰기' 링크 클릭(직접 get이 아니라 클릭이라 세션/리퍼러 유지)
+                # 목록/글 페이지의 '글쓰기' 링크 클릭(직접 get이 아니라 클릭이라 세션/리퍼러 유지).
+                #   href[write] 뿐 아니라 Cafe24 스킨의 글쓰기 버튼(board_write·onclick·텍스트)도 폭넓게.
                 try:
-                    wb=None; _links=d.find_elements(By.CSS_SELECTOR,"a[href*='write.html'],a[href*='/write']")
+                    wb=None
+                    _links=d.find_elements(By.CSS_SELECTOR,
+                        "a[href*='write.html'],a[href*='/write'],a[href*='board_write'],"
+                        "a[onclick*='write'],a[class*='write'],a[data-ez-item*='write']")
+                    if not _links:   # 텍스트 '글쓰기'/'작성' 앵커·버튼 폴백(href 없는 onclick 버튼 대비)
+                        for a in d.find_elements(By.CSS_SELECTOR,"a,button"):
+                            try:
+                                if a.is_displayed() and any(t in (a.text or '') for t in ('글쓰기','글 쓰기','작성하기','새 글')):
+                                    _links=[a]; break
+                            except Exception: pass
                     add_log(f"[Cafe24목록경유] 목록:{_lc.split('//')[-1][:44]} write링크 {len(_links)}개")
                     for a in _links:
                         try:
@@ -3096,6 +3135,17 @@ def cafe24_post(site, title, content_html, skip_login=False):
     if not opened:
         return False,'Cafe24 글쓰기 페이지 못찾음 — Turnstile/로그인/게시판번호 확인'
     add_log(f"[Cafe24글쓰기폼] 진입 성공 — {(site.get('name') or base)[:24]}")
+    # ★대표님 지시(2026-09-08): 진짜 글쓰기 진입 성공한 경로를 사이트에 저장 → 다음부터 최우선 재사용
+    #   (매번 추측해 홈으로 튕기던 문제 해결). 현재 write 폼 URL을 write_entry_url로 저장.
+    try:
+        _entry=(d.current_url or '')
+        if _entry.startswith('http') and _entry!=str(site.get('write_entry_url') or ''):
+            _flds={'write_entry_url':_entry}
+            _am=re.search(r'/article/([^/]+)/(\d+)/',_entry)   # /article/게시판명/board_no/ 면 게시판명도 저장
+            if _am: _flds['article_board_name']=_am.group(1)
+            set_site_flag(site.get('id'),**_flds); site.update(_flds)
+            add_log(f"[Cafe24경로저장] 글쓰기 진입경로 저장 — {_entry.split('//')[-1][:50]}")
+    except Exception: pass
 
     # CF 챌린지가 이미 통과됐으므로, 그래도 남은 진짜 차단(403 등)만 중단
     if _page_is_blocked(d): return False,'보안 차단 페이지(403 등) — 즉시 중단'
