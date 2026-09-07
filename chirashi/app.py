@@ -6679,7 +6679,7 @@ def chk():
     #  /api/logs·/api/worker-log = 읽기전용 로그. /api/sites·/api/candidates = 사이트/후보 관리.
     #  /api/test/* = 발행 테스트 트리거(등록 사이트에 실제 글1건 발행해 검증).
     _p=request.path
-    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/candidates','/api/unlocker/test','/api/sbr/test') or _p.startswith('/api/test/'):
+    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/candidates','/api/candidates/ingest','/api/discovery/queries','/api/unlocker/test','/api/sbr/test') or _p.startswith('/api/test/'):
         tok=(request.args.get('token') or '').strip()
         cfgtok=(load_config().get('log_token') or '').strip()
         if cfgtok and tok==cfgtok:
@@ -6888,6 +6888,53 @@ def api_cand_manual():
         except Exception as e: add_log(f'[수동추가 파이프라인오류] {str(e)[:80]}')
     threading.Thread(target=_screen_then_pipeline,daemon=True).start()
     return jsonify({'ok':True,'added':n,'screening':True,'auto_test':True})
+
+@app.route('/api/candidates/ingest',methods=['POST'])
+def api_cand_ingest():
+    """★PC 자동 발굴 연동(대표님 지시 2026-09-08): 대표님 PC의 발굴 스크립트가 찾은 URL을
+       토큰으로 전송 → 서버가 후보 등록 + 검수 + 발행테스트까지 자동 처리.
+       (수동탭 addManual과 달리 토큰 접근 가능 — 로그인 없이 PC가 POST. source='manual'로
+        auto_pipeline 최우선 처리.) body: {urls:[...] 또는 "줄바꿈 문자열", note?} """
+    d=request.get_json(silent=True) or {}; cfg=load_config()
+    raw=d.get('urls','')
+    if isinstance(raw,list):
+        urls=[str(x).strip() for x in raw if str(x).strip().startswith('http')]
+    else:
+        urls=[x.strip() for x in str(raw or '').splitlines() if x.strip().startswith('http')]
+    urls=list(dict.fromkeys(urls))[:100]   # 중복 제거·1회 100개 상한(부하·탐지 회피)
+    if not urls: return jsonify({'ok':False,'error':'http로 시작하는 URL이 없습니다'})
+    n=add_candidates_from([{'url':u} for u in urls],cfg,source='manual')
+    def _screen_then_pipeline():
+        try: screen_pending(limit=len(urls))
+        except Exception as e: add_log(f'[PC발굴 검수오류] {str(e)[:80]}')
+        try:
+            add_log(f'[PC발굴 연동] {len(urls)}개 수신 → 검수 완료, 발행테스트 시작')
+            auto_pipeline_once(limit=max(len(urls),3))
+        except Exception as e: add_log(f'[PC발굴 파이프라인오류] {str(e)[:80]}')
+    threading.Thread(target=_screen_then_pipeline,daemon=True).start()
+    add_log(f'[PC발굴 연동] URL {len(urls)}개 수신(신규 {n}개) — 자동 검수·발행테스트 진행')
+    return jsonify({'ok':True,'received':len(urls),'added':n,'screening':True,'auto_test':True})
+
+@app.route('/api/discovery/queries',methods=['GET'])
+def api_discovery_queries():
+    """★PC 발굴 스크립트가 '서버와 동일한 검색어'로 발굴하도록 쿼리 목록 제공(단일 소스).
+       토큰 접근. PC는 이 쿼리로 자기 검색키로 검색→결과 URL을 /api/candidates/ingest로 전송.
+       (쿼리 로직이 서버에만 있어 PC스크립트와 드리프트 안 남.)"""
+    cfg=load_config()
+    provider=(cfg.get('search_provider') or 'brave').lower()
+    try: qs=_board_finder_queries(provider)
+    except Exception as e:
+        return jsonify({'ok':False,'error':f'쿼리 생성 실패: {str(e)[:80]}'})
+    # 이미 등록·탈락한 도메인은 PC가 스킵하도록 함께 전달(중복 검색·전송 방지).
+    try: known={_domain_of(s.get('site_url','')) for s in load_sites()}
+    except Exception: known=set()
+    try:
+        raw=load_json(REJECTED_DOMAINS_FILE,{})
+        rej=set((raw.get('domains') if isinstance(raw,dict) else raw) or [])
+    except Exception: rej=set()
+    return jsonify({'ok':True,'provider':provider,'queries':qs[:400],
+                    'known_domains':sorted(d for d in known if d)[:3000],
+                    'rejected_domains':sorted(str(d).lower() for d in rej)[:5000]})
 
 @app.route('/api/rejected-domains',methods=['GET','POST'])
 def api_rejected_domains():
