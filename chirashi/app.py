@@ -3832,6 +3832,7 @@ def under_min_interval(site):
     except Exception: return True,0
 
 FAIL_STREAK_DROP=3   # 연속 실패 이 횟수 이상이면 자동 탈락(도배·헛발행 방지)
+FAIL_STREAK_LOCK=15  # manual_admin(대표님 등록) 사이트도 이 횟수 이상 연속 실패면 발행 잠금(삭제X, 재허용 가능)
 
 def finalize_post(site,ok,fail_reason=''):
     """상태 갱신 + 성공 시 오늘 발행 카운트 증가 + 연속 실패 카운트(fail_streak) 추적.
@@ -3905,6 +3906,12 @@ def reconcile_sites():
             #   테스트 실패로 rejected 돼도 목록에서 지우지 않는다(계정·설정 유지, 재시도 가능).
             if s.get('registration_source')=='manual_admin' and not edr:
                 if s.get('status')=='rejected': s['status']='idle'   # 재시도 가능하게 상태 완화
+                # 단, 연속 실패가 심하면(15회+) permission만 꺼서 발행 순회에서 제외 — 실패로그 도배 방지.
+                #   삭제가 아니라 잠금이라 계정·설정 유지되고, 대표님이 원인 고친 뒤 다시 켤 수 있음.
+                if int(s.get('fail_streak',0) or 0)>=FAIL_STREAK_LOCK and s.get('permission'):
+                    s['permission']=False
+                    s['auto_drop_reason']=f'연속 실패 {s.get("fail_streak")}회 — 발행 잠금(원인 확인 후 재허용)'
+                    s['auto_dropped_at']=now; locked+=1
                 kept.append(s); continue
             # 검증된 사이트는 오류/데모가 아닌 한 보호(일시 실패로 삭제 안 함)
             if verified and not edr:
