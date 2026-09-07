@@ -1008,6 +1008,10 @@ def _auto_subkeywords(main):
        - 브랜드 = 구/동 + 관련 업종(랜덤) — 예: 교동가라오케"""
     region,service=_split_main_keyword(main)
     if not region: region=str(main or '').strip()
+    # ★대표님 지시(2026-09-08): 자동생성 지역명에 '동'이 빠지는 문제 → 행정구역 접미사(동/읍/면/리/가/구/시)로
+    #   끝나지 않으면 '동'을 붙인다. 이미 부여'읍'처럼 접미사가 있으면 그대로 둔다. 숫자로 끝나면(계화동24시 등) 예외.
+    if region and not re.search(r'(동|읍|면|리|가|구|시|군|역)$',region) and not re.search(r'\d$',region):
+        region=region+'동'
     svc=service or random.choice(RELATED_POOL)
     # 브랜드: 그 동/구에 매칭된 다른 관련 업종을 붙여 지역성 유지(중복 방지 위해 svc와 다르게)
     pool=[x for x in RELATED_POOL if x!=svc] or RELATED_POOL
