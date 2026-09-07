@@ -4658,7 +4658,10 @@ def add_candidates_from(items, cfg, source='search'):
             cands.append(rec)
             added+=1
         save_cands(cands)
-    if source!='manual' and (blocked_unreachable or blocked_write or blocked_rejected or blocked_errpage):
+    # 사전필터 로그는 제외 합계가 클 때(5건 이상)만 남긴다 — 발굴 배치마다 자잘한 제외가
+    # 화면을 도배하던 문제(대표님 지시). 소수 제외는 정상이라 굳이 안 남김.
+    _blk=blocked_unreachable+blocked_write+blocked_rejected+blocked_errpage
+    if source!='manual' and _blk>=5:
         add_log(f'[후보 사전필터] 접속불가 {blocked_unreachable} · 오류페이지 {blocked_errpage} · 글쓰기폼없음 {blocked_write} · 영구탈락 {blocked_rejected} 제외')
     return added
 
@@ -5405,14 +5408,7 @@ def auto_pipeline_once(limit=5):
           and (c.get('domain') or '').lower() not in site_domains
           and c.get('reachable') and _has_write_path(c)
           and float(c.get('last_pipeline_at',0) or 0) < _cool]
-    # 진단: pend가 비면 각 조건이 몇 개를 걸렀는지 1줄로 남긴다(왜 '처리 0'인지 파악용).
-    if not pend:
-        _rdy=[c for c in cands if c.get('screened') and c.get('status')=='ready']
-        _d_park=sum(1 for c in _rdy if c.get('parked') or c.get('illegal') or c.get('ad_banned'))
-        _d_reg=sum(1 for c in _rdy if (c.get('domain') or '').lower() in site_domains)
-        _d_reach=sum(1 for c in _rdy if not c.get('reachable'))
-        _d_write=sum(1 for c in _rdy if not _has_write_path(c))
-        add_log(f'[파이프라인 진단] ready {len(_rdy)}개 중 제외 — 주차/불법/광고 {_d_park} · 이미등록 {_d_reg} · 접속불가 {_d_reach} · 글쓰기경로없음 {_d_write}')
+    # (파이프라인 진단 로그 제거 — 처리할 후보 없을 때마다 매 주기 찍혀 화면 도배. 대표님 지시)
     # 비회원 글쓰기 가능(로그인 불필요) 게시판을 먼저 처리한다. 로그인 필요 게시판은
     # 이메일 인증 등으로 자동가입이 막히는 경우가 많아 배치 슬롯을 낭비하기 쉽다.
     def _prio(c):
@@ -5567,7 +5563,9 @@ def auto_pipeline_once(limit=5):
             done+=1
             reset_driver(); time.sleep(2)
     dropped=reconcile_sites()   # 파이프라인 후 사이트 목록 최신화(안 되는 곳 자동삭제)
-    add_log(f'[자동파이프라인] 처리 {done} · 가입 {signed} · 등록 {registered}'+(f' · 자동삭제 {dropped}' if dropped else ''))
+    # 공회전(처리·가입·등록·삭제 전부 0)은 로그 생략 — 화면 도배 방지(대표님 지시).
+    if done or signed or registered or dropped:
+        add_log(f'[자동파이프라인] 처리 {done} · 가입 {signed} · 등록 {registered}'+(f' · 자동삭제 {dropped}' if dropped else ''))
     return {'ok':True,'processed':done,'signed_up':signed,'registered':registered,'dropped':dropped,'results':results}
 
 def _cand_set(cid, **fields):
@@ -5834,10 +5832,12 @@ def pipeline_loop():
             cfg=load_config()
             if cfg.get('auto_pipeline_enabled'):
                 _t0=time.time()
-                add_log('[전환루프] 파이프라인 1회 시작')
                 r=auto_pipeline_once(limit=int(cfg.get('auto_pipeline_batch',3) or 3))
                 _el=int(time.time()-_t0)
-                add_log(f'[전환루프] 1회 완료 ({_el}초) — 처리 {r.get("processed",0) if isinstance(r,dict) else "?"} · 가입 {r.get("signed_up",0) if isinstance(r,dict) else "?"} · 등록 {r.get("registered",0) if isinstance(r,dict) else "?"}')
+                # 공회전(처리·가입·등록 전부 0)은 로그 생략 — 화면 도배 방지(대표님 지시).
+                #   뭔가 실제로 처리됐을 때만 완료 로그를 남긴다.
+                if isinstance(r,dict) and (r.get('processed',0) or r.get('signed_up',0) or r.get('registered',0)):
+                    add_log(f'[전환루프] 1회 완료 ({_el}초) — 처리 {r.get("processed",0)} · 가입 {r.get("signed_up",0)} · 등록 {r.get("registered",0)}')
         except Exception as e:
             add_log(f'[전환루프 오류] {str(e)[:120]}')
         try: time.sleep(int(load_config().get('pipeline_interval_sec',120) or 120))
