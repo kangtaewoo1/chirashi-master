@@ -2760,16 +2760,21 @@ def cafe24_post(site, title, content_html, skip_login=False):
 
     # 글쓰기 페이지 후보 (bo_table 이 숫자면 board_no, 문자면 board 경로)
     # ★rental-zon 등 스킨은 /board/product/write.html?board_no=N 형태 — product 경로도 시도(대표님 실측).
-    write_urls=[]
+    write_urls=[]; list_urls=[]
     if bo.isdigit():
         write_urls=[base+f'/board/product/write.html?board_no={bo}',
                     base+f'/board/write.html?board_no={bo}', base+f'/board/{bo}/write.html']
+        # 목록 경유 폴백용 — write.html 직접접근이 홈으로 리다이렉트되는 스킨(takago 등) 대비.
+        list_urls=[base+f'/board/product/list.html?board_no={bo}',
+                   base+f'/board/list.html?board_no={bo}']
     elif bo:
         write_urls=[base+f'/board/{bo}/write.html', base+f'/board/product/write.html?board_no=1',
                     base+f'/board/write.html?board_no=1', base+f'/board/write.html?board_no={bo}']
+        list_urls=[base+f'/board/{bo}/list.html', base+f'/board/product/list.html?board_no=1']
     else:
         write_urls=[base+'/board/product/write.html?board_no=1',
                     base+'/board/write.html?board_no=1', base+'/board/free/write.html']
+        list_urls=[base+'/board/product/list.html?board_no=1']
     # ★rental-zon 등 Cafe24 스킨의 write.html은 광고/로그위젯 iframe으로 페이지 'load'
     #   이벤트가 늦거나 안 온다. eager로도 d.get()이 page_load_timeout(25초) 블록되다
     #   예외 → write_urls 3개 × 25초 헛돌다 실패했다(rental-zon fail_streak).
@@ -2803,6 +2808,33 @@ def cafe24_post(site, title, content_html, skip_login=False):
                 time.sleep(1)
                 if _form_ready(): opened=True
             if opened: break
+        # ★목록 경유 폴백 — write.html 직접접근이 홈으로 리다이렉트되는 스킨(takago 등) 대비.
+        #   실측(2026-09-07): takago는 write.html 직접 get 시 홈으로 튕기나, 목록의 '글쓰기'
+        #   링크(a[href*='write.html']) 클릭으로는 정상 진입됨(로그인 세션 유지).
+        if not opened:
+            for lu in list_urls:
+                try: d.get(lu)
+                except Exception: pass
+                _wait_cf(12); _pass_turnstile_if_present(); dismiss_alerts(d)
+                # 목록 페이지의 '글쓰기' 링크 클릭(직접 get이 아니라 클릭이라 세션/리퍼러 유지)
+                try:
+                    wb=None
+                    for a in d.find_elements(By.CSS_SELECTOR,"a[href*='write.html'],a[href*='/write']"):
+                        try:
+                            if a.is_displayed(): wb=a; break
+                        except Exception: pass
+                    if not wb: continue
+                    d.execute_script("arguments[0].click();",wb)
+                except Exception:
+                    continue
+                _wait_cf(12); _pass_turnstile_if_present(); dismiss_alerts(d)
+                deadline=time.time()+18
+                while time.time()<deadline:
+                    if _form_ready(): opened=True; break
+                    time.sleep(0.5)
+                if opened:
+                    add_log(f"[Cafe24글쓰기폼] 목록경유 진입 성공 — {(site.get('name') or base)[:24]}")
+                    break
     finally:
         try: d.set_page_load_timeout(25)
         except Exception: pass
