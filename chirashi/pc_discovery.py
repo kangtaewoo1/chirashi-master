@@ -46,8 +46,10 @@ except Exception:
     pass
 
 # ─────────────────────── CONFIG ───────────────────────
-SERVER      = os.environ.get("CHIRASHI_SERVER", "https://google.twseo.kr")
-SERVER_TOKEN= os.environ.get("CHIRASHI_TOKEN", "")   # 찌라시 설정탭 '로그 토큰'
+# 토큰을 여기 기본값으로 넣어 어떻게 실행하든(배치 없이 py 직접 실행 포함) 바로 동작하게 함.
+# (로그조회용 토큰. 서버 설정탭 '로그 토큰'과 동일. 대표님 시스템이라 내장.)
+SERVER      = os.environ.get("CHIRASHI_SERVER") or "https://google.twseo.kr"
+SERVER_TOKEN= os.environ.get("CHIRASHI_TOKEN") or "cae3aaa53d6f3576a1c1f6a258f79129"
 # 검색 제공자: 'ddg'(무료·키불필요, 기본) / 'brave' / 'google'. PC는 대표님 실제 IP라
 #  DuckDuckGo 무료 검색이 서버보다 훨씬 덜 차단됨 → 키 없이 발굴 가능(대표님 지시 '키없이 무료').
 SEARCH_PROVIDER = os.environ.get("PC_SEARCH_PROVIDER", "ddg")
