@@ -3043,8 +3043,12 @@ def cafe24_post(site, title, content_html, skip_login=False):
             # 첫 진입 시 Turnstile/CF 챌린지면 통과 후 복귀
             _wait_cf(12); _pass_turnstile_if_present()
             dismiss_alerts(d)
-            # subject 입력칸이 나타날 때까지 최대 ~18초 폴링(폼은 JS로 그려짐 — 로딩 끊지 않음)
-            deadline=time.time()+18
+            # ★진단(2026-09-08): 어느 write_url에서 어디로 갔는지 로그 — 홈 리다이렉트/미렌더 구분용.
+            try: _cur=(d.current_url or '')
+            except Exception: _cur=''
+            add_log(f"[Cafe24글쓰기시도] {wu.split('/board/')[-1][:40]} → 현재:{_cur.split('//')[-1][:50]}")
+            # subject 입력칸이 나타날 때까지 폴링(폼은 JS로 그려짐 — 로딩 끊지 않음). 원격은 넉넉히.
+            deadline=time.time()+(28 if _use_sbr else 18)
             while time.time()<deadline:
                 if _form_ready(): opened=True; break
                 time.sleep(0.5)
@@ -3063,10 +3067,13 @@ def cafe24_post(site, title, content_html, skip_login=False):
                 try: d.get(lu)
                 except Exception: pass
                 _wait_cf(12); _pass_turnstile_if_present(); dismiss_alerts(d)
+                try: _lc=(d.current_url or '')
+                except Exception: _lc=''
                 # 목록 페이지의 '글쓰기' 링크 클릭(직접 get이 아니라 클릭이라 세션/리퍼러 유지)
                 try:
-                    wb=None
-                    for a in d.find_elements(By.CSS_SELECTOR,"a[href*='write.html'],a[href*='/write']"):
+                    wb=None; _links=d.find_elements(By.CSS_SELECTOR,"a[href*='write.html'],a[href*='/write']")
+                    add_log(f"[Cafe24목록경유] 목록:{_lc.split('//')[-1][:44]} write링크 {len(_links)}개")
+                    for a in _links:
                         try:
                             if a.is_displayed(): wb=a; break
                         except Exception: pass
@@ -3075,7 +3082,7 @@ def cafe24_post(site, title, content_html, skip_login=False):
                 except Exception:
                     continue
                 _wait_cf(12); _pass_turnstile_if_present(); dismiss_alerts(d)
-                deadline=time.time()+18
+                deadline=time.time()+(28 if _use_sbr else 18)
                 while time.time()<deadline:
                     if _form_ready(): opened=True; break
                     time.sleep(0.5)
