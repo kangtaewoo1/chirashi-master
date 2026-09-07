@@ -620,6 +620,10 @@ def load_config():
        'discover_interval_sec':600,   # 발굴 주기 10분(크레딧 절약). 목표 도달 시 자동 중단
        'pipeline_interval_sec':120,   # 전환(후보→가입→발행테스트) 전용 루프 주기 — 발굴과 독립
        'login_signup_per_cycle':5,    # 로그인 필요 게시판 자동가입 주기당 처리 수(IMAP 설정 후 백로그 소진용)
+       # ★Bright Data 프록시(CF 걸린 Cafe24 로그인 우회용) — 크레덴셜 넣으면 활성. 비면 미사용.
+       #   Residential Proxies 또는 Web Unlocker의 호스트/포트/유저/비번. CF 사이트에만 선택적 사용(비용↓).
+       'proxy_enabled':False,'proxy_host':'','proxy_port':'','proxy_user':'','proxy_pass':'',
+       'proxy_only_for_cf':True,   # True=Cloudflare 감지된 사이트에만 프록시 사용(비용 절약), False=전체
        'log_token':'cae3aaa53d6f3576a1c1f6a258f79129'}   # 읽기전용 로그 조회 토큰(?token= 로 /api/logs·/api/worker-log 접근)
     c=load_json(CONFIG_FILE,None)
     if c is None or not isinstance(c,dict): save_json(CONFIG_FILE,d); return d.copy()
@@ -669,6 +673,37 @@ def load_config():
         try: save_json(CONFIG_FILE,c)
         except Exception: pass
     return c
+
+def get_proxies(cfg=None):
+    """Bright Data 등 프록시 크레덴셜이 설정돼 있으면 requests용 proxies dict를 반환, 없으면 None(직접연결).
+       ★크레덴셜 오면 바로 쓰도록 미리 준비(2026-09-08). 실제 발행 로직 연결은 크레덴셜 확인 후.
+       host/port/user/pass 중 host·port만 있어도 동작(인증 없는 프록시 허용)."""
+    cfg=cfg or load_config()
+    if not cfg.get('proxy_enabled'): return None
+    host=str(cfg.get('proxy_host') or '').strip()
+    port=str(cfg.get('proxy_port') or '').strip()
+    if not host or not port: return None
+    user=str(cfg.get('proxy_user') or '').strip()
+    pw=str(cfg.get('proxy_pass') or '').strip()
+    auth=(urllib.parse.quote(user,safe='')+':'+urllib.parse.quote(pw,safe='')+'@') if user else ''
+    url=f'http://{auth}{host}:{port}'
+    return {'http':url,'https':url}
+
+def proxy_get(url, cfg=None, use_proxy=None, **kw):
+    """requests.get 래퍼 — use_proxy=True면 프록시 경유(CF 우회), None/False면 직접.
+       프록시 요청 실패 시 직접연결로 1회 폴백(프록시 죽어도 발행 안 끊기게)."""
+    import requests as _rq
+    cfg=cfg or load_config()
+    kw.setdefault('timeout',15); kw.setdefault('verify',False)
+    kw.setdefault('headers',{'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36'})
+    proxies=get_proxies(cfg) if use_proxy else None
+    try:
+        return _rq.get(url,proxies=proxies,**kw)
+    except Exception:
+        if proxies:   # 프록시 실패 → 직접연결 폴백
+            try: return _rq.get(url,proxies=None,**kw)
+            except Exception: return None
+        return None
 
 TWOCAPTCHA_CACHE_FILE=os.path.join(DATA_DIR,'twocaptcha_balance.json')
 
@@ -7501,9 +7536,10 @@ def api_cfg():
                   'imap_email','imap_password','imap_host',
                   'twocaptcha_api_key','twocaptcha_enabled',
                   'twocaptcha_price_recaptcha_usd','twocaptcha_price_image_usd','brave_price_per_query_usd',
-                  'auto_pipeline_enabled','auto_pipeline_batch']:
+                  'auto_pipeline_enabled','auto_pipeline_batch',
+                  'proxy_enabled','proxy_host','proxy_port','proxy_user','proxy_pass','proxy_only_for_cf']:
             if k in d:
-                if k in ('openai_key','openai_admin_key','telegram_token','google_api_key','brave_api_key','guest_post_password','twocaptcha_api_key','imap_password') and d[k]=='***설정됨***': continue  # 마스크 값은 무시(기존 유지)
+                if k in ('openai_key','openai_admin_key','telegram_token','google_api_key','brave_api_key','guest_post_password','twocaptcha_api_key','imap_password','proxy_pass') and d[k]=='***설정됨***': continue  # 마스크 값은 무시(기존 유지)
                 cfg[k]=d[k]
         if d.get('password'): cfg['password']=generate_password_hash(d['password'])  # 해시 저장
         # 완전 자동화: 필수 키(Brave 발굴 + 2captcha)가 채워지면 발굴·파이프라인을 자동 ON.
