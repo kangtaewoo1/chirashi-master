@@ -4274,6 +4274,20 @@ def reconcile_sites():
                     s['write_test_status']='failed'; s['verified_post_url']=''
                     s['last_fail_reason']='가짜 검증(글번호 없음) 무효화 — 실제 글 미등록. 재검증 필요'
             verified=str(s.get('verified_post_url') or '').startswith(('http://','https://'))
+            # ★읽기제한 게시판 재검사(대표님 지시 2026-09-08 '의미없는 발행 안하도록'): 검증됐고
+            #   아직 안 본 사이트는 발행글 URL을 비로그인으로 열어 실제 읽히는지 확인. 잇츠키친처럼
+            #   포인트/권한 제한이면(글 올라가도 조회차단·SEO0) 검증취소+발행잠금+영구탈락(재발굴 차단).
+            #   read_checked 플래그로 사이트당 1회만(reconcile 매번 HTTP 안 하게).
+            if verified and not edr and not s.get('read_checked'):
+                _rb=_post_read_block_reason(_vpu)
+                s['read_checked']=True
+                if _rb:
+                    s['write_test_status']='failed'; s['verified_post_url']=''; s['permission']=False
+                    s['last_fail_reason']=f'읽기제한 게시판 — {_rb}(글 올라가도 조회차단·SEO0)'
+                    removed.append(s); dropped_doms.append(_domain_of(s.get('site_url','')))
+                    _purge_site_history(s)
+                    add_log(f'[읽기제한 삭제] {(s.get("name") or s.get("site_url",""))[:24]} — {_rb}','정리')
+                    continue
             # ★대표님이 직접 계정 넣어 추가한 사이트(manual_admin) 처리.
             #   원칙: 일시적 실패(타임아웃·도배방지)로는 삭제/잠금하지 않고 보호(계정·설정 유지).
             #   단 '진짜 안 되는 것'(비일시적 실패 15회+ & 검증URL 없음)은 대표님 지시로 아예 삭제.
@@ -4956,6 +4970,20 @@ def screen_candidate(url, cfg=None):
         res['note']=f'접속 실패({r.status_code if r else "timeout"})'; return res
     res['reachable']=True
     html=r.text or ''; low=html.lower()
+    # ★읽기제한 게시판 사전탈락(대표님 지시 2026-09-08 '의미없는 발행 안하도록'): 잇츠키친처럼
+    #   글 조회에 포인트/권한이 필요한 게시판은 발행해도 구글이 본문 못읽어 SEO 0 = 헛발행.
+    #   목록에서 기존 글 하나를 열어 '포인트 부족/글읽기 불가'면 후보 탈락(재발굴돼도 여기서 걸림).
+    try:
+        _wm=re.search(r'(board\.php\?[^"\']*?wr_id=\d+)',html)
+        if _wm:
+            from urllib.parse import urljoin as _uj
+            _plink=_wm.group(1).replace('&amp;','&')   # HTML 엔티티 디코드(안 하면 URL 깨짐)
+            _rb=_post_read_block_reason(_uj(r.url,_plink))
+            if _rb:
+                res['read_restricted']=_rb
+                res['note']=f'읽기제한({_rb}) — 발행해도 조회차단·SEO0'
+                return res   # 즉시 탈락(더 볼 것 없음)
+    except Exception: pass
     # 플랫폼
     if 'bo_table' in low or 'gnuboard' in low or '/bbs/' in low: res['platform']='gnuboard'
     elif 'cafe24' in low or 'xans-' in low or '/board/write.html' in low: res['platform']='cafe24'
@@ -5268,6 +5296,7 @@ def screen_pending(limit=30):
         r['score']=score_candidate(r)
         # 자동 탈락 사유
         if not r.get('reachable'): r['status']='ready'; r['reject_reason']='현재 접속 불가 — 후보 유지·재검수 가능'
+        elif r.get('read_restricted'): r['status']='rejected'; r['reject_reason']=f'읽기제한 게시판 — {r.get("read_restricted")}(발행해도 조회차단·SEO0)'
         elif r.get('parked'): r['status']='rejected'; r['reject_reason']='주차/만료 도메인 (실제 게시판 아님)'
         elif r.get('illegal'): r['status']='rejected'; r['reject_reason']='도박·불법 사이트 (제휴 부적합)'
         elif r.get('ad_banned'): r['status']='rejected'; r['reject_reason']='광고 금지 명시'
