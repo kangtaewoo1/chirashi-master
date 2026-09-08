@@ -7046,6 +7046,7 @@ def chk():
     #  /api/logs·/api/worker-log = 읽기전용 로그. /api/sites·/api/candidates = 사이트/후보 관리.
     #  /api/test/* = 발행 테스트 트리거(등록 사이트에 실제 글1건 발행해 검증).
     _p=request.path
+    if _p=='/api/version': return  # 배포 SHA 확인 — 공개(민감정보 없음)
     if _p in ('/api/logs','/api/worker-log','/api/sites','/api/candidates','/api/candidates/ingest','/api/discovery/queries','/api/unlocker/test','/api/sbr/test') or _p.startswith('/api/test/'):
         tok=(request.args.get('token') or '').strip()
         cfgtok=(load_config().get('log_token') or '').strip()
@@ -7092,6 +7093,21 @@ def index():
     sites=load_sites()
     return R('대시보드',cfg=load_config(),sites=sites,
              publish_sites=[s for s in sites if is_publishable(s)],wk=wk_stats,wk_on=wk_active)
+
+# ★배포 반영 확인용(대표님 '언제 되는데/아직 안뜬다' 대응): 현재 구동중 git SHA + 부팅시각.
+#   인증 없이 조회 가능(민감정보 없음). before_request 화이트리스트에 등록됨.
+_BOOT_TS=time.strftime('%Y-%m-%d %H:%M:%S')
+@app.route('/api/version')
+def api_version():
+    sha=''
+    try:
+        import subprocess
+        sha=subprocess.check_output(['git','rev-parse','--short','HEAD'],cwd=BASE_DIR,timeout=3).decode().strip()
+    except Exception:
+        try:
+            with open(os.path.join(BASE_DIR,'.git','refs','heads','master')) as f: sha=f.read().strip()[:7]
+        except Exception: sha='?'
+    return jsonify({'ok':True,'sha':sha,'booted':_BOOT_TS})
 
 # API
 @app.route('/api/generate',methods=['POST'])
