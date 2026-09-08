@@ -2079,13 +2079,18 @@ def get_driver(remote=False):
                         _drivers.pop(rkey,None)
                 if not ep.startswith('http'): ep='https://'+ep
                 if ':9515' not in ep and not re.search(r':\d+',ep.split('@')[-1]): ep=ep.rstrip('/')+':9515'
-                # ★geo 주입(sbr_country) — 기본 끔(빈값). 'kr' 등 명시할 때만 username 뒤에 -country-XX.
-                #   주의: 이게 endpoint customer name을 깨 'Wrong customer name' 오류를 유발했음(2026-09-09).
-                #   Browser API는 자동으로 최적 IP를 고르므로 geo 없이도 잘 됨 → 기본 미주입이 안전.
-                _cc=str(cfg.get('sbr_country') or '').strip().lower()   # ★빈값이면 주입 안 함(fallback 'kr' 제거)
+                # ★geo 완전 정화(2026-09-09 대표님 'Wrong customer name' 마저 잡기): endpoint에 예전
+                #   주입/저장으로 -country-XX가 박혀 있으면 username을 깨 인증실패 → username 부분에서 제거.
+                #   (username=스킴 뒤 ~ 첫 ':' 전. 비번·호스트는 건드리지 않음.)
+                _mm=re.match(r'(https?://)([^:@/]+)(.*)$',ep)
+                if _mm:
+                    _user=re.sub(r'-country-[a-z]{2}','',_mm.group(2))   # username에서 -country-XX 제거
+                    ep=f'{_mm.group(1)}{_user}{_mm.group(3)}'
+                # geo 주입(sbr_country)은 기본 끔. 명시할 때만(권장 안 함) 다시 붙임.
+                _cc=str(cfg.get('sbr_country') or '').strip().lower()
                 if _cc and '-country-' not in ep:
-                    _mm=re.match(r'(https?://)([^:@/]+)(.*)$',ep)   # 스킴 / username / 나머지(:pass@host:port)
-                    if _mm: ep=f'{_mm.group(1)}{_mm.group(2)}-country-{_cc}{_mm.group(3)}'
+                    _m2=re.match(r'(https?://)([^:@/]+)(.*)$',ep)
+                    if _m2: ep=f'{_m2.group(1)}{_m2.group(2)}-country-{_cc}{_m2.group(3)}'
                 opts=webdriver.ChromeOptions(); opts.add_argument('--lang=ko-KR')
                 # ★renderer timeout 근본해결(2026-09-08 대표님 '원격크롬 방식 재검토'): pageLoadStrategy='none'.
                 #   기본(normal)은 d.get()이 페이지 완전로드까지 대기 → 원격크롬+CF처리+해외지연이 겹쳐
