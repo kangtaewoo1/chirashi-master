@@ -7100,7 +7100,8 @@ def api_candidates():
              'rejected':sum(1 for c in cands if c.get('status')=='rejected'),
              'today_queries':st.get('queries',0),'today_found':st.get('found',0),
              'date':st.get('date','')}
-    return jsonify({'candidates':cands[:400],'summary':summary})
+    # 후보 표시 상한 상향(대표님 '무제한'): 발굴이 쌓여도 다 보이게. summary는 전체 기준 집계.
+    return jsonify({'candidates':cands[:2000],'summary':summary})
 
 @app.route('/api/candidates/discover',methods=['POST'])
 def api_cand_discover():
@@ -7240,7 +7241,7 @@ def api_cand_approve(cid):
                   'mb_id':d.get('mb_id',''),'mb_pass':d.get('mb_pass',''),
                   'bo_table':(d.get('bo_table') or c.get('bo_table') or 'free'),
                   'name':(d.get('name') or c.get('domain','')),
-                  'permission':False,'permission_note':note,
+                  'permission':True,'permission_note':note or '자동 허용(대표님 무조건 허용)',
                   'registration_source':'candidate_registered','daily_limit':0,'min_interval_minutes':1,
                   'permission_date':_kst_now().strftime('%Y-%m-%d'),
                   'has_captcha':bool(c.get('captcha')),
@@ -7306,12 +7307,9 @@ def api_cand_verified():
         site.update({'bo_table':bo,'write_url':write_url,'verified_post_url':result_url,
                      'write_test_status':'passed','verified_at':now,'capabilities':caps,
                      'last_structure_check':now,'registration_source':'verified_test'})
-        if permission_note:
-            site.update({'permission':True,'permission_note':permission_note,
-                         'permission_date':_kst_now().strftime('%Y-%m-%d')})
-        else:
-            site.setdefault('permission',False)
-            site.setdefault('permission_note','실게시 검증 완료 · 홍보 허용 근거 확인 전 발행 잠금')
+        # ★자동허용(대표님 지시 2026-09-08 '무조건 허용'): 실게시 검증 통과=발행 허용. 수동 근거 불요.
+        site.update({'permission':True,'permission_date':_kst_now().strftime('%Y-%m-%d'),
+                     'permission_note':permission_note or '실게시 검증 완료 → 자동 허용'})
         save_sites(sites)
     with _cand_lock:
         cands=load_cands()
@@ -7320,7 +7318,7 @@ def api_cand_verified():
                 c.update({'status':'approved','verified_at':now,'verified_post_url':result_url,
                           'capabilities':caps,'site_id':site['id']})
         save_cands(cands)
-    add_log(f'[실게시 검증→자동등록] {domain} · {bo} · '+('발행 허용' if permission_note else '허용근거 대기'))
+    add_log(f'[실게시 검증→자동등록] {domain} · {bo} · 발행 허용(자동)')
     return jsonify({'ok':True,'created':created,'site_id':site['id'],'permission':bool(site.get('permission'))})
 
 @app.route('/api/candidates/export',methods=['GET'])
@@ -8471,9 +8469,8 @@ def api_sites_bulk():
 @app.route('/api/sites/permission',methods=['POST'])
 def api_sites_permission():
     d=request.get_json(silent=True) or {}; ids=set(d.get('ids',[])); val=bool(d.get('permission',False))
-    note=(d.get('permission_note') or '').strip()
-    if val and len(note)<5:
-        return jsonify({'ok':False,'error':'허용 동의 근거를 5자 이상 입력하세요'}),400
+    # ★자동허용(대표님 지시): 근거 5자 필수 제거. 켜면 바로 허용, 없으면 기본 문구.
+    note=(d.get('permission_note') or '').strip() or '자동 허용'
     n=0
     with POST_LOCK:
         sites=load_sites()
@@ -8925,14 +8922,16 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 <div class="row"><input type="text" id="sName" placeholder="이름" style="flex:1"><input type="text" id="sBo" placeholder="게시판ID (bo_table) 예:free" style="width:170px"></div>
 <div class="row"><input type="number" id="sDaily" min="0" value="3" placeholder="하루 발행 한도" title="0은 무제한" style="width:150px"><input type="number" id="sInterval" min="0" value="60" placeholder="최소 간격(분)" title="사이트별 최소 발행 간격(분)" style="width:150px"><span style="color:var(--d);font-size:10px">사이트별 하루 한도 / 최소 간격(분)</span></div>
 <div class="row"><input type="text" id="sId" placeholder="아이디" style="width:130px"><input type="password" id="sPw" placeholder="비밀번호" style="width:130px"><button class="btn btn-p" id="addBtn" onclick="addSite()">추가</button><button class="btn btn-d btn-xs" id="editCancel" style="display:none" onclick="cancelEdit()">취소</button></div>
-<div class="row" style="background:#0b1a2e;border:1px solid #1a3a5e;border-radius:6px;padding:8px"><label style="display:flex;align-items:center;gap:6px;color:var(--g);font-size:11px;white-space:nowrap"><input type="checkbox" id="sPerm" style="width:auto">✔ 홍보 허용 확인됨</label><input type="text" id="sPermNote" placeholder="허용 근거 (운영자 메일/캡처 링크·홍보게시판명 등)" style="flex:1"></div>
+<!-- ★홍보허용 UI 제거(대표님 지시 '무조건 허용'): 자동 허용. 기존 JS 호환 위해 hidden 유지(항상 체크). -->
+<div class="row" style="background:#0b1a2e;border:1px solid #166534;border-radius:6px;padding:8px;color:var(--g);font-size:11px">✔ 자동 허용 — 발행 테스트를 통과하면 바로 발행됩니다(별도 허용 절차 없음)</div>
+<input type="checkbox" id="sPerm" checked hidden><input type="hidden" id="sPermNote" value="자동 허용">
 <div style="font-size:10px;color:var(--d)">게시판ID(bo_table)는 글이 올라갈 게시판 식별자입니다. 예) 자유게시판 free, 홍보게시판 promotion · <b style="color:var(--y)">홍보 허용을 체크한 사이트만 발행/테스트됩니다.</b></div></div>
 <div class="card"><h3>CSV 대량 등록 (한 줄에 하나: URL,이름,게시판,아이디,비번,허용여부)</h3>
 <textarea id="bulkCsv" rows="4" placeholder="https://a.kr,에이,free,id1,pw1,1&#10;https://b.kr,비,promotion,id2,pw2,0"></textarea>
 <div class="row" style="margin-top:6px"><label style="display:flex;align-items:center;gap:6px;color:var(--g);font-size:11px"><input type="checkbox" id="bulkPerm" style="width:auto">허용여부 미기재 시 기본 허용</label><span style="flex:1"></span><button class="btn btn-p" onclick="bulkAdd()">대량 등록</button></div>
 <div style="font-size:10px;color:var(--d)">허용여부: 1/0 (마지막 칸). 미기재면 위 체크박스 기본값. 등록 후에도 목록에서 선택→허용 일괄 변경 가능.</div></div>
 <div class="card"><h3>사이트 목록 (실시간 갱신)</h3>
-<div class="row" style="margin-bottom:6px"><button class="btn btn-g btn-xs" onclick="bulkPermSet(true)">선택 허용✔</button><button class="btn btn-r btn-xs" onclick="bulkPermSet(false)">선택 미허용</button><button class="btn btn-d btn-xs" onclick="healthAll()">선택 상태점검</button><span style="flex:1"></span><span style="color:var(--d);font-size:10px">체크박스로 선택 후 사용</span></div>
+<div class="row" style="margin-bottom:6px"><button class="btn btn-d btn-xs" onclick="healthAll()">선택 상태점검</button><span style="flex:1"></span><span style="color:var(--d);font-size:10px">발행테스트 통과 시 자동 허용 · 체크박스로 선택 후 상태점검</span></div>
 <div style="max-height:400px;overflow-y:auto" id="siteList"></div></div></div>
 
 <div id="p-res" class="panel">
@@ -9451,10 +9450,10 @@ async function delMember(id){if(!confirm('회원을 삭제할까요? (정산 기
 async function togglePay(id,paid){await api('/members/pay','POST',{id:id,paid:paid});renderMembers()}
 async function addSite(){const d={site_url:$('sUrl').value.trim(),platform:$('sPlat').value,name:$('sName').value.trim(),bo_table:$('sBo').value.trim(),mb_id:$('sId').value.trim(),mb_pass:$('sPw').value,permission:$('sPerm').checked,permission_note:$('sPermNote').value.trim(),daily_limit:Math.max(0,parseInt($('sDaily').value)||0),min_interval_minutes:Math.max(0,parseInt($('sInterval').value)||0)};if(!d.site_url){toast('URL 입력','er');return}if(_editId)d.id=_editId;const r=await api('/sites','POST',d);if(r&&r.ok){toast(_editId?'수정됨':(d.permission?'추가됨 (홍보 허용)':'추가됨 (미검증 — 발행 제외)'));cancelEdit();renderSites()}}
 async function editSite(id){const sites=await api('/sites','GET');if(!Array.isArray(sites))return;const s=sites.find(x=>x.id===id);if(!s){toast('사이트 없음','er');return}
-$('sUrl').value=s.site_url||'';$('sPlat').value=s.platform||'auto';$('sName').value=s.name||'';$('sBo').value=s.bo_table||'';$('sId').value=s.mb_id||'';$('sPw').value='';$('sPw').placeholder=s.login_saved?'저장됨 · 변경시에만 입력':'비밀번호';$('sPerm').checked=!!s.permission;$('sPermNote').value=s.permission_note||'';$('sDaily').value=(s.daily_limit==null?0:s.daily_limit);$('sInterval').value=(s.min_interval_minutes==null?1:s.min_interval_minutes);
+$('sUrl').value=s.site_url||'';$('sPlat').value=s.platform||'auto';$('sName').value=s.name||'';$('sBo').value=s.bo_table||'';$('sId').value=s.mb_id||'';$('sPw').value='';$('sPw').placeholder=s.login_saved?'저장됨 · 변경시에만 입력':'비밀번호';$('sPerm').checked=true;$('sPermNote').value=s.permission_note||'자동 허용';$('sDaily').value=(s.daily_limit==null?0:s.daily_limit);$('sInterval').value=(s.min_interval_minutes==null?1:s.min_interval_minutes);
 _editId=id;$('addBtn').textContent='수정 저장';$('addBtn').classList.add('btn-y');$('editCancel').style.display='';
 $('sUrl').scrollIntoView({behavior:'smooth',block:'center'});toast('편집 모드 — 값을 고치고 "수정 저장"')}
-function cancelEdit(){_editId=null;['sUrl','sName','sBo','sId','sPw','sPermNote'].forEach(i=>$(i).value='');$('sDaily').value=0;$('sInterval').value=1;$('sPerm').checked=false;$('sPlat').value='auto';$('addBtn').textContent='추가';$('addBtn').classList.remove('btn-y');$('editCancel').style.display='none'}
+function cancelEdit(){_editId=null;['sUrl','sName','sBo','sId','sPw'].forEach(i=>$(i).value='');$('sDaily').value=0;$('sInterval').value=1;$('sPerm').checked=true;$('sPlat').value='auto';$('addBtn').textContent='추가';$('addBtn').classList.remove('btn-y');$('editCancel').style.display='none'}
 async function prepareSignup(id){
 if(!confirm('사이트 조건에 맞는 가입용 아이디·비밀번호를 생성해 암호화 저장합니다.\nCAPTCHA와 이메일 인증, 최종 가입은 직접 진행합니다. 계속할까요?'))return;
 const r=await api('/sites/signup-prepare/'+id,'POST',{});if(!r||!r.ok){toast((r&&r.error)||'생성 실패','er');return}
@@ -9620,8 +9619,8 @@ async function uploadXlsx(){const f=$('poolXlsx').files[0];if(!f)return;const fd
 async function genRandom(){const sid=$('poolSiteFilter').value;const n=parseInt($('poolN').value)||1;const r=await api('/generate/random','POST',{site_ids:sid?[sid]:[],count:n});if(r&&r.ok){if(r.generated!=null)toast(r.generated+'건 큐 등록 (랜덤 '+r.picks+'개)'+(r.blocked?` · 미허용 ${r.blocked} 제외`:''));else{$('gTitle').value=r.title;$('gContent').value=r.content;$('gLen').textContent=(r.content||'').length.toLocaleString()+'자';toast('랜덤 미리보기 생성')}loadOpenAIUsage()}else if(r)toast(r.error||'실패','er')}
 // ---- 사이트 대량/허용/헬스 ----
 async function bulkAdd(){const csv=$('bulkCsv').value.trim();if(!csv){toast('CSV 입력','er');return}const r=await api('/sites/bulk','POST',{csv:csv,permission:$('bulkPerm').checked});if(r&&r.ok){toast(r.added+'개 등록');$('bulkCsv').value='';renderSites()}}
-async function bulkPermSet(v){const ids=getSiteIds();if(!ids.length){toast('사이트 선택','er');return}let note='';if(v){note=(prompt('운영자에게 받은 자동 게시 허용 근거를 입력하세요.\n예: 운영자 이메일 2026-08-31, 홍보게시판 이용정책 URL')||'').trim();if(note.length<5){toast('허용 근거를 5자 이상 입력해야 합니다','er');return}}const r=await api('/sites/permission','POST',{ids:ids,permission:v,permission_note:note});if(r&&r.ok){toast(r.changed+'개 '+(v?'허용 동의 기록':'미허용'));renderSites()}else if(r)toast(r.error||'변경 실패','er')}
-async function toggleSitePermission(id,on){let note='';if(on){note=(prompt('운영자에게 받은 자동 게시 허용 근거를 입력하세요.')||'').trim();if(note.length<5){toast('허용 근거를 5자 이상 입력해야 합니다','er');renderSites();return}}const r=await api('/sites/permission','POST',{ids:[id],permission:on,permission_note:note});if(r&&r.ok){toast(on?'✅ 허용 동의 기록됨':'자동발행 잠금됨');renderSites()}else{toast((r&&r.error)||'변경 실패','er');renderSites()}}
+// ★자동허용(대표님 지시): 켤 때 근거 입력 없이 바로 허용. 끄기는 특정 사이트 수동 잠금용으로 유지.
+async function toggleSitePermission(id,on){const r=await api('/sites/permission','POST',{ids:[id],permission:on,permission_note:on?'자동 허용':''});if(r&&r.ok){toast(on?'✅ 발행 허용':'발행 잠금됨');renderSites()}else{toast((r&&r.error)||'변경 실패','er');renderSites()}}
 async function saveSiteLimits(id){const daily=parseInt($('limD_'+id).value);const mins=parseInt($('limM_'+id).value);if(!Number.isFinite(daily)||daily<0||!Number.isFinite(mins)||mins<0){toast('건수와 간격은 0 이상의 숫자로 입력하세요','er');return}const r=await api('/sites/limits','POST',{id:id,daily_limit:daily,min_interval_minutes:mins});if(r&&r.ok){toast('✅ 하루 '+r.daily_limit+'건 · '+r.min_interval_minutes+'분 저장');renderSites()}else toast((r&&r.error)||'저장 실패','er')}
 async function healthAll(){const ids=getSiteIds();if(!ids.length){toast('사이트 선택','er');return}toast(ids.length+'개 점검중...');for(const id of ids){await api('/sites/health/'+id,'POST')}renderSites();toast('점검 완료')}
 // (예약 스케줄 UI 제거됨 — 회원별 스케줄러가 대체. 죽은 JS 정리)
