@@ -8902,20 +8902,28 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 <div id="wlogBlock" style="margin:8px 0"></div>
 <div id="captchaTasks" style="margin:8px 0"></div>
 <div id="wlogTasks" style="margin:8px 0"></div>
-<div class="card" style="margin:10px 0"><div class="row" style="align-items:center"><h3 style="margin:0">📋 전체 작업 로그 (분류)</h3><span style="flex:1"></span>
-<span id="actFilter" style="font-size:11px">
-<button class="btn btn-p btn-xs actf on" data-c="" onclick="setActFilter(this)">전체</button>
-<button class="btn btn-g btn-xs actf" data-c="worker" onclick="setActFilter(this)" title="실제 글 올리는 발행 워커(크롬)">🖥️ 워커 세계</button>
-<button class="btn btn-v btn-xs actf" data-c="runner" onclick="setActFilter(this)" title="사이트 발굴·가입·검수·정리하는 백그라운드 자동화">🏃 러너 세계</button>
-<span style="color:var(--d);margin:0 4px">|</span>
-<button class="btn btn-d btn-xs actf" data-c="발굴" onclick="setActFilter(this)">발굴</button>
-<button class="btn btn-d btn-xs actf" data-c="검수" onclick="setActFilter(this)">검수</button>
-<button class="btn btn-d btn-xs actf" data-c="가입" onclick="setActFilter(this)">가입</button>
-<button class="btn btn-d btn-xs actf" data-c="발행" onclick="setActFilter(this)">발행</button>
-<button class="btn btn-d btn-xs actf" data-c="정리" onclick="setActFilter(this)">정리</button>
-</span></div>
-<div style="max-height:280px;overflow-y:auto;margin-top:6px" id="wlogActivity"></div></div>
-<div style="max-height:520px;overflow-y:auto" id="wlogList"></div></div></div>
+<div class="card" style="margin:10px 0"><div class="row" style="align-items:center"><h3 style="margin:0">🛰️ 관제실 — 실시간 작업 현황</h3><span style="flex:1"></span>
+<span id="actCounts" style="font-size:11px;color:var(--d)"></span></div>
+<!-- ★관제실(대표님 지시): 필터로 하나씩 보지 말고 워커/러너 세계를 한 화면에 나란히, 종류별 구획으로 -->
+<div id="ctrlGrid" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px">
+  <!-- 워커 세계 -->
+  <div style="border:1px solid #166534;border-radius:8px;overflow:hidden">
+    <div style="background:#0d2a17;color:var(--g);padding:6px 10px;font-weight:700;font-size:12px">🖥️ 워커 세계 <span style="color:var(--d);font-weight:400">· 실제 글 올리는 발행</span> <span id="cnt발행" style="float:right;color:var(--d)"></span></div>
+    <div style="max-height:260px;overflow-y:auto" id="col발행"></div>
+  </div>
+  <!-- 러너 세계(4구획) -->
+  <div style="border:1px solid #4c1d95;border-radius:8px;overflow:hidden">
+    <div style="background:#1a0f2e;color:var(--v);padding:6px 10px;font-weight:700;font-size:12px">🏃 러너 세계 <span style="color:var(--d);font-weight:400">· 발굴·검수·가입·정리</span></div>
+    <div style="display:grid;grid-template-rows:auto auto auto auto">
+      <div style="border-top:1px solid #33425f"><div style="padding:4px 10px;font-size:11px;color:var(--p)">🔍 발굴 <span id="cnt발굴" style="float:right;color:var(--d)"></span></div><div style="max-height:120px;overflow-y:auto" id="col발굴"></div></div>
+      <div style="border-top:1px solid #33425f"><div style="padding:4px 10px;font-size:11px;color:var(--v)">📋 검수 <span id="cnt검수" style="float:right;color:var(--d)"></span></div><div style="max-height:120px;overflow-y:auto" id="col검수"></div></div>
+      <div style="border-top:1px solid #33425f"><div style="padding:4px 10px;font-size:11px;color:var(--y)">👤 가입 <span id="cnt가입" style="float:right;color:var(--d)"></span></div><div style="max-height:120px;overflow-y:auto" id="col가입"></div></div>
+      <div style="border-top:1px solid #33425f"><div style="padding:4px 10px;font-size:11px;color:var(--r)">🧹 정리 <span id="cnt정리" style="float:right;color:var(--d)"></span></div><div style="max-height:120px;overflow-y:auto" id="col정리"></div></div>
+    </div>
+  </div>
+</div></div>
+<div class="card" style="margin:10px 0"><h3 style="margin:0 0 6px">📮 작업실별 발행 이력</h3>
+<div style="max-height:520px;overflow-y:auto" id="wlogList"></div></div></div></div>
 
 <div id="p-disco" class="panel">
 <div class="note">🔎 Brave 검색 → 접속 성공 → 오류/데모/웹빌더·영구탈락 제외 → 게시판 글쓰기 폼 확인까지 통과한 곳만 후보로 수집합니다. 그다음 자동가입·발행테스트로 <b style="color:var(--g)">실제 되는 곳만 자동 등록</b>, 안 되는 곳은 자동 탈락됩니다. (수동 URL은 최우선 처리)</div>
@@ -9143,16 +9151,6 @@ async function renderWorkerLog(){const roomSel=$('wlogRoom');if(!roomSel.dataset
 // ★상태 한글(대표님 지시) + 사이트=발행글 링크(결과URL/열기 열 합침, 결과탭과 동일 형식)
 const WST={done:'완료',posting:'발행중',failed:'실패',retry:'재시도',queued:'대기',skipped:'건너뜀'};
 $('wlogList').innerHTML=h.length?'<table><thead><tr><th>작업실</th><th>시간</th><th>키워드</th><th>사이트(클릭시 글로 이동)</th><th>상태</th><th>메시지</th></tr></thead><tbody>'+h.map(x=>{const stc=(x.status==='done'?'ok':x.status==='failed'?'f':x.status==='skipped'?'y':'i');const stt=WST[x.status]||x.status||'';const snm=esc(x.site_name||'(사이트명 없음)');const siteCell=x.result_url?('<a href="'+esc(x.result_url)+'" target="_blank" rel="noopener" title="'+esc(x.result_url)+'" style="color:var(--p);text-decoration:none">🔗 '+snm+'</a>'):snm;return '<tr><td><b>'+esc(x.workroom_name||'직접 입력')+'</b></td><td style="white-space:nowrap">'+esc((x.time||'').slice(5,16))+'</td><td>'+esc(x.region||'')+' / '+esc(x.service||'')+'</td><td style="max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+snm+'">'+siteCell+'</td><td><span class="st st-'+stc+'">'+esc(stt)+'</span></td><td style="color:var(--d)">'+esc(x.fail_reason_ko||x.message||'')+'</td></tr>'}).join('')+'</tbody></table>':'<p style="color:var(--d);padding:30px;text-align:center">아직 이 작업실의 워커 발행 이력이 없습니다.</p>';window._actLog=r.activity||[];renderActivity()}
-let _actFilter='';
-// 워커 세계=발행(실제 글 올리는 크롬 워커) · 러너 세계=발굴·검수·가입·정리(백그라운드 자동화)
-const _WORLD={'worker':['발행'],'runner':['발굴','검수','가입','정리','파이프라인']};
-function setActFilter(btn){document.querySelectorAll('.actf').forEach(b=>b.classList.remove('on'));btn.classList.add('on');_actFilter=btn.dataset.c||'';renderActivity()}
-function _matchFilter(cat){
-  cat=cat||'';
-  if(!_actFilter) return true;
-  if(_actFilter==='worker'||_actFilter==='runner') return _WORLD[_actFilter].indexOf(cat)>=0;
-  return cat===_actFilter;
-}
 function linkifyLog(msg){
   // esc로 XSS 방지 후, 텍스트 내 http(s) URL을 클릭 가능한 링크로 변환
   var e=esc(msg||'');
@@ -9160,9 +9158,22 @@ function linkifyLog(msg){
     return '<a href="'+u+'" target="_blank" rel="noopener" style="color:var(--p);word-break:break-all">'+u+'</a>';
   });
 }
-function renderActivity(){const box=$('wlogActivity');if(!box)return;const logs=(window._actLog||[]).filter(x=>_matchFilter(x.cat||''));
-  const color={'발굴':'var(--p)','검수':'var(--v)','가입':'var(--y)','발행':'var(--g)','정리':'var(--r)','파이프라인':'var(--t)','기타':'var(--d)'};
-  box.innerHTML=logs.length?'<table><thead><tr><th style="width:70px">종류</th><th style="width:70px">시간</th><th>내용</th></tr></thead><tbody>'+logs.map(x=>{const c=x.cat||'기타';return '<tr><td><span class="st" style="background:'+((color[c]||'var(--d)')+'22')+';color:'+(color[c]||'var(--d)')+'">'+esc(c)+'</span></td><td style="color:var(--d)">'+esc(x.time||'')+'</td><td>'+linkifyLog(x.msg||'')+'</td></tr>'}).join('')+'</tbody></table>':'<p style="color:var(--d);padding:20px;text-align:center">'+(_actFilter?({'worker':'🖥️ 워커 세계','runner':'🏃 러너 세계'}[_actFilter]||_actFilter)+' 로그 없음':'작업 로그 없음')+'</p>'}
+// ★관제실 렌더(대표님 지시): 워커(발행)+러너(발굴/검수/가입/정리) 각 구획에 동시에 쭉 흐르게.
+//  파이프라인·기타 카테고리는 러너 성격이라 검수 구획에 합류.
+function renderActivity(){
+  const logs=(window._actLog||[]);
+  if(!$('col발행'))return;   // 관제 그리드 없으면(구버전) 스킵
+  const buckets={'발행':[],'발굴':[],'검수':[],'가입':[],'정리':[]};
+  logs.forEach(x=>{let c=x.cat||'기타';
+    if(c==='파이프라인'||c==='기타')c='검수';
+    if(buckets[c])buckets[c].push(x);});
+  const time=x=>esc((x.time||'').slice(-8));   // HH:MM:SS
+  function fill(cat){const el=$('col'+cat);if(!el)return;const arr=buckets[cat]||[];
+    const cn=$('cnt'+cat);if(cn)cn.textContent=arr.length?arr.length+'건':'';
+    el.innerHTML=arr.length?arr.map(x=>'<div style="padding:3px 10px;border-bottom:1px solid #1c2740;font-size:11px;line-height:1.4"><span style="color:var(--d)">'+time(x)+'</span> '+linkifyLog(x.msg||'')+'</div>').join(''):'<div style="padding:14px;text-align:center;color:var(--d);font-size:11px">대기 중…</div>';}
+  ['발행','발굴','검수','가입','정리'].forEach(fill);
+  const cc=$('actCounts');if(cc)cc.textContent='발행 '+buckets['발행'].length+' · 발굴 '+buckets['발굴'].length+' · 검수 '+buckets['검수'].length+' · 가입 '+buckets['가입'].length+' · 정리 '+buckets['정리'].length;
+}
 let _editId=null;
 async function runDiag(){$('diagOut').innerHTML='<p style="color:var(--d);padding:14px">🩺 진단 중... 크롬을 실제로 띄워보는 중이라 최대 60초 걸립니다.</p>';const r=await api('/diag','GET');if(!r){$('diagOut').innerHTML='<p style="color:var(--r)">진단 실패</p>';return}
 const rows=(r.steps||[]).map(s=>`<tr><td>${s.ok?'<span style="color:var(--g)">✅</span>':'<span style="color:var(--r)">❌</span>'}</td><td><b>${esc(s.name)}</b></td><td style="color:var(--d)">${esc(s.detail)}</td></tr>`).join('');
