@@ -9105,7 +9105,7 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 <div class="row"><select id="wlogRoom" style="width:auto" onchange="renderWorkerLog()"><option value="">전체 작업실</option></select><button class="btn btn-d" onclick="renderWorkerLog()">새로고침</button><span style="flex:1"></span><span id="wlogWorker" style="color:var(--d);font-size:10px"></span></div>
 <div id="wlogBlock" style="margin:8px 0"></div>
 <div id="captchaTasks" style="margin:8px 0"></div>
-<div id="wlogTasks" style="margin:8px 0"></div>
+<div id="wlogTasks" style="margin:8px 0"></div></div>
 <div class="card" style="margin:10px 0"><div class="row" style="align-items:center"><h3 style="margin:0">🛰️ 관제실 — 실시간 작업 현황</h3><span style="flex:1"></span>
 <span id="actCounts" style="font-size:11px;color:var(--d)"></span></div>
 <!-- ★관제실(대표님 지시 2026-09-09): 세로 배치 — 위=워커 세계(발행), 아래=러너 세계(PC발굴 포함).
