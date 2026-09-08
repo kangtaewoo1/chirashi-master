@@ -8203,8 +8203,17 @@ def api_logs():
 # ---- 발행 이력 (결과 탭) ----
 @app.route('/api/history',methods=['GET'])
 def api_history():
-    h=load_json(HISTORY_FILE,[])
-    return jsonify(list(reversed(h))[:500])   # 최신순 500건
+    # ★작업실별 균형 반환(대표님 지시 2026-09-09): 예전엔 최신 500건만 → 발행 많은 작업실(노래방)이
+    #   500건을 독차지해 다른 작업실(마사지)이 안 보였음. 작업실마다 최신 300건씩 모아 반환.
+    h=list(reversed(load_json(HISTORY_FILE,[])))   # 최신순
+    per={}; out=[]
+    for r in h:
+        wn=r.get('workroom_name') or '직접 입력'
+        c=per.get(wn,0)
+        if c<300:   # 작업실당 최신 300건까지
+            per[wn]=c+1; out.append(r)
+        if len(out)>=1500: break   # 전체 상한(과대응답 방지)
+    return jsonify(out)
 
 @app.route('/api/history/clear',methods=['POST'])
 def api_history_clear():
@@ -9341,11 +9350,12 @@ if(!h.length){$('histList').innerHTML='<p style="color:var(--d);padding:30px;tex
 // 작업실별 그룹핑(순서: 이력에 먼저 등장한 작업실 순)
 const groups={},order=[];
 h.forEach(x=>{const wn=x.workroom_name||'직접 입력';if(!(wn in groups)){groups[wn]=[];order.push(wn)}groups[wn].push(x)});
-let html='';
+// ★2열로 분류(대표님 지시 2026-09-09): 작업실 섹션을 좌우 2열 그리드로 나란히(마사지·노래방).
+let cells='';
 for(const wn of order){const rows=groups[wn];
-  html+=`<div style="margin-bottom:14px"><div style="font-weight:700;color:var(--p);padding:6px 0;border-bottom:2px solid #33425f;margin-bottom:4px">📂 ${esc(wn)} <span style="color:var(--d);font-weight:400;font-size:11px">${rows.length}건</span></div>`+_histTable(rows)+'</div>';
+  cells+=`<div style="border:1px solid #33425f;border-radius:8px;overflow:hidden"><div style="font-weight:700;color:var(--p);padding:6px 10px;background:#0f1830;border-bottom:1px solid #33425f">📂 ${esc(wn)} <span style="color:var(--d);font-weight:400;font-size:11px">${rows.length}건</span></div><div style="max-height:460px;overflow:auto">`+_histTable(rows)+'</div></div>';
 }
-$('histList').innerHTML=html}
+$('histList').innerHTML=`<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">${cells}</div>`}
 async function submitCaptcha(id){const el=$('cap_'+id);const value=(el&&el.value||'').trim();if(!value){toast('CAPTCHA 값을 입력하세요','er');return}const r=await api('/manual-checks/'+id+'/submit','POST',{value});if(r&&r.ok){toast('입력 완료 · 자동 발행을 계속합니다');renderCaptchaTasks()}else toast((r&&r.error)||'전달 실패','er')}
 async function cancelCaptcha(id){const r=await api('/manual-checks/'+id+'/cancel','POST',{});if(r&&r.ok){toast('CAPTCHA 작업 취소됨');renderCaptchaTasks()}}
 async function renderCaptchaTasks(){const box=$('captchaTasks');if(!box)return;const r=await api('/manual-checks','GET');if(!r||!r.ok)return;const waiting=(r.tasks||[]).filter(t=>['waiting_input','input_received','submitting'].includes(t.status));if(!waiting.length){box.innerHTML='';return}box.innerHTML=waiting.map(t=>'<div class="card" style="border-color:#a16207;background:#171205"><h3 style="color:var(--y)">🧩 '+esc(t.site_name)+' · CAPTCHA 입력 후 자동 발행</h3><div class="row">'+(t.image_data?'<img src="'+t.image_data+'" alt="CAPTCHA" style="max-width:240px;max-height:90px;background:#fff;border-radius:4px;padding:4px">':'<span style="color:var(--y)">이미지 캡처 실패 — 사이트 화면에서 CAPTCHA를 확인하세요.</span>')+'<input id="cap_'+esc(t.id)+'" autocomplete="off" placeholder="보이는 문자를 직접 입력" style="width:220px" '+(t.status!=='waiting_input'?'disabled':'')+'><button class="btn btn-g" onclick="submitCaptcha(\''+esc(t.id)+'\')" '+(t.status!=='waiting_input'?'disabled':'')+'>입력 후 자동 발행</button><button class="btn btn-r btn-xs" onclick="cancelCaptcha(\''+esc(t.id)+'\')">취소</button></div><div style="color:var(--d);font-size:10px;margin-top:6px">'+esc(t.message||'')+' · 만료 '+esc(t.expires_at||'')+'</div></div>').join('')}
