@@ -632,7 +632,7 @@ def load_config():
        'public_base_url':'https://google.twseo.kr',  # 업로드 이미지 절대 URL 기준 도메인(외부 게시판 로드용)
        'twocaptcha_price_recaptcha_usd':0.003,'twocaptcha_price_image_usd':0.0005,
        'brave_price_per_query_usd':0.005,  # Pro 플랜 기준 쿼리당 $0.005(설정 탭에서 변경 가능)
-       'auto_pipeline_enabled':True,'auto_pipeline_batch':10,
+       'auto_pipeline_enabled':True,'auto_pipeline_batch':20,   # ★배치 대폭↑(대표님 '대기 너무 쌓임'): 유입>소진 병목 해소. 병렬가입으로 감당.
        'min_interval_minutes':1,   # 발행 간격(분): 1=사실상 무간격, daily_limit=0=하루 무제한(대표님 요청)
        'publish_loop_enabled':True,'publish_interval_sec':300,   # 24시간 상시발행 루프(5분 주기 큐 보충)
        'workroom_workers':4,   # 작업실별 전용 발행 워커(=동시 크롬) 수 상한. VPS 사양에 맞게 조절(4vCPU→4)
@@ -645,7 +645,7 @@ def load_config():
        'vps_reserve_mb':350,'vps_mb_per_worker':300,   # 메모리 가드 민감도(낮출수록 워커 더 허용·OOM위험↑)
 
        'discover_interval_sec':600,   # 발굴 주기 10분(크레딧 절약). 목표 도달 시 자동 중단
-       'pipeline_interval_sec':120,   # 전환(후보→가입→발행테스트) 전용 루프 주기 — 발굴과 독립
+       'pipeline_interval_sec':60,   # 전환(후보→가입→발행테스트) 전용 루프 주기 — 발굴과 독립. ★120→60(소진속도↑)
        'login_signup_per_cycle':5,    # 로그인 필요 게시판 자동가입 주기당 처리 수(IMAP 설정 후 백로그 소진용)
        # ★Bright Data 프록시(CF 걸린 Cafe24 로그인 우회용) — 크레덴셜 넣으면 활성. 비면 미사용.
        #   Residential Proxies 또는 Web Unlocker의 호스트/포트/유저/비번. CF 사이트에만 선택적 사용(비용↓).
@@ -6618,7 +6618,7 @@ def pipeline_loop():
             cfg=load_config()
             if cfg.get('auto_pipeline_enabled'):
                 _t0=time.time()
-                r=auto_pipeline_once(limit=int(cfg.get('auto_pipeline_batch',3) or 3))
+                r=auto_pipeline_once(limit=int(cfg.get('auto_pipeline_batch',20) or 20))
                 _el=int(time.time()-_t0)
                 # 공회전(처리·가입·등록 전부 0)은 로그 생략 — 화면 도배 방지(대표님 지시).
                 #   뭔가 실제로 처리됐을 때만 완료 로그를 남긴다.
