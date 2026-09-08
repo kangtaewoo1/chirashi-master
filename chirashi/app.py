@@ -9333,9 +9333,19 @@ const titleCell=h.result_url
 // ★메시지 열: URL이면 클릭 가능 링크로(대표님 지시 2026-09-09). linkifyLog가 http(s)를 <a>로 변환.
 const msgCell=linkifyLog(h.message||'');
 return `<tr><td style="color:var(--d);white-space:nowrap">${esc((h.time||'').slice(5,16))}</td><td style="color:var(--t)">${esc(kws)}</td><td style="max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${ttl}">${titleCell}</td><td><span class="st st-${stc}">${esc(stt)}</span></td><td>${fr}</td><td>${av}</td><td style="color:var(--d);max-width:220px;overflow:hidden;text-overflow:ellipsis">${msgCell}</td></tr>`}
+// ★작업실별 발행이력(대표님 지시 2026-09-09 '작업실별로 나눠줘 마사지·노래방'):
+//   workroom_name으로 그룹핑해 작업실마다 섹션(제목+표)으로 나눠 렌더.
+function _histTable(rows){return '<table><thead><tr><th>시간</th><th>키워드</th><th>제목(클릭시 글로 이동)</th><th>상태</th><th>실패원인</th><th>생존</th><th>메시지</th></tr></thead><tbody>'+rows.map(histRow).join('')+'</tbody></table>';}
 async function renderHistory(){const h=await api('/history','GET');if(!Array.isArray(h))return;$('histCount').textContent=h.length+'건';
 if(!h.length){$('histList').innerHTML='<p style="color:var(--d);padding:30px;text-align:center">아직 발행 이력이 없습니다</p>';return}
-$('histList').innerHTML='<table><thead><tr><th>시간</th><th>키워드</th><th>제목(클릭시 글로 이동)</th><th>상태</th><th>실패원인</th><th>생존</th><th>메시지</th></tr></thead><tbody>'+h.map(histRow).join('')+'</tbody></table>'}
+// 작업실별 그룹핑(순서: 이력에 먼저 등장한 작업실 순)
+const groups={},order=[];
+h.forEach(x=>{const wn=x.workroom_name||'직접 입력';if(!(wn in groups)){groups[wn]=[];order.push(wn)}groups[wn].push(x)});
+let html='';
+for(const wn of order){const rows=groups[wn];
+  html+=`<div style="margin-bottom:14px"><div style="font-weight:700;color:var(--p);padding:6px 0;border-bottom:2px solid #33425f;margin-bottom:4px">📂 ${esc(wn)} <span style="color:var(--d);font-weight:400;font-size:11px">${rows.length}건</span></div>`+_histTable(rows)+'</div>';
+}
+$('histList').innerHTML=html}
 async function submitCaptcha(id){const el=$('cap_'+id);const value=(el&&el.value||'').trim();if(!value){toast('CAPTCHA 값을 입력하세요','er');return}const r=await api('/manual-checks/'+id+'/submit','POST',{value});if(r&&r.ok){toast('입력 완료 · 자동 발행을 계속합니다');renderCaptchaTasks()}else toast((r&&r.error)||'전달 실패','er')}
 async function cancelCaptcha(id){const r=await api('/manual-checks/'+id+'/cancel','POST',{});if(r&&r.ok){toast('CAPTCHA 작업 취소됨');renderCaptchaTasks()}}
 async function renderCaptchaTasks(){const box=$('captchaTasks');if(!box)return;const r=await api('/manual-checks','GET');if(!r||!r.ok)return;const waiting=(r.tasks||[]).filter(t=>['waiting_input','input_received','submitting'].includes(t.status));if(!waiting.length){box.innerHTML='';return}box.innerHTML=waiting.map(t=>'<div class="card" style="border-color:#a16207;background:#171205"><h3 style="color:var(--y)">🧩 '+esc(t.site_name)+' · CAPTCHA 입력 후 자동 발행</h3><div class="row">'+(t.image_data?'<img src="'+t.image_data+'" alt="CAPTCHA" style="max-width:240px;max-height:90px;background:#fff;border-radius:4px;padding:4px">':'<span style="color:var(--y)">이미지 캡처 실패 — 사이트 화면에서 CAPTCHA를 확인하세요.</span>')+'<input id="cap_'+esc(t.id)+'" autocomplete="off" placeholder="보이는 문자를 직접 입력" style="width:220px" '+(t.status!=='waiting_input'?'disabled':'')+'><button class="btn btn-g" onclick="submitCaptcha(\''+esc(t.id)+'\')" '+(t.status!=='waiting_input'?'disabled':'')+'>입력 후 자동 발행</button><button class="btn btn-r btn-xs" onclick="cancelCaptcha(\''+esc(t.id)+'\')">취소</button></div><div style="color:var(--d);font-size:10px;margin-top:6px">'+esc(t.message||'')+' · 만료 '+esc(t.expires_at||'')+'</div></div>').join('')}
