@@ -6404,6 +6404,26 @@ def collect_all_keywords():
 _WR_CURSOR={}   # workroom_id -> 다음 발행할 조합 '순열 위치'(메모리). 재시작 시 0부터.
 _WR_ORDER={}    # workroom_id -> 섞은 조합 인덱스 순열(지역 편중 방지). 한 바퀴 소진 시 재셔플.
 _WR_RR=[0]      # 작업실 라운드로빈 포인터(모든 작업실을 번갈아 동시 진행)
+_WR_PICK_LOCK=threading.Lock()  # ★워크스틸링: 여러 워커가 '다음 조합'을 겹치지 않게 뽑도록 보호(대표님 '하이브리드')
+
+def _pick_next_combo(rooms):
+    """★공유풀 워크스틸링(대표님 지시 2026-09-09): 고정 담당 없이, 모든 워커가 이 함수로
+       '다음 발행할 (작업실, 조합)'을 잠금 하에 하나씩 꺼낸다 → 놀지 않고 서로 도와 발행.
+       - 작업실은 _WR_RR로 라운드로빈(전 작업실 골고루), 조합은 _WR_ORDER 셔플순열로 순회(지역 편중 방지).
+       - 반환: (room, kw, cur1based, total) 또는 None(발행할 조합 없음)."""
+    if not rooms: return None
+    with _WR_PICK_LOCK:
+        room=rooms[_WR_RR[0]%len(rooms)]; _WR_RR[0]=(_WR_RR[0]+1)%max(1,len(rooms))
+        combos=_workroom_combos(room); rid=room.get('id','')
+        if not combos: return None
+        order=_WR_ORDER.get(rid)
+        if not order or len(order)!=len(combos):
+            order=list(range(len(combos))); random.shuffle(order); _WR_ORDER[rid]=order
+        cur=int(_WR_CURSOR.get(rid,0) or 0)
+        if cur>=len(order):
+            cur=0; random.shuffle(order); _WR_ORDER[rid]=order   # 새 바퀴: 다시 섞기
+        idx=order[cur]; _WR_CURSOR[rid]=cur+1
+        return (room, combos[idx], cur+1, len(combos))
 
 def _workroom_combos(room):
     """작업실 keyword_csv → [{'지역','서비스','브랜드'}, ...] (한 줄=한 조합=한 글).
@@ -6510,45 +6530,36 @@ def _publish_one_combo(kw, wname, rid, cfg, writer_name=''):
     for t in threads: t.join()   # 이 조합의 모든 사이트 발행 완료까지 대기(다음 조합으로)
 
 def workroom_worker(slot):
-    """발행 슬롯 워커(독립 크롬 스레드). 전체 작업실 중 자기 슬롯 담당분(i%cap==slot)을
-       라운드로빈으로 조합 소진→반복하며 발행가능 사이트 전체에 발행 → '진짜 동시' 발행 구현.
-       작업실이 없으면 슬롯0이 통합풀(전역+회원) 랜덤으로 발행."""
-    add_log(f"[작업실워커 시작] 슬롯 {slot+1}")
+    """발행 슬롯 워커(독립 크롬 스레드). ★워크스틸링(대표님 '하이브리드' 2026-09-09):
+       고정 담당 없이 _pick_next_combo로 공유풀에서 다음 조합을 하나씩 꺼내 발행 → 놀지 않고
+       서로 도와 발행한다(작업실 2개라도 워커 6개가 그 2개를 6갈래로 나눠 처리).
+       동시 워커 수(=동시 크롬)는 publish_loop가 메모리 여유에 맞춰 spawn하는 need로 상한.
+       작업실이 없으면 슬롯0이 통합풀(전역+회원) 랜덤 발행으로 폴백."""
+    add_log(f"[작업실워커 시작] 슬롯 {slot+1} (워크스틸링)")
     while True:
         try:
             cfg=load_config()
             if not cfg.get('publish_loop_enabled'):
                 time.sleep(20); continue
             rooms=[r for r in (load_json(WORKROOMS_FILE,[]) or []) if _workroom_combos(r)]
-            cap_eff=max(1,min(int(cfg.get('workroom_workers',3) or 3), max(1,len(rooms))))
-            if slot>=cap_eff:
-                add_log(f"[작업실워커 종료] 슬롯 {slot+1} (담당 없음/상한 축소)"); break
-            mine=[r for i,r in enumerate(rooms) if i%cap_eff==slot]
-            if not mine:
+            if not rooms:
                 if slot==0:   # 작업실 없음 → 슬롯0이 통합풀 폴백
                     pool=collect_all_keywords()
                     if pool: _publish_one_combo(pick_keywords(pool,cfg),'통합풀','',cfg)
                     else: add_log('[상시발행] 키워드 작업실에 조합을 추가하세요 (비어있음)')
-                time.sleep(20 if slot==0 else 30); continue
+                    time.sleep(20)
+                else:
+                    time.sleep(30)   # 다른 슬롯은 통합풀 중복 발행 방지 위해 대기
+                continue
             if not any(is_publishable(s) for s in load_sites()):
                 time.sleep(30); continue
-            for room in mine:   # 슬롯 담당 작업실들을 라운드로빈(한 사이클에 각 1조합)
-                combos=_workroom_combos(room); rid=room.get('id','')
-                if not combos: continue
-                # ★지역 편중 방지(대표님 지시 2026-09-07): 키워드가 지역순(인천→강화…)으로
-                #   정렬돼 있어 커서를 앞에서부터 쓰면 인천/강화에만 오래 머문다. 조합 순서를
-                #   섞은 인덱스 순열(_WR_ORDER)로 순회해 매 사이클 지역이 골고루 섞이게 한다.
-                #   한 바퀴(순열 소진) 다 돌면 새로 섞어 다음 바퀴 — 전체를 빠짐없이 커버.
-                order=_WR_ORDER.get(rid)
-                if not order or len(order)!=len(combos):
-                    order=list(range(len(combos))); random.shuffle(order); _WR_ORDER[rid]=order
-                cur=int(_WR_CURSOR.get(rid,0) or 0)
-                if cur>=len(order):
-                    cur=0; random.shuffle(order); _WR_ORDER[rid]=order   # 새 바퀴: 다시 섞기
-                idx=order[cur]; kw=combos[idx]; _WR_CURSOR[rid]=cur+1
-                _kwlabel=(kw.get('_main') or f"{kw.get('지역','')}{kw.get('서비스','')}")
-                add_log(f"[작업실:{room.get('name','')}] 조합 {cur+1}/{len(combos)} ({_kwlabel}) 발행 시작 (슬롯 {slot+1})")
-                _publish_one_combo(kw,room.get('name',''),rid,cfg,writer_name=str(room.get('writer_name') or '').strip())
+            picked=_pick_next_combo(rooms)   # 공유풀에서 다음 (작업실,조합) 하나 꺼냄(겹침 없음)
+            if not picked:
+                time.sleep(5); continue
+            room,kw,cur,total=picked
+            _kwlabel=(kw.get('_main') or f"{kw.get('지역','')}{kw.get('서비스','')}")
+            add_log(f"[작업실:{room.get('name','')}] 조합 {cur}/{total} ({_kwlabel}) 발행 시작 (슬롯 {slot+1})")
+            _publish_one_combo(kw,room.get('name',''),room.get('id',''),cfg,writer_name=str(room.get('writer_name') or '').strip())
         except Exception as e:
             add_log(f"[작업실워커 오류 슬롯{slot+1}] {str(e)[:70]}")
             time.sleep(10)
@@ -6567,7 +6578,10 @@ def publish_loop():
             if cfg.get('publish_loop_enabled'):
                 rooms=[r for r in (load_json(WORKROOMS_FILE,[]) or []) if _workroom_combos(r)]
                 cap=max(1,int(cfg.get('workroom_workers',3) or 3))
-                need=max(1,min(cap,max(1,len(rooms))))   # 작업실 없으면 1(통합풀), 있으면 min(상한,작업실수)
+                # ★워크스틸링(대표님 '하이브리드'): 작업실 수로 제한하지 않고 설정한 워커수(cap)만큼 띄운다.
+                #   단 전체 조합 수보다 많을 필요는 없으니 그걸 상한으로(조합 1개뿐인데 6워커는 낭비).
+                _totcombos=sum(len(_workroom_combos(r)) for r in rooms)
+                need=max(1,min(cap,max(1,_totcombos)))   # 작업실 없으면 1(통합풀 폴백)
                 # VPS 보호: 가용 메모리가 부족하면 동시 워커(크롬) 수를 자동 축소한다.
                 # 민감도는 설정으로 조절(대표님 요청: 가드 민감도 낮춤). 크롬 1개당 추정치·예비를 낮추면
                 # 같은 메모리에서 더 많은 워커를 허용(단 OOM 위험↑). 기본: 예비 350MB, 크롬당 300MB.
