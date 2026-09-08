@@ -9285,7 +9285,12 @@ const $=id=>document.getElementById(id);
 function T(n){document.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));document.querySelectorAll('.panel').forEach(p=>p.classList.remove('on'));document.querySelector(`[onclick="T('${n}')"]`).classList.add('on');$('p-'+n).classList.add('on');if(n==='res')renderHistory();if(n==='wlog'){renderWorkerLog();renderCaptchaTasks()}if(n==='stats')renderStats();if(n==='cost'){loadUsageDashboard();startUsageAuto()}else{stopUsageAuto()}if(n==='set'){loadCfgUI();loadRegionTool()}if(n==='gen'){loadPool();loadImages();loadRegionTool()}if(n==='kw'){loadWorkrooms();loadRegionTool()}if(n==='mem'){renderMembers();if(!document.querySelector('.mSite'))fillSiteBox([])}if(n==='disco')renderCands()}
 function toast(m,c='ok'){const d=$('toasts');const e=document.createElement('div');e.className='toast toast-'+c;e.textContent=m;d.appendChild(e);setTimeout(()=>e.remove(),2500)}
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
-async function api(p,m,b){try{const o={method:m,headers:{'Content-Type':'application/json'}};if(b)o.body=JSON.stringify(b);const r=await fetch('/api'+p,o);if(r.status===401){location='/login';return null}return await r.json()}catch(e){toast(e.message,'er');return null}}
+async function api(p,m,b){try{const o={method:m,headers:{'Content-Type':'application/json'}};if(b)o.body=JSON.stringify(b);const r=await fetch('/api'+p,o);
+  // ★세션만료(401)·차단(403)이면 로그인으로(HTML 응답을 JSON 파싱하다 'Unexpected token <' 배너 도배 방지).
+  if(r.status===401||r.status===403){if(!window._reloginAt||Date.now()-window._reloginAt>5000){window._reloginAt=Date.now();location='/login'}return null}
+  // ★JSON이 아닌 응답(재시작 중 HTML 등)은 조용히 무시 — 폴링(2초)마다 에러 토스트 뜨던 문제 해결.
+  const ct=r.headers.get('content-type')||'';if(ct.indexOf('application/json')<0){return null}
+  return await r.json()}catch(e){return null}}
 // (kv/gen/genBulk 죽은 JS 제거됨 — k1/k2/k3 입력칸이 없어 호출 불가였음)
 function parseList(){return $('kwlist').value.split('\n').map(l=>l.trim()).filter(Boolean).map(l=>{const p=l.split(',');return{지역:(p[0]||'').trim(),서비스:(p[1]||'').trim(),브랜드:(p[2]||'').trim()}}).filter(k=>k.지역&&k.서비스&&k.브랜드)}
 let _bulkPolling=false;
