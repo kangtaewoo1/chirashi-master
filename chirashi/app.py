@@ -6109,18 +6109,14 @@ def auto_pipeline_once(limit=5):
         #   (예전 느슨한 검수로 통과된 것들이 가입 안 되며 대기만 쌓이던 문제 — 될 만한 것만 남긴다.)
         if cfg.get('strict_screen',True):
             pruned=0
-            _recent=time.time()-3*3600   # 최근 3시간 내 추가된 진짜 수동추가는 보호(대표님이 방금 넣은 것)
             for c in cands:
                 if c.get('status')!='ready': continue
                 if c.get('write_form') and not c.get('login_required'): continue   # 비회원(바로발행)은 유지
                 _pc=int(c.get('promo_phone_count',0) or 0)
                 if _pc>=1 or c.get('promo_hint'): continue                         # 홍보흔적 있으면 유지
-                # 진짜 수동추가(manual)이면서 최근 3시간 내면 보호. 그 외(PC발굴·오래된 대량 manual)는 탈락.
-                #   ★PC 발굴이 예전에 manual로 잘못 태깅돼 대기줄 막던 것 정리(홍보흔적 없는 로그인 게시판).
-                if c.get('source')=='manual':
-                    try: _ft=time.mktime(time.strptime(str(c.get('found_at','')),'%Y-%m-%d %H:%M'))
-                    except Exception: _ft=0
-                    if _ft>_recent: continue   # 최근 수동추가는 보호
+                # ★로그인필요 + 홍보흔적 없음 = 가입해도 될 확률 낮은 사이트 → 대기줄에서 탈락(출처 무관).
+                #   (밤새 PC발굴이 manual로 오태깅돼 최근3시간 보호에 걸려 안 지워지던 문제 — 보호 제거.
+                #    진짜 수동추가로 지키고 싶은 건 비회원이거나 홍보흔적 있어 위에서 이미 유지됨.)
                 c['status']='rejected'; c['reject_reason']='빡센검수(소급) — 홍보글 흔적 없음(가입해도 될 확률 낮음)'
                 pruned+=1
             if pruned:
