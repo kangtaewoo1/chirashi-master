@@ -87,19 +87,24 @@ def _claim(n):
 
 
 def _report(results):
-    """가입·발행 결과를 서버에 회신 → 서버가 사이트등록·이력·claim해제 반영."""
+    """가입·발행 결과를 서버에 회신 → 서버가 사이트등록·이력·claim해제 반영.
+       ★502/타임아웃(서버 재시작·게이트웨이 순간오류)에도 결과가 유실되지 않게 재시도(최대 5회, 지수백오프)."""
     if not results:
         return
-    try:
-        r = requests.post(f"{SERVER}/api/pipeline/report?token={SERVER_TOKEN}",
-                          json={"node_id": NODE_ID, "results": results}, headers=UA, timeout=60, verify=False)
-        if r.status_code == 200:
-            d = r.json()
-            log(f"회신 완료: 반영 {d.get('applied',0)} · 발행가능 등록 {d.get('registered',0)}")
-        else:
-            log(f"report 실패 HTTP {r.status_code}")
-    except Exception as e:
-        log(f"report 오류: {e}")
+    for attempt in range(1, 6):
+        try:
+            r = requests.post(f"{SERVER}/api/pipeline/report?token={SERVER_TOKEN}",
+                              json={"node_id": NODE_ID, "results": results}, headers=UA, timeout=60, verify=False)
+            if r.status_code == 200:
+                d = r.json()
+                log(f"회신 완료: 반영 {d.get('applied',0)} · 발행가능 등록 {d.get('registered',0)}")
+                return
+            log(f"report 실패 HTTP {r.status_code} (시도 {attempt}/5)")
+        except Exception as e:
+            log(f"report 오류: {e} (시도 {attempt}/5)")
+        if attempt < 5:
+            time.sleep(min(5 * attempt, 20))   # 5·10·15·20초 백오프
+    log("report 최종 실패 — 결과 유실(다음 배치에서 서버가 만료 회수 후 재처리)")
 
 
 def _process_one(cand, cfg, pool):
