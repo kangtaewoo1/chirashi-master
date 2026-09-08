@@ -6104,6 +6104,20 @@ def auto_pipeline_once(limit=5):
                 c['signup_retry_date']=today_s; revived+=1
         if revived:
             save_cands(cands); add_log(f'[자동가입 재시도] 이전 실패 게시판 {revived}곳 재시도 대상 복원')
+        # ★빡센검수 소급 적용(대표님 지시 2026-09-09 '대기 너무 쌓임'): strict_screen 켜져 있으면,
+        #   기존 backlog의 ready 후보 중 '홍보 흔적 없는 것'(방치·개방 게시판 아님)을 대기줄에서 탈락.
+        #   (예전 느슨한 검수로 통과된 것들이 가입 안 되며 대기만 쌓이던 문제 — 될 만한 것만 남긴다.)
+        if cfg.get('strict_screen',True):
+            pruned=0
+            for c in cands:
+                if c.get('status')!='ready' or c.get('source')=='manual': continue
+                if c.get('write_form') and not c.get('login_required'): continue   # 비회원(바로발행)은 유지
+                _pc=int(c.get('promo_phone_count',0) or 0)
+                if _pc<1 and not c.get('promo_hint'):
+                    c['status']='rejected'; c['reject_reason']='빡센검수(소급) — 홍보글 흔적 없음(가입해도 될 확률 낮음)'
+                    pruned+=1
+            if pruned:
+                save_cands(cands); add_log(f'[빡센검수 정리] 홍보흔적 없는 대기 후보 {pruned}곳 탈락 — 될 만한 것만 남김','정리')
     # 대상: 검수완료(ready) + 아직 사이트 미등록 + 자동탈락 아님 + '글쓰기 가능성'이 있는 것.
     # (114/맵 등 전화번호·디렉토리 사이트는 게시판이 아니라 제외. 그 외 게시판형 후보는
     #  글쓰기폼 미확인이라도 일단 자동가입→발행 시도해 되는지 판별한다 — 방치 없이 되거나 탈락)
