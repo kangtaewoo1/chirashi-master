@@ -127,21 +127,41 @@ def google_search(query, num=10):
         log(f"  Google 예외: {str(e)[:80]}"); return []
 
 
-def ddg_search(query):
-    """DuckDuckGo HTML 검색 — API 키 불필요(무료). PC의 실제 IP라 봇차단 약함.
-       결과 URL 리스트 반환. (대표님 지시: 키 없이 무료 발굴)"""
+# DDG가 짧은 시간 다량 요청에 403을 낸다. 브라우저처럼 보이는 UA를 돌려쓰고, 403이면
+#  백오프 후 lite 엔드포인트로 폴백한다.
+_DDG_UAS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+]
+
+def _ddg_parse(html):
+    out = []
+    # html 엔드포인트: class="result__a", lite 엔드포인트: 그냥 결과 링크(uddg 래핑)
+    for u in re.findall(r'href="([^"]*uddg=[^"]+)"', html):
+        m = re.search(r'uddg=([^&]+)', u)
+        if m: out.append(urllib.parse.unquote(m.group(1)))
+    if not out:
+        for u in re.findall(r'<a[^>]+class="result__a"[^>]+href="([^"]+)"', html):
+            m = re.search(r'uddg=([^&]+)', u)
+            out.append(urllib.parse.unquote(m.group(1)) if m else u)
+    return out
+
+def ddg_search(query, _retry=0):
+    """DuckDuckGo HTML 검색 — API 키 불필요(무료). 403(봇차단) 시 백오프+lite 폴백."""
+    ua = _DDG_UAS[_retry % len(_DDG_UAS)]
+    hdr = {"User-Agent": ua, "Accept-Language": "ko-KR,ko;q=0.9",
+           "Referer": "https://duckduckgo.com/", "Accept": "text/html"}
+    endpoint = "https://lite.duckduckgo.com/lite/" if _retry >= 1 else "https://html.duckduckgo.com/html/"
     try:
-        r = requests.post("https://html.duckduckgo.com/html/",
-                          data={"q": query, "kl": "kr-kr"},
-                          headers={**UA, "Accept-Language": "ko-KR,ko;q=0.9"},
-                          timeout=20, verify=False)
+        r = requests.post(endpoint, data={"q": query, "kl": "kr-kr"},
+                          headers=hdr, timeout=20, verify=False)
+        if r.status_code == 403 and _retry < 2:
+            time.sleep(4 + _retry * 4)          # 백오프(4s, 8s) 후 다른 UA·엔드포인트로 재시도
+            return ddg_search(query, _retry + 1)
         if r.status_code >= 400:
             log(f"  DDG {r.status_code}"); return []
-        out = []
-        for u in re.findall(r'<a[^>]+class="result__a"[^>]+href="([^"]+)"', r.text):
-            m = re.search(r'uddg=([^&]+)', u)          # DDG 리다이렉트 언랩
-            out.append(urllib.parse.unquote(m.group(1)) if m else u)
-        return out
+        return _ddg_parse(r.text)
     except Exception as e:
         log(f"  DDG 예외: {str(e)[:80]}"); return []
 
@@ -234,7 +254,9 @@ def run_once(max_queries):
             found[d] = u; new_here += 1
         if new_here:
             log(f"  [{i}/{len(queries)}] +{new_here}  «{q[:36]}»")
-        time.sleep(1.1)   # 검색 API 예의상 간격(레이트리밋 방지)
+        # ★DDG 봇차단(403) 방지: 요청 간격을 넉넉히(prov=ddg면 2.5s, 키검색은 1.1s).
+        #   짧게 연속 요청하면 DDG가 403을 낸다(대표님 화면 실측).
+        time.sleep(2.5 if prov == "ddg" else 1.1)
 
     urls = list(found.values())
     if not urls:
