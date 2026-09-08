@@ -636,6 +636,9 @@ def load_config():
        'min_interval_minutes':1,   # 발행 간격(분): 1=사실상 무간격, daily_limit=0=하루 무제한(대표님 요청)
        'publish_loop_enabled':True,'publish_interval_sec':300,   # 24시간 상시발행 루프(5분 주기 큐 보충)
        'workroom_workers':4,   # 작업실별 전용 발행 워커(=동시 크롬) 수 상한. VPS 사양에 맞게 조절(4vCPU→4)
+       'publish_fanout':4,   # ★한 조합을 발행가능 사이트들에 '동시에' 뿌리는 병렬 크롬 수(대표님 '속도'). 1=순차
+       'publish_max_chromes':6,   # ★전역 동시 크롬 상한(모든 작업실 슬롯×fanout 통틀어). VPS 메모리 보호. 크롬1개~400MB
+
        'vps_reserve_mb':350,'vps_mb_per_worker':300,   # 메모리 가드 민감도(낮출수록 워커 더 허용·OOM위험↑)
 
        'discover_interval_sec':600,   # 발굴 주기 10분(크레딧 절약). 목표 도달 시 자동 중단
@@ -4079,6 +4082,16 @@ def _site_lock(site_id):
         lk=_site_post_locks.get(site_id)
         if lk is None: lk=threading.Lock(); _site_post_locks[site_id]=lk
         return lk
+# ★전역 동시 크롬 상한(대표님 '속도' + VPS 메모리 보호): 모든 작업실 슬롯×fanout를 통틀어
+#   이 수만큼만 크롬 동시 실행. publish_max_chromes로 조절(기본6). 크롬 1개 ~300~500MB.
+_chrome_sem=None; _chrome_sem_n=0; _chrome_sem_guard=threading.Lock()
+def _global_chrome_sem():
+    global _chrome_sem,_chrome_sem_n
+    n=max(1,min(12,int(load_config().get('publish_max_chromes',6) or 6)))
+    with _chrome_sem_guard:
+        if _chrome_sem is None or _chrome_sem_n!=n:
+            _chrome_sem=threading.BoundedSemaphore(n); _chrome_sem_n=n
+        return _chrome_sem
 BULK_LOCK=threading.Lock()
 BULK_TASKS={}
 
@@ -6337,30 +6350,30 @@ def _workroom_combos(room):
 _WR_SLOTS={}   # slot_index -> Thread (작업실 발행 슬롯 워커 = 동시 크롬)
 _MEM_WARN=['']   # VPS 메모리 축소 경고 중복 방지용(마지막 경고 상태)
 
-def _publish_one_combo(kw, wname, rid, cfg, writer_name=''):
-    """한 조합(kw)을 '발행가능 사이트 전체'에 각각 유니크 글로 발행(현재 스레드의 크롬 사용).
-       do_post·history·finalize 재사용. 사이트마다 발행 직전 간격·한도·publishable 재확인.
-       writer_name: 작업실별 작성자 이름(비어있으면 브랜드) — 발행 site에 심어 폼 작성자 필드에 사용."""
-    for s in [x for x in load_sites() if is_publishable(x)]:
-        cfg=load_config()
-        if not cfg.get('publish_loop_enabled'): return
-        fresh=next((x for x in load_sites() if x.get('id')==s.get('id')),None)
-        if not fresh or not is_publishable(fresh): continue
-        if writer_name: fresh['writer_name']=writer_name   # 작업실 지정 작성자명 → 폼 wr_name에 사용
-        if rid: fresh['workroom_id']=rid                    # 첨부 이미지도 작업실 전용 폴더에서 고르도록 전달
-        if not under_daily_limit(fresh,cfg): continue
-        if not under_min_interval(fresh)[0]: continue
-        # '메인만 한 줄' 모드면 사이트마다 서브2·3을 그 구/동에 맞춰 새로 랜덤 생성(반복 방지).
+def _publish_combo_to_site(s, kw, wname, rid, cfg, writer_name=''):
+    """한 조합(kw)을 '한 사이트'에 유니크 글로 발행. _publish_one_combo가 사이트마다 병렬 호출.
+       각 호출은 자기 스레드의 크롬(get_driver는 스레드명 기반)을 써서 서로 간섭 안 함.
+       ★같은 사이트 동시발행은 _site_lock으로 방지(도배·간격 우회 방지)."""
+    if not cfg.get('publish_loop_enabled'): return
+    fresh=next((x for x in load_sites() if x.get('id')==s.get('id')),None)
+    if not fresh or not is_publishable(fresh): return
+    _slk=_site_lock(fresh.get('id'))
+    if not _slk.acquire(blocking=False): return   # 다른 슬롯/조합이 이 사이트 발행 중 → 스킵
+    try:
+        if writer_name: fresh['writer_name']=writer_name
+        if rid: fresh['workroom_id']=rid
+        if not under_daily_limit(fresh,cfg): return
+        if not under_min_interval(fresh)[0]: return
         pub_kw=_auto_subkeywords(kw.get('_main','')) if kw.get('_main_only') else _fix_kw_dong(kw)
         try:
             html,title=generate_article(pub_kw,cfg,unique=True,workroom_id=rid)
         except Exception as e:
-            add_log(f"[작업실:{wname}] 생성오류 {str(e)[:50]}"); continue
+            add_log(f"[작업실:{wname}] 생성오류 {str(e)[:50]}"); return
         now=datetime.now().strftime('%Y-%m-%d %H:%M:%S'); jid=secrets.token_hex(8)
         history_add({'id':jid,'time':now,'updated':now,'site_id':fresh.get('id'),
             'site_name':fresh.get('name') or fresh.get('site_url',''),'site_url':fresh.get('site_url',''),
             'bo_table':fresh.get('bo_table',''),'title':title,'region':pub_kw.get('지역',''),'service':pub_kw.get('서비스',''),
-            'brand':pub_kw.get('브랜드',''),   # 키워드3 — 결과 표 '키워드' 열에 3개 다 보이게(대표님 지시)
+            'brand':pub_kw.get('브랜드',''),
             'workroom_id':rid,'workroom_name':wname,'status':'posting','result_url':'','message':'','attempts':0})
         ok=False; msg=''
         for attempt in range(1,4):
@@ -6384,8 +6397,32 @@ def _publish_one_combo(kw, wname, rid, cfg, writer_name=''):
             else: wk_stats['fail']+=1
             wk_stats['done']+=1
         add_log(f"[작업실:{wname}] {'성공' if ok else '실패:'+reason_ko} {fresh.get('name') or (fresh.get('site_url','') or '')[:20]}")
-        delay=int(cfg.get('post_delay',30) or 0)
-        if delay>0: time.sleep(delay)
+    finally:
+        _slk.release()
+
+def _publish_one_combo(kw, wname, rid, cfg, writer_name=''):
+    """한 조합(kw)을 '발행가능 사이트 전체'에 병렬로 동시 발행(대표님 '속도가 생명').
+       ★기존엔 사이트를 한 개씩 순차(+사이트마다 30초 대기)라 12곳이면 매우 느렸다.
+       → publish_fanout(기본4)개씩 스레드로 동시 발행. 각 스레드=자기 크롬. 같은사이트는 _site_lock."""
+    sites=[x for x in load_sites() if is_publishable(x)]
+    if not sites: return
+    fan=max(1,min(6,int(cfg.get('publish_fanout',4) or 4)))
+    _sem=threading.Semaphore(fan)          # 이 조합의 동시 발행 수(작업실 슬롯 내)
+    _gsem=_global_chrome_sem()             # 전역 크롬 상한(모든 슬롯 통틀어)
+    threads=[]
+    def _one(site):
+        with _sem, _gsem:                  # 조합 내 상한 + 전역 크롬 상한 둘 다 만족해야 발행
+            try: _publish_combo_to_site(site,kw,wname,rid,cfg,writer_name=writer_name)
+            except Exception as e: add_log(f"[작업실:{wname}] 발행스레드 오류 {str(e)[:50]}")
+            finally:
+                # ★이 발행스레드의 크롬 정리(스레드명 기반 캐시라 스레드 죽으면 누수 → 명시 종료).
+                try: reset_driver()
+                except Exception: pass
+    for s in sites:
+        if not cfg.get('publish_loop_enabled'): break
+        t=threading.Thread(target=_one,args=(s,),name=f'PUB-{s.get("id","")[:6]}-{secrets.token_hex(2)}',daemon=True)
+        t.start(); threads.append(t)
+    for t in threads: t.join()   # 이 조합의 모든 사이트 발행 완료까지 대기(다음 조합으로)
 
 def workroom_worker(slot):
     """발행 슬롯 워커(독립 크롬 스레드). 전체 작업실 중 자기 슬롯 담당분(i%cap==slot)을
