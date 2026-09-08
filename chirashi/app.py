@@ -8934,7 +8934,7 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 <div class="stats" id="live"><span>큐:<b id="q">0</b></span><span>성공:<b id="ok" style="color:var(--g)">0</b></span><span>실패:<b id="fl" style="color:var(--r)">0</b></span><span>스킵:<b id="sk" style="color:var(--y)">0</b></span><span>발행워커:<b id="ws" style="color:var(--d)">-</b></span><span style="margin-left:10px;padding-left:10px;border-left:1px solid var(--b)">🎯 발행가능 <b id="siteGoal" style="color:var(--p)">-</b></span></div>
 <a href="/logout" class="btn-xs" style="background:var(--b);color:var(--d);text-decoration:none">로그아웃</a></header>
 
-<div class="tabs"><button id="tab-gen" class="tab" onclick="T('gen')" style="display:none">글 생성</button><button class="tab on" onclick="T('kw')">키워드</button><button class="tab" onclick="T('wlog')">워커 실행로그</button><button class="tab" onclick="T('images')">이미지 저장</button><button class="tab" onclick="T('sites')">사이트 (<span id="siteTabCount">{{sites|length}}</span>)</button><button class="tab" onclick="T('res')">결과</button><button class="tab" onclick="T('disco')">발굴</button><button id="tab-mem" class="tab" onclick="T('mem')" style="display:none">회원·정산</button><button class="tab" onclick="T('stats')">통계</button><button class="tab" onclick="T('cost')">API 비용</button><button class="tab" onclick="T('set')">설정</button></div>
+<div class="tabs"><button id="tab-gen" class="tab" onclick="T('gen')" style="display:none">글 생성</button><button class="tab on" onclick="T('kw')">키워드</button><button class="tab" onclick="T('wlog')">발행 현황</button><button class="tab" onclick="T('images')">이미지 저장</button><button class="tab" onclick="T('sites')">사이트 (<span id="siteTabCount">{{sites|length}}</span>)</button><button class="tab" onclick="T('disco')">발굴</button><button id="tab-mem" class="tab" onclick="T('mem')" style="display:none">회원·정산</button><button class="tab" onclick="T('stats')">통계</button><button class="tab" onclick="T('cost')">API 비용</button><button class="tab" onclick="T('set')">설정</button></div>
 <div class="wrap"><div id="toasts"></div>
 <div id="pvOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:500;padding:20px" onclick="if(event.target===this)closePreview()">
 <div style="max-width:820px;margin:0 auto;background:#fff;color:#222;border-radius:10px;max-height:90vh;overflow:auto">
@@ -9053,15 +9053,7 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 <div class="row" style="margin-bottom:6px"><button class="btn btn-d btn-xs" onclick="healthAll()">선택 상태점검</button><span style="flex:1"></span><span style="color:var(--d);font-size:10px">발행테스트 통과 시 자동 허용 · 체크박스로 선택 후 상태점검</span></div>
 <div style="max-height:400px;overflow-y:auto" id="siteList"></div></div></div>
 
-<div id="p-res" class="panel">
-<div class="card"><h3>발행 결과 이력</h3>
-<div class="row" style="margin-bottom:8px">
-<button class="btn btn-g" onclick="location='/api/history/export'">엑셀 내보내기</button>
-<button class="btn btn-d" onclick="renderHistory()">새로고침</button>
-<span style="flex:1"></span>
-<span style="color:var(--d);font-size:10px" id="histCount">0건</span>
-<button class="btn btn-r btn-xs" onclick="if(confirm('이력 전체 삭제?'))api('/history/clear','POST').then(()=>{toast('이력 삭제됨');renderHistory()})">이력 비우기</button></div>
-<div style="max-height:520px;overflow-y:auto" id="histList"></div></div></div>
+<!-- ★결과 탭(p-res) 제거 — 발행 현황(p-wlog) 탭에 병합됨(대표님 지시 2026-09-09). -->
 
 <div id="p-wlog" class="panel">
 <div class="note">작업실에서 시작한 글 생성 준비와 실제 워커 발행 상태를 작업실별로 확인합니다. 준비 완료 뒤에는 큐→발행 중→성공/실패→결과 URL 순서로 기록됩니다.</div>
@@ -9090,8 +9082,12 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
     </div>
   </div>
 </div>
-<!-- ★작업실별 발행이력 표 제거(대표님 지시 2026-09-09): '결과' 탭과 중복. 워커로그 탭은 관제실만.
-     전체 발행이력은 '결과' 탭(제목=링크·발행링크 클릭)에서 확인. -->
+<!-- ★결과탭 병합(대표님 지시 2026-09-09): 관제실 아래에 발행이력 표를 함께(제목=링크·발행링크 클릭). -->
+<div class="card" style="margin-top:10px"><div class="row" style="align-items:center"><h3 style="margin:0">📮 발행 이력</h3><span id="histCount" style="color:var(--d);font-size:11px"></span><span style="flex:1"></span>
+<button class="btn btn-d btn-xs" onclick="renderHistory()">새로고침</button>
+<button class="btn btn-g btn-xs" onclick="window.open('/api/history/export','_blank')">엑셀 내보내기</button>
+<button class="btn btn-r btn-xs" onclick="if(confirm('이력 전체 삭제?'))api('/history/clear','POST').then(()=>{toast('이력 삭제됨');renderHistory()})">이력 비우기</button></div>
+<div style="max-height:520px;overflow-y:auto;margin-top:6px" id="histList"></div></div>
 </div></div>
 
 <div id="p-disco" class="panel">
@@ -9282,7 +9278,7 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 
 <script>
 const $=id=>document.getElementById(id);
-function T(n){document.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));document.querySelectorAll('.panel').forEach(p=>p.classList.remove('on'));document.querySelector(`[onclick="T('${n}')"]`).classList.add('on');$('p-'+n).classList.add('on');if(n==='res')renderHistory();if(n==='wlog'){renderWorkerLog();renderCaptchaTasks()}if(n==='stats')renderStats();if(n==='cost'){loadUsageDashboard();startUsageAuto()}else{stopUsageAuto()}if(n==='set'){loadCfgUI();loadRegionTool()}if(n==='gen'){loadPool();loadImages();loadRegionTool()}if(n==='kw'){loadWorkrooms();loadRegionTool()}if(n==='mem'){renderMembers();if(!document.querySelector('.mSite'))fillSiteBox([])}if(n==='disco')renderCands()}
+function T(n){document.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));document.querySelectorAll('.panel').forEach(p=>p.classList.remove('on'));document.querySelector(`[onclick="T('${n}')"]`).classList.add('on');$('p-'+n).classList.add('on');if(n==='wlog'){renderWorkerLog();renderHistory();renderCaptchaTasks()}if(n==='stats')renderStats();if(n==='cost'){loadUsageDashboard();startUsageAuto()}else{stopUsageAuto()}if(n==='set'){loadCfgUI();loadRegionTool()}if(n==='gen'){loadPool();loadImages();loadRegionTool()}if(n==='kw'){loadWorkrooms();loadRegionTool()}if(n==='mem'){renderMembers();if(!document.querySelector('.mSite'))fillSiteBox([])}if(n==='disco')renderCands()}
 function toast(m,c='ok'){const d=$('toasts');const e=document.createElement('div');e.className='toast toast-'+c;e.textContent=m;d.appendChild(e);setTimeout(()=>e.remove(),2500)}
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
 async function api(p,m,b){try{const o={method:m,headers:{'Content-Type':'application/json'}};if(b)o.body=JSON.stringify(b);const r=await fetch('/api'+p,o);
@@ -9830,7 +9826,8 @@ if(r.site_goal){const sg=$('siteGoal');if(sg){const done=r.site_done||0,goal=r.s
 const wn=(r.wr_workers==null?null:r.wr_workers);if(wn!=null){$('ws').textContent=wn>0?(wn+'개 발행중'):'정지';$('ws').style.color=wn>0?'var(--g)':'var(--d)';}else{const wstate=r.paused?'PAUSE':(r.active?'ON':'OFF');$('ws').textContent=wstate;$('ws').style.color=r.paused?'var(--y)':(r.active?'var(--g)':'var(--d)');}
 const total=r.total||0,done=r.done||0;
 if(total>0){$('progCard').style.display='block';const pct=Math.round(done/total*100);$('progBar').style.width=pct+'%';$('progText').textContent=`${done} / ${total} (${pct}%)`+(r.skipped?` · 스킵 ${r.skipped}`:'')}else{$('progCard').style.display='none'}
-if($('p-res').classList.contains('on'))renderHistory();if($('p-wlog').classList.contains('on')){renderWorkerLog();renderCaptchaTasks()}}
+// ★결과탭 병합: 발행현황(p-wlog) 탭이 열려 있으면 관제실·발행이력·캡차 모두 갱신.
+if($('p-wlog')&&$('p-wlog').classList.contains('on')){renderWorkerLog();renderHistory();renderCaptchaTasks()}}
 
 $('gContent').addEventListener('input',function(){$('gLen').textContent=this.value.length.toLocaleString()+'자'});
 $('kwlist').addEventListener('input',function(){$('kwCount').textContent=parseList().length+'줄'});
