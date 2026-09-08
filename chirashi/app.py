@@ -7255,7 +7255,9 @@ def api_cand_ingest():
         urls=[x.strip() for x in str(raw or '').splitlines() if x.strip().startswith('http')]
     urls=list(dict.fromkeys(urls))[:100]   # 중복 제거·1회 100개 상한(부하·탐지 회피)
     if not urls: return jsonify({'ok':False,'error':'http로 시작하는 URL이 없습니다'})
-    n=add_candidates_from([{'url':u} for u in urls],cfg,source='manual')
+    # ★PC 발굴은 source='pc'(자동 발굴). 진짜 수동추가(manual)와 구분 — 빡센검수 예외는 manual만
+    #   적용해야 함(PC발굴을 manual로 태깅했더니 빡센검수를 전부 우회해 대기가 안 줄던 버그, 2026-09-09).
+    n=add_candidates_from([{'url':u} for u in urls],cfg,source='pc')
     def _screen_then_pipeline():
         try: screen_pending(limit=len(urls))
         except Exception as e: add_log(f'[PC발굴 검수오류] {str(e)[:80]}')
