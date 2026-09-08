@@ -9864,11 +9864,17 @@ if(total>0){$('progCard').style.display='block';const pct=Math.round(done/total*
 // ★결과탭 병합: 발행현황(p-wlog) 탭이 열려 있으면 관제실·발행이력·캡차 모두 갱신.
 if($('p-wlog')&&$('p-wlog').classList.contains('on')){renderWorkerLog();renderHistory();renderCaptchaTasks()}}
 
-$('gContent').addEventListener('input',function(){$('gLen').textContent=this.value.length.toLocaleString()+'자'});
-$('kwlist').addEventListener('input',function(){$('kwCount').textContent=parseList().length+'줄'});
-renderSites();poll();loadPool();loadImages();loadImageFiles();loadWorkrooms();loadImgWorkrooms();loadRegionTool();
-setInterval(poll,2000);
-setInterval(renderSites,4000);
+// ★초기화 방어(대표님 제보 '빈페이지' 2026-09-09): 요소 하나가 null이라도 나머지 초기화·폴링이 죽지 않도록
+//   각 단계를 개별 try/catch로. 또 현재 .on 패널이 없으면(구조 꼬임) 무조건 키워드탭으로 복구해 흰화면 방지.
+(function boot(){
+  try{const g=$('gContent');if(g)g.addEventListener('input',function(){$('gLen').textContent=this.value.length.toLocaleString()+'자'})}catch(e){}
+  try{const k=$('kwlist');if(k)k.addEventListener('input',function(){$('kwCount').textContent=parseList().length+'줄'})}catch(e){}
+  // 활성 패널이 하나도 없으면 기본 탭 강제 활성화(빈화면 최후 방어).
+  try{if(!document.querySelector('.panel.on'))T('kw')}catch(e){console.error('기본탭 복구 실패',e)}
+  [renderSites,poll,loadPool,loadImages,loadImageFiles,loadWorkrooms,loadImgWorkrooms,loadRegionTool].forEach(fn=>{try{fn()}catch(e){console.error('init',fn.name,e)}});
+})();
+setInterval(()=>{try{poll()}catch(e){}},2000);
+setInterval(()=>{try{renderSites()}catch(e){}},4000);
 </script>
 </body></html>'''
 
