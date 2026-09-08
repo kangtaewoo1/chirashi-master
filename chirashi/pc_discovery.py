@@ -174,6 +174,23 @@ def looks_like_board(url):
     return False
 
 
+# ★검색어 로테이션 커서(대표님 지시): 매 실행마다 400개 검색어의 '다음 묶음'을 돌려
+#  같은 검색어 반복으로 신규가 적던 문제 해결. 커서를 로컬 파일에 저장해 이어간다.
+_CURSOR_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".pc_discovery_cursor")
+
+def _read_cursor():
+    try:
+        return int(open(_CURSOR_FILE, encoding="utf-8").read().strip() or "0")
+    except Exception:
+        return 0
+
+def _write_cursor(v):
+    try:
+        open(_CURSOR_FILE, "w", encoding="utf-8").write(str(int(v)))
+    except Exception:
+        pass
+
+
 def run_once(max_queries):
     if not SERVER_TOKEN:
         log("SERVER_TOKEN이 비어 있습니다. 환경변수 CHIRASHI_TOKEN 또는 파일 CONFIG를 채우세요.")
@@ -190,9 +207,19 @@ def run_once(max_queries):
         log(f"서버 쿼리 조회 실패: {str(e)[:100]}"); return
     if not info.get("ok"):
         log(f"서버 응답 오류: {info.get('error')}"); return
-    queries = info.get("queries", [])[:max_queries]
+    all_q = info.get("queries", [])
+    # ★로테이션: 커서 위치부터 max_queries개를 잘라 쓰고, 커서를 그만큼 전진(끝이면 처음으로).
+    total = len(all_q)
+    if total == 0:
+        log("서버에서 받은 검색어가 없습니다."); return
+    cur = _read_cursor() % total
+    if cur + max_queries <= total:
+        queries = all_q[cur:cur + max_queries]
+    else:   # 끝을 넘으면 앞으로 감아서 채움
+        queries = all_q[cur:] + all_q[:(cur + max_queries) - total]
+    _write_cursor((cur + max_queries) % total)
     skip = set(info.get("known_domains", [])) | set(info.get("rejected_domains", []))
-    log(f"검색어 {len(queries)}개 · 스킵 도메인 {len(skip)}개 · 제공자 {prov}")
+    log(f"검색어 {len(queries)}개(전체 {total}개 중 {cur+1}~{cur+len(queries)}) · 스킵 {len(skip)}개 · {prov}")
 
     found = {}     # domain → url (도메인당 1개만; 서버가 게시판 축약)
     for i, q in enumerate(queries, 1):
@@ -233,7 +260,7 @@ def run_once(max_queries):
 def main():
     ap = argparse.ArgumentParser(description="찌라시 PC 자동 발굴 연동")
     ap.add_argument("--once", action="store_true", help="한 번만 실행하고 종료")
-    ap.add_argument("--interval", type=int, default=1200, help="반복 간격(초, 기본 1200=20분)")
+    ap.add_argument("--interval", type=int, default=300, help="반복 간격(초, 기본 300=5분)")
     ap.add_argument("--max-queries", type=int, default=30, help="한 회당 검색어 수(기본 30)")
     a = ap.parse_args()
     log(f"찌라시 PC 발굴 시작 — 서버 {SERVER}")

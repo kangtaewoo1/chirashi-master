@@ -79,3 +79,4 @@ _app_*.log
 _*.py
 claudedocs/
 data/*.pre-*.bak
+.pc_discovery_cursor
