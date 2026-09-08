@@ -612,7 +612,7 @@ def load_config():
        'openai_admin_key':'','openai_monthly_budget_usd':20.0,
        'openai_input_price_per_million':0.15,'openai_cached_input_price_per_million':0.075,
        'openai_output_price_per_million':0.60,
-       'workers':2,'password':'admin1234','post_delay':30,'daily_limit':0,
+       'workers':4,'password':'admin1234','post_delay':30,'daily_limit':0,
        'use_gpt':False,'telegram_token':'','telegram_chat_id':'',
        'notify_done':False,'notify_fail':True,'update_token':'',
        'telegram_control':False,'backup_time':'','verify_enabled':True,'mix_keywords':True,
@@ -4071,6 +4071,14 @@ wk_stats={'success':0,'fail':0,'queued':0,'total':0,'done':0,'skipped':0,'retry'
 STATS_LOCK=threading.Lock()
 POST_LOCK=threading.Lock()
 JOB_LOCK=threading.Lock()   # history.json / queue.json 동시성 보호
+# ★사이트별 발행 락(대표님 지시 '속도가 생명'): 여러 워커가 '서로 다른' 사이트는 동시 발행하되,
+#   '같은' 사이트에는 동시 발행 안 함(도배방지/간격 우회 방지). site_id별 락을 만들어 관리.
+_site_post_locks={}; _site_post_locks_guard=threading.Lock()
+def _site_lock(site_id):
+    with _site_post_locks_guard:
+        lk=_site_post_locks.get(site_id)
+        if lk is None: lk=threading.Lock(); _site_post_locks[site_id]=lk
+        return lk
 BULK_LOCK=threading.Lock()
 BULK_TASKS={}
 
@@ -4391,8 +4399,12 @@ def purge_dead_sites(confirm=False):
 def start_workers(n=2):
     global wk_active,wk_paused
     if wk_active: return
-    n=1  # 동일 사이트 동시 발행에 의한 한도/간격 우회 방지
-    wk_active=True; wk_paused=False; add_log(f'[워커] {n}개 시작 (사이트 한도 보호)')
+    # ★병렬 발행(대표님 지시 '속도가 생명'): 워커 여러 개로 '서로 다른' 사이트 동시 발행.
+    #   같은 사이트 동시발행은 _site_lock으로 방지하므로 n=1 강제 제거. 단 크롬 N개=메모리라 상한 6.
+    #   (기존 n=1은 과보호였음 — under_min_interval/under_daily_limit이 이미 동일사이트 도배 막음.)
+    try: n=max(1,min(6,int(n or 2)))
+    except Exception: n=2
+    wk_active=True; wk_paused=False; add_log(f'[워커] {n}개 시작 (병렬 발행, 사이트별 락 보호)')
     for i in range(n):
         t=threading.Thread(target=worker_loop,name=f'W-{i+1}',daemon=True); t.start()
 
@@ -4427,6 +4439,20 @@ def worker_loop():
             continue
         site=current; job['site']=current
 
+        # ★같은 사이트를 다른 워커가 이미 발행 중이면(락 점유) 이 잡을 큐 뒤로 넘기고 다른 잡 처리.
+        #   서로 다른 사이트는 병렬 진행 → 12곳이 워커 수만큼 동시에 발행됨(대표님 '속도가 생명').
+        _slk=_site_lock(site.get('id'))
+        if not _slk.acquire(blocking=False):
+            post_queue.put(job)          # 뒤로 돌려 다른 워커/다음 차례에 처리
+            time.sleep(0.3); continue
+        try:
+            _do_publish_job(job,site,cfg,name,job_id,hid)
+        finally:
+            _slk.release()
+
+def _do_publish_job(job,site,cfg,name,job_id,hid):
+        """한 발행 잡을 실제 처리(한도·간격 확인 → 발행 → 재시도/기록). 사이트별 락 안에서 호출됨."""
+        title=job['title']; content=job['content']
         # 1일 한도 확인 (도배 방지)
         if not under_daily_limit(site,cfg):
             add_log(f'[스킵] {name} 일일 발행 한도 도달')
@@ -4434,7 +4460,7 @@ def worker_loop():
             if job_id: _persist_remove(job_id)
             with STATS_LOCK:
                 wk_stats['skipped']+=1; wk_stats['done']+=1; wk_stats['queued']=post_queue.qsize()
-            continue
+            return
 
         interval_ok,remain=under_min_interval(site)
         if not interval_ok:
@@ -4444,7 +4470,7 @@ def worker_loop():
             if job_id: _persist_remove(job_id)
             with STATS_LOCK:
                 wk_stats['skipped']+=1; wk_stats['done']+=1; wk_stats['queued']=post_queue.qsize()
-            continue
+            return
 
         if hid: history_update(hid,status='posting')
         # 발행 (실패 시 3회 재시도, 지수 백오프 + 드라이버 자동 재시작)
@@ -4477,7 +4503,7 @@ def worker_loop():
             schedule_retry(job)   # queue.json 은 그대로 유지(재시작 시 복구)
             add_log(f'[재시도 예약 {job["requeues"]}/{RETRY_MAX}] {name} - {reason_ko}')
             if cfg.get('notify_fail'): send_telegram(cfg,f'🔄 일시적 실패({reason_ko}) 재시도 예약: {name}')
-            continue
+            return
         with STATS_LOCK:
             if ok: wk_stats['success']+=1
             else: wk_stats['fail']+=1
@@ -9010,7 +9036,7 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 <div style="font-size:10px;color:var(--d);margin-top:5px">⚠️ 지메일: 2단계인증 켜고 <b>앱 비밀번호</b>를 발급해 넣으세요(일반 비번 아님). IMAP 사용 설정도 켜야 합니다.</div></div>
 <div style="font-size:10px;color:var(--d)">제목의 번호는 매번 <b style="color:var(--p)">[010]↔8275↔5736 · O1O=2572=3859 · [OIO-5350-5892]</b> 처럼 랜덤 기호로 변형됩니다. 여러 개면 그 중 하나를 랜덤 선택. 비우면 위 대표 전화번호 사용.</div></div>
 <div class="card"><h3>워커/비번</h3>
-<div style="margin-bottom:6px"><small style="color:var(--d)">워커 수</small><input type="number" id="cWorkers" value="{{cfg.workers}}" min="1" max="10"></div>
+<div style="margin-bottom:6px"><small style="color:var(--d)">워커 수 (서로 다른 사이트 동시 발행 · 권장 4, 최대 6)</small><input type="number" id="cWorkers" value="{{cfg.workers}}" min="1" max="6"></div>
 <small style="color:var(--d)">비밀번호</small><input type="password" id="cPw" placeholder="변경시 입력"></div>
 <div class="card"><h3>레이트 리밋 (도배 방지)</h3>
 <div style="margin-bottom:6px"><small style="color:var(--d)">포스트 간 지연 (초)</small><input type="number" id="cDelay" value="{{cfg.post_delay}}" min="0"></div>
