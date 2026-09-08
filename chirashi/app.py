@@ -9307,12 +9307,16 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 
 <script>
 const $=id=>document.getElementById(id);
-function T(n){document.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));document.querySelectorAll('.panel').forEach(p=>p.classList.remove('on'));document.querySelector(`[onclick="T('${n}')"]`).classList.add('on');$('p-'+n).classList.add('on');if(n==='wlog'){renderWorkerLog();renderHistory();renderCaptchaTasks()}if(n==='stats')renderStats();if(n==='cost'){loadUsageDashboard();startUsageAuto()}else{stopUsageAuto()}if(n==='set'){loadCfgUI();loadRegionTool()}if(n==='gen'){loadPool();loadImages();loadRegionTool()}if(n==='kw'){loadWorkrooms();loadRegionTool()}if(n==='mem'){renderMembers();if(!document.querySelector('.mSite'))fillSiteBox([])}if(n==='disco')renderCands()}
+// ★탭 전환 방어(대표님 제보 '빈페이지 뜸' 2026-09-09): 탭버튼/패널이 없거나 렌더 1개가 던져도
+//   페이지 전체가 하얗게 비지 않도록 null가드 + try/catch. 패널은 무조건 먼저 보이게 한 뒤 렌더 호출.
+function T(n){document.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));document.querySelectorAll('.panel').forEach(p=>p.classList.remove('on'));const _tb=document.querySelector(`[onclick="T('${n}')"]`);if(_tb)_tb.classList.add('on');const _pn=$('p-'+n);if(_pn)_pn.classList.add('on');try{if(n==='wlog'){renderWorkerLog();renderHistory();renderCaptchaTasks()}if(n==='stats')renderStats();if(n==='cost'){loadUsageDashboard();startUsageAuto()}else{stopUsageAuto()}if(n==='set'){loadCfgUI();loadRegionTool()}if(n==='gen'){loadPool();loadImages();loadRegionTool()}if(n==='kw'){loadWorkrooms();loadRegionTool()}if(n==='mem'){renderMembers();if(!document.querySelector('.mSite'))fillSiteBox([])}if(n==='disco')renderCands()}catch(e){console.error('탭 렌더 오류',n,e)}}
 function toast(m,c='ok'){const d=$('toasts');const e=document.createElement('div');e.className='toast toast-'+c;e.textContent=m;d.appendChild(e);setTimeout(()=>e.remove(),2500)}
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
 async function api(p,m,b){try{const o={method:m,headers:{'Content-Type':'application/json'}};if(b)o.body=JSON.stringify(b);const r=await fetch('/api'+p,o);
-  // ★세션만료(401)·차단(403)이면 로그인으로(HTML 응답을 JSON 파싱하다 'Unexpected token <' 배너 도배 방지).
-  if(r.status===401||r.status===403){if(!window._reloginAt||Date.now()-window._reloginAt>5000){window._reloginAt=Date.now();location='/login'}return null}
+  // ★세션만료(401)만 로그인으로. 403(차단·일시)은 로그인으로 못고치고 페이지만 하얗게 되므로 조용히 무시.
+  //   (대표님 제보 '빈페이지' 2026-09-09: 배포 재시작 중 일시 403이 로그인 리다이렉트→빈화면 유발했음.)
+  if(r.status===401){if(!window._reloginAt||Date.now()-window._reloginAt>5000){window._reloginAt=Date.now();location='/login'}return null}
+  if(r.status===403){return null}
   // ★JSON이 아닌 응답(재시작 중 HTML 등)은 조용히 무시 — 폴링(2초)마다 에러 토스트 뜨던 문제 해결.
   const ct=r.headers.get('content-type')||'';if(ct.indexOf('application/json')<0){return null}
   return await r.json()}catch(e){return null}}
