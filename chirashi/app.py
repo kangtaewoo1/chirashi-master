@@ -636,6 +636,7 @@ def load_config():
        'min_interval_minutes':1,   # 발행 간격(분): 1=사실상 무간격, daily_limit=0=하루 무제한(대표님 요청)
        'publish_loop_enabled':True,'publish_interval_sec':300,   # 24시간 상시발행 루프(5분 주기 큐 보충)
        'workroom_workers':4,   # 작업실별 전용 발행 워커(=동시 크롬) 수 상한. VPS 사양에 맞게 조절(4vCPU→4)
+       'strict_screen':True,   # ★빡센 검수(대표님 지시): 홍보글 흔적 있는 방치·개방 게시판만 ready 통과
        'publish_fanout':4,   # ★한 조합을 발행가능 사이트들에 '동시에' 뿌리는 병렬 크롬 수(대표님 '속도'). 1=순차
        'publish_max_chromes':6,   # ★전역 동시 크롬 상한(모든 작업실 슬롯×fanout 통틀어). VPS 메모리 보호. 크롬1개~400MB
 
@@ -5401,6 +5402,19 @@ def screen_pending(limit=30):
             else:
                 r['status']='rejected'; r['reject_reason']='게시판 글쓰기 폼 없음(디렉토리/랜딩 페이지 — 홍보 대상 아님)'
         else: r['status']='ready'
+        # ★빡센 검수(대표님 지시 2026-09-08 '홍보글 있는 방치 게시판만 통과'): strict_screen 켜지면
+        #   ready로 통과하려던 후보도 '홍보 증거'가 없으면 탈락. 홍보 증거 = ①게시판에 전화번호 홍보글
+        #   존재(promo_phone_count≥1: 업자들이 이미 쓰는 개방·방치 게시판) 또는 ②홍보허용 흔적(promo_hint).
+        #   + 죽은 게시판(마지막글 180일+) 제외. (수동 추가 source=manual은 대표님 지정이라 예외 통과.)
+        if cfg.get('strict_screen',True) and r.get('status')=='ready' and c.get('source')!='manual':
+            _pc=int(r.get('promo_phone_count',0) or 0)
+            _has_promo=(_pc>=1) or bool(r.get('promo_hint'))
+            _lp=r.get('last_post_days')
+            _dead=(_lp is not None and _lp>180)
+            if not _has_promo:
+                r['status']='rejected'; r['reject_reason']='빡센검수 탈락 — 홍보글 흔적 없음(방치·개방 게시판 아님)'
+            elif _dead:
+                r['status']='rejected'; r['reject_reason']=f'빡센검수 탈락 — 죽은 게시판(최근글 {_lp}일 전)'
         results[c['id']]=r
         time.sleep(1)   # 요청 속도 관리
     rejected_now=[]
