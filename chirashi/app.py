@@ -451,10 +451,31 @@ def _signup_form_measure(site):
     if site.get('signup_url'):
         url_candidates=[site['signup_url']]
     elif platform=='cafe24':
-        url_candidates=[base+'/member/join.html',base+'/member/agreement.html']
+        url_candidates=[base+'/member/join.html',base+'/member/agreement.html',
+                        base+'/member/join_step.html',base+'/myshop/join/agreement.html']
     else:
         url_candidates=[base+p for p in ('/bbs/register.php','/register.php',
-                        '/gnu/bbs/register.php','/g5/bbs/register.php','/bbs/register_form.php')]
+                        '/gnu/bbs/register.php','/g5/bbs/register.php','/g4/bbs/register.php',
+                        '/gnuboard5/bbs/register.php','/board/bbs/register.php','/bbs/register_form.php')]
+    # ★가입 URL 자동탐지(대표님 지시 2026-09-08 자동가입 개선): 표준경로가 다 빗나가는 사이트(설치
+    #   경로 커스텀) 대비 — 홈/로그인 페이지에서 register 링크를 긁어 후보 맨 앞에 넣는다.
+    #   (가입폼 못찾음 실패의 상당수가 비표준 설치경로 때문. 실제 링크를 따라가면 구제됨.)
+    if not site.get('signup_url'):
+        try:
+            _hp=sess.get(base+('/member/login.html' if platform=='cafe24' else '/bbs/login.php'),
+                         timeout=12,verify=False,headers=hdr,allow_redirects=True)
+            _hh=_hp.text or ''
+            if len(_hh)<500:   # 로그인 경로가 없으면 홈에서
+                _hh=(sess.get(base+'/',timeout=12,verify=False,headers=hdr).text or '')
+            _pat=(r'href=["\']([^"\']*member/(?:join|agreement)[^"\']*)["\']' if platform=='cafe24'
+                  else r'href=["\']([^"\']*register(?:_form)?\.php[^"\']*)["\']')
+            _seen=set()
+            for _h in re.findall(_pat,_hh,re.I):
+                _full=urllib.parse.urljoin(base+'/',_h.replace('&amp;','&'))
+                if _full not in _seen and 'logout' not in _full.lower():
+                    _seen.add(_full); url_candidates.insert(0,_full)
+        except Exception: pass
+    url_candidates=list(dict.fromkeys(url_candidates))[:8]
     def _decode(r):
         # 한국 그누보드는 EUC-KR(cp949)이 많은데 HTTP 헤더에 charset이 없으면 requests가
         # ISO-8859-1로 오판독해 한글이 깨진다. <meta charset> 우선, 없으면 apparent_encoding.
