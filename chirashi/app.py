@@ -7053,6 +7053,9 @@ def chk():
     if request.path not in ['/robots.txt','/api/admin/update']:
         ua=(request.headers.get('User-Agent','') or '').lower()
         if not ua or any(b in ua for b in BLOCK_UA):
+            # ★/api/ 요청은 403도 JSON으로(HTML 반환 시 프런트가 'Unexpected token <'로 파싱실패·배너도배).
+            if request.path.startswith('/api/'):
+                return jsonify({'ok':False,'error':'forbidden'}),403
             return ('Forbidden',403)
     if request.path=='/robots.txt': return
     if request.path.startswith('/static'): return
@@ -8326,6 +8329,17 @@ def api_sbr_test():
     ep=str(cfg.get('sbr_endpoint') or '').strip()
     if not (cfg.get('sbr_enabled') and ep):
         return jsonify({'ok':False,'error':'Scraping Browser 미설정(설정에서 활성화+endpoint 입력 필요)'})
+    # ★진단(2026-09-09): username(비번 제외)·geo·호스트를 마스킹해 보여줌 — 'Wrong customer name' 원인 파악.
+    #   Bright Data 정상 형식: brd-customer-{ID}-zone-{ZONE}. ID가 없거나 -country- 붙어있으면 문제.
+    def _mask_ep(e):
+        try:
+            e2=e if e.startswith('http') else 'https://'+e
+            _m=re.match(r'https?://([^:@/]+)(?::[^@]*)?@([^/]+)',e2)  # user @ host(비번 제거)
+            if _m: return {'username':_m.group(1),'host':_m.group(2)}
+        except Exception: pass
+        return {'username':'(파싱실패)','host':'?'}
+    _epinfo=_mask_ep(ep); _epinfo['sbr_country']=str(cfg.get('sbr_country') or '(없음)')
+    _epinfo['has_country_flag']=('-country-' in ep)
     target=(request.args.get('url') or 'https://takago.store/board/product/list.html?board_no=6').strip()
     steps={}; t0=time.time()
     d=None
@@ -8357,10 +8371,10 @@ def api_sbr_test():
                  '연결됐으나 페이지 못 받음(renderer timeout 의심 — 이전 벽 그대로)')
         return jsonify({'ok':True,'url':target,'steps':steps,'total_sec':round(time.time()-t0,1),
                         'title':title[:80],'current_url':cur[:120],'bytes':len(psrc),
-                        'cf_blocked':cf_blocked,'looks_usable':has_form,'verdict':verdict})
+                        'cf_blocked':cf_blocked,'looks_usable':has_form,'verdict':verdict,'endpoint':_epinfo})
     except Exception as e:
         return jsonify({'ok':False,'error':f'원격 연결/실행 예외: {str(e)[:200]}',
-                        'steps':steps,'total_sec':round(time.time()-t0,1),
+                        'steps':steps,'total_sec':round(time.time()-t0,1),'endpoint':_epinfo,
                         'hint':'연결 자체 실패면 endpoint(비번 포함)·잔액·계정상태 확인'})
     finally:
         # 진단 세션은 남기지 않는다(스레드별 __SBR__ 드라이버가 발행에 재사용되지 않게 정리).
