@@ -2242,6 +2242,13 @@ def _brand_email(cfg, site=None):
             suffix=str(int(hashlib.md5(sid.encode()).hexdigest(),16)%1000)  # 사이트별 0~999 고정 번호(돌려쓰기)
     return f'{slug}{suffix}@gmail.com'
 
+def _post_password(cfg=None):
+    """게시글(비회원/비밀글) 비밀번호. ★대표님 지시(2026-09-08): 비밀글로 올라가도 나중에
+       열람할 수 있게 '고정' 비번을 쓰고 로그·이력에 저장한다. 예전엔 랜덤(token_hex)이라 잃어버렸음.
+       config guest_post_password 있으면 그걸, 없으면 고정 기본값(항상 동일=복구 가능)."""
+    cfg=cfg or load_config()
+    return (str(cfg.get('guest_post_password') or '').strip() or 'twseo1234')
+
 def fill_required_post_fields(d,site):
     """빨간 별표/required 추가 필드를 의미에 맞는 설정값으로 채운다."""
     from selenium.webdriver.common.by import By
@@ -2251,7 +2258,7 @@ def fill_required_post_fields(d,site):
     writer=(str(site.get('writer_name') or '').strip() or brand)
     try: phone_val=format_phone(pick_phone(cfg))
     except Exception: phone_val=(cfg.get('phone') or '')
-    guest_pw=(cfg.get('guest_post_password') or '').strip()
+    guest_pw=_post_password(cfg)   # ★고정 비번(비밀글 복구용) — 랜덤 금지
     video_url=(cfg.get('video_url') or '').strip()
     landing=(cfg.get('landing_url') or '').strip()
     post_email=_brand_email(cfg, site)  # wr_email 등 이메일 필수항목 자동 채움값(빈값 방지)
@@ -2470,7 +2477,7 @@ def gnuboard_post_http(site, title, content_html):
         'uid':_hidden('uid'), 'w':_hidden('w',''), 'bo_table':bo, 'wr_id':_hidden('wr_id','0'),
         'sca':'','sfl':'','stx':'','spt':'','sst':'','sod':'','page':'',
         'wr_name':(str(site.get('writer_name') or '').strip() or (cfg.get('brand') or '게시자').strip()),
-        'wr_password':((cfg.get('guest_post_password') or '').strip() or secrets.token_hex(4)),
+        'wr_password':_post_password(cfg),   # ★고정 비번(비밀글 복구용, 랜덤 금지 — 대표님 지시)
         'wr_email':_brand_email(cfg,site),
         'wr_homepage':(cfg.get('landing_url') or '').strip(),
         'wr_subject':_strip_non_bmp(title),
@@ -4975,6 +4982,10 @@ def _post_read_block_reason(url):
         return ''   # 조회 자체 실패는 판정 보류(정상으로 두고 발행)
     h=r.text or ''
     # 오류/제한 안내 신호(그누보드 wrest.php 계열 알림 + 제목). 본문이 정상이면 이 문구들이 없다.
+    # 0) ★비밀글(대표님 지시 2026-09-08): '비밀글 기능으로 보호된 글' → 구글도 못읽음(SEO0).
+    #    비번은 _post_password로 고정 저장되므로 대표님이 열람 가능. 사유에 비번 포함해 로그·이력에 남김.
+    if ('비밀글' in h and any(k in h for k in ['보호','열람','비밀번호'])) or '비밀글 기능으로 보호' in h:
+        return f'비밀글(비번 {_post_password()})'
     # 1) 포인트/열람권한 제한
     if '포인트' in h and any(k in h for k in ['불가','모자라','부족']) and any(k in h for k in ['글읽기','글 읽기','열람','조회','읽기']):
         return '포인트 부족(글읽기 제한)'
@@ -6388,15 +6399,23 @@ def _publish_combo_to_site(s, kw, wname, rid, cfg, writer_name=''):
         if not ok: reason,reason_ko,_=classify_fail(msg)
         try: finalize_post(fresh,ok,fail_reason=('' if ok else str(msg)))
         except Exception: pass
+        # ★비밀글 감지·비번 기록(대표님 지시 2026-09-08): 발행 성공했는데 그 글이 '비밀글'로 보호되면
+        #   구글도 못읽음(SEO0). 사용한 고정 비번을 이력·로그에 남겨 대표님이 나중에 열람 가능하게.
+        _pw=_post_password(cfg); _secret=False
+        if ok and str(msg).startswith('http'):
+            try: _secret=str(_post_read_block_reason(msg) or '').startswith('비밀글')
+            except Exception: _secret=False
         history_update(jid,status='done' if ok else 'failed',
             result_url=(msg if ok and str(msg).startswith('http') else ''),
             fail_reason=('' if ok else reason),fail_reason_ko=('' if ok else reason_ko),
+            post_password=_pw, is_secret=_secret,      # 이력에 비번·비밀글여부 저장
             alive=('yes' if ok and str(msg).startswith('http') else ''),message=str(msg)[:300])
         with STATS_LOCK:
             if ok: wk_stats['success']+=1
             else: wk_stats['fail']+=1
             wk_stats['done']+=1
-        add_log(f"[작업실:{wname}] {'성공' if ok else '실패:'+reason_ko} {fresh.get('name') or (fresh.get('site_url','') or '')[:20]}")
+        add_log(f"[작업실:{wname}] {'성공' if ok else '실패:'+reason_ko} {fresh.get('name') or (fresh.get('site_url','') or '')[:20]}"
+                +(f" 🔒비밀글(비번 {_pw})" if _secret else ''))
     finally:
         _slk.release()
 
@@ -9236,7 +9255,10 @@ async function renderCaptchaTasks(){const box=$('captchaTasks');if(!box)return;c
 async function renderWorkerLog(){const roomSel=$('wlogRoom');if(!roomSel.dataset.loaded){const rooms=await api('/workrooms','GET');if(Array.isArray(rooms)){roomSel.innerHTML='<option value="">전체 작업실</option>'+rooms.map(r=>'<option value="'+esc(r.id)+'">'+esc(r.name)+'</option>').join('');roomSel.dataset.loaded='1'}}const rid=roomSel.value;const r=await api('/worker-log'+(rid?'?workroom_id='+encodeURIComponent(rid):''),'GET');if(!r||!r.ok)return;const w=r.workers||{};$('wlogWorker').textContent='워커 '+(w.active?(w.paused?'일시정지':'실행 중'):'정지')+' · 큐 '+(w.queued||0)+' · 성공 '+(w.success||0)+' · 실패 '+(w.fail||0)+' · 스킵 '+(w.skipped||0);$('wlogBlock').innerHTML=r.publishable_count?'<div class="note" style="border-color:#166534;color:var(--g)">발행 가능 검증 사이트 '+r.publishable_count+'곳</div>':'<div class="note" style="border-color:#991b1b;color:var(--r)">⛔ 현재 발행 가능 사이트 0곳'+((r.captcha_sites||[]).length?' · CAPTCHA 감지: '+esc(r.captcha_sites.join(', ')):'')+' — CAPTCHA를 우회하지 않으며 사람이 처리하고 실게시 재검증하기 전까지 자동 발행하지 않습니다.</div>';const sm={preparing:'준비',running:'글 생성 중',done:'준비 완료',failed:'준비 실패'};$('wlogTasks').innerHTML=(r.tasks||[]).length?'<table><thead><tr><th>작업실</th><th>시작</th><th>준비 진행</th><th>큐 등록</th><th>대기 필요</th><th>상태</th></tr></thead><tbody>'+r.tasks.map(t=>'<tr><td><b>'+esc(t.workroom_name||'직접 입력')+'</b></td><td>'+esc(t.created_at||'')+'</td><td>'+esc(t.done||0)+'/'+esc(t.total||0)+'</td><td>'+esc(t.queued||0)+'</td><td>'+esc(t.remaining||0)+'</td><td><span class="st st-'+(t.status==='done'?'ok':t.status==='failed'?'f':'y')+'">'+esc(sm[t.status]||t.status||'')+'</span> '+esc(t.error||'')+'</td></tr>').join('')+'</tbody></table>':'<p style="color:var(--d);padding:12px">선택한 작업실의 준비 작업이 없습니다.</p>';const h=r.history||[];
 // ★상태 한글(대표님 지시) + 사이트=발행글 링크(결과URL/열기 열 합침, 결과탭과 동일 형식)
 const WST={done:'완료',posting:'발행중',failed:'실패',retry:'재시도',queued:'대기',skipped:'건너뜀'};
-$('wlogList').innerHTML=h.length?'<table><thead><tr><th>작업실</th><th>시간</th><th>키워드</th><th>사이트(클릭시 글로 이동)</th><th>상태</th><th>메시지</th></tr></thead><tbody>'+h.map(x=>{const stc=(x.status==='done'?'ok':x.status==='failed'?'f':x.status==='skipped'?'y':'i');const stt=WST[x.status]||x.status||'';const snm=esc(x.site_name||'(사이트명 없음)');const siteCell=x.result_url?('<a href="'+esc(x.result_url)+'" target="_blank" rel="noopener" title="'+esc(x.result_url)+'" style="color:var(--p);text-decoration:none">🔗 '+snm+'</a>'):snm;return '<tr><td><b>'+esc(x.workroom_name||'직접 입력')+'</b></td><td style="white-space:nowrap">'+esc((x.time||'').slice(5,16))+'</td><td>'+esc(x.region||'')+' / '+esc(x.service||'')+'</td><td style="max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+snm+'">'+siteCell+'</td><td><span class="st st-'+stc+'">'+esc(stt)+'</span></td><td style="color:var(--d)">'+esc(x.fail_reason_ko||x.message||'')+'</td></tr>'}).join('')+'</tbody></table>':'<p style="color:var(--d);padding:30px;text-align:center">아직 이 작업실의 워커 발행 이력이 없습니다.</p>';window._actLog=r.activity||[];renderActivity()}
+$('wlogList').innerHTML=h.length?'<table><thead><tr><th>작업실</th><th>시간</th><th>키워드</th><th>사이트(클릭시 글로 이동)</th><th>상태</th><th>메시지</th></tr></thead><tbody>'+h.map(x=>{const stc=(x.status==='done'?'ok':x.status==='failed'?'f':x.status==='skipped'?'y':'i');const stt=WST[x.status]||x.status||'';const snm=esc(x.site_name||'(사이트명 없음)');const siteCell=x.result_url?('<a href="'+esc(x.result_url)+'" target="_blank" rel="noopener" title="'+esc(x.result_url)+'" style="color:var(--p);text-decoration:none">🔗 '+snm+'</a>'):snm;
+// ★비밀글이면 자물쇠+비번 표시(대표님 지시): 클릭 후 비밀번호 입력창 뜨면 이 비번 입력.
+const secret=x.is_secret?(' <span class="st st-y" title="비밀글 — 열람 시 이 비밀번호 입력">🔒 '+esc(x.post_password||'')+'</span>'):'';
+return '<tr><td><b>'+esc(x.workroom_name||'직접 입력')+'</b></td><td style="white-space:nowrap">'+esc((x.time||'').slice(5,16))+'</td><td>'+esc(x.region||'')+' / '+esc(x.service||'')+'</td><td style="max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+snm+'">'+siteCell+secret+'</td><td><span class="st st-'+stc+'">'+esc(stt)+'</span></td><td style="color:var(--d)">'+esc(x.fail_reason_ko||x.message||'')+'</td></tr>'}).join('')+'</tbody></table>':'<p style="color:var(--d);padding:30px;text-align:center">아직 이 작업실의 워커 발행 이력이 없습니다.</p>';window._actLog=r.activity||[];renderActivity()}
 function linkifyLog(msg){
   // esc로 XSS 방지 후, 텍스트 내 http(s) URL을 클릭 가능한 링크로 변환
   var e=esc(msg||'');
