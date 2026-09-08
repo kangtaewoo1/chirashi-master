@@ -147,31 +147,69 @@ def _ddg_parse(html):
             out.append(urllib.parse.unquote(m.group(1)) if m else u)
     return out
 
+# DDG가 IP를 완전 차단(Max retries exceeded)하면 이번 실행 내내 DDG를 건너뛴다(느린 재시도 낭비 방지).
+_ddg_blocked = [False]
+
 def ddg_search(query, _retry=0):
-    """DuckDuckGo HTML 검색 — API 키 불필요(무료). 403(봇차단) 시 백오프+lite 폴백."""
+    """DuckDuckGo HTML 검색 — API 키 불필요(무료). 403 시 백오프+lite 폴백.
+       연결 자체 실패(Max retries=IP차단)면 즉시 포기+세션차단 표시(Naver로 폴백하도록)."""
+    if _ddg_blocked[0]:
+        return []
     ua = _DDG_UAS[_retry % len(_DDG_UAS)]
     hdr = {"User-Agent": ua, "Accept-Language": "ko-KR,ko;q=0.9",
            "Referer": "https://duckduckgo.com/", "Accept": "text/html"}
     endpoint = "https://lite.duckduckgo.com/lite/" if _retry >= 1 else "https://html.duckduckgo.com/html/"
     try:
         r = requests.post(endpoint, data={"q": query, "kl": "kr-kr"},
-                          headers=hdr, timeout=20, verify=False)
-        if r.status_code == 403 and _retry < 2:
-            time.sleep(4 + _retry * 4)          # 백오프(4s, 8s) 후 다른 UA·엔드포인트로 재시도
+                          headers=hdr, timeout=12, verify=False)
+        if r.status_code == 403 and _retry < 1:
+            time.sleep(3)                       # 403은 한 번만 백오프(다른 UA·lite로 재시도)
             return ddg_search(query, _retry + 1)
         if r.status_code >= 400:
-            log(f"  DDG {r.status_code}"); return []
+            return []
         return _ddg_parse(r.text)
     except Exception as e:
-        log(f"  DDG 예외: {str(e)[:80]}"); return []
+        # 연결 실패(ConnectionError/Max retries) = IP 차단 → 이번 실행 DDG 포기, Naver로.
+        _ddg_blocked[0] = True
+        log(f"  DDG 연결차단 → 이번 실행은 Naver로 전환 ({str(e)[:50]})")
+        return []
 
 
+_NAVER_SKIP = ("naver.com", "naver.net", "pstatic.net", "nid.naver", "shopping.naver",
+               "dict.naver", "map.naver", "blog.naver", "cafe.naver", "search.naver")
+
+def naver_search(query):
+    """네이버 통합검색 — API 키 불필요(무료). DDG 차단 시 폴백. 네이버 내부링크는 제외.
+       실측(2026-09-08): '010 홍보 비회원' 등에서 실제 그누보드 게시판 다수 반환."""
+    hdr = {"User-Agent": _DDG_UAS[0], "Accept-Language": "ko-KR,ko;q=0.9"}
+    try:
+        r = requests.get("https://search.naver.com/search.naver",
+                         params={"query": query}, headers=hdr, timeout=15, verify=False)
+        if r.status_code >= 400:
+            log(f"  Naver {r.status_code}"); return []
+        out = []
+        for u in re.findall(r'href="(https?://[^"]+)"', r.text):
+            u = u.replace("&amp;", "&")
+            if any(s in u.lower() for s in _NAVER_SKIP):
+                continue
+            out.append(u)
+        return out
+    except Exception as e:
+        log(f"  Naver 예외: {str(e)[:60]}"); return []
+
+
+# ★검색엔진 자동분산(대표님 지시): DDG가 IP차단(Max retries)돼도 Naver로 발굴 지속.
+#  ddg 모드면 [ddg → 실패 시 naver] 순으로 시도. 결과 있으면 즉시 반환.
 def do_search(query, prov="ddg"):
     if prov == "google" and GOOGLE_KEY:
         return google_search(query)
     if prov == "brave" and BRAVE_KEY:
         return brave_search(query)
-    return ddg_search(query)   # 기본: 무료 DuckDuckGo
+    # 무료 분산: DDG 먼저, 비거나 실패하면 Naver 폴백
+    res = ddg_search(query)
+    if res:
+        return res
+    return naver_search(query)
 
 
 def domain_of(url):
