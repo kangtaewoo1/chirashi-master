@@ -4865,6 +4865,27 @@ def _board_finder_queries(provider):
             qs.append(f'{i} inurl:board')
         # ★Cafe24 게시판명 × 업종 (대표님 지시)
         qs.extend(_cafe24_boardname_queries())
+    # ★검색어 대폭 확장(대표님 지시 '무제한'): 지역 × 업종 × 게시판신호 조합을 뒤에 붙여 수천 개로.
+    #   앞쪽(무인증·플랫폼조각)이 최우선이고, PC 커서 로테이션이 뒤쪽까지 순회하며 신규 발굴 지속.
+    qs.extend(_region_service_queries())
+    return list(dict.fromkeys(qs))   # 중복 제거(순서 유지)
+
+# 전국 지역(시·구 단위 대표) × 유흥/마사지 업종 — 게시판 홍보글 역발굴용 대량 조합.
+_FINDER_REGIONS=['서울','강남','강북','수원','인천','부천','성남','안양','부평','일산','분당','천안','아산',
+                 '청주','대전','대구','부산','서면','해운대','광주','울산','창원','전주','제주','평택','안산',
+                 '김포','파주','동탄','용인','원주','포항','구미','경주','목포','순천','강릉','춘천','세종']
+_FINDER_SVCS=['노래방','가라오케','셔츠룸','룸싸롱','하이퍼블릭','쓰리노','풀싸롱','텐프로','다국적노래방',
+              '마사지','출장마사지','출장안마','스웨디시','건마','타이마사지','1인샵','왁싱']
+_FINDER_SIGNALS=['bbs/board.php 홍보','게시판 010 홍보','자유게시판 후기','article 홍보','mod=document 홍보']
+
+def _region_service_queries():
+    """지역×업종×게시판신호 대량 조합 검색어. (예: '강남 하이퍼블릭 bbs/board.php 홍보')"""
+    qs=[]
+    for rg in _FINDER_REGIONS:
+        for sv in _FINDER_SVCS:
+            qs.append(f'{rg}{sv} 홍보 게시판')            # 예: 강남하이퍼블릭 홍보 게시판
+            for sig in _FINDER_SIGNALS[:2]:
+                qs.append(f'{rg}{sv} {sig}')
     return qs
 
 def build_queries(cfg):
@@ -7156,9 +7177,12 @@ def api_discovery_queries():
         raw=load_json(REJECTED_DOMAINS_FILE,{})
         rej=set((raw.get('domains') if isinstance(raw,dict) else raw) or [])
     except Exception: rej=set()
-    return jsonify({'ok':True,'provider':provider,'queries':qs[:400],
-                    'known_domains':sorted(d for d in known if d)[:3000],
-                    'rejected_domains':sorted(str(d).lower() for d in rej)[:5000]})
+    # ★검색어 무제한(대표님 지시 2026-09-08 '400개 이후로 추가 안되냐 무제한으로'): 상한 제거.
+    #   중복만 제거해 전량 전달(PC가 커서로 나눠 순회). known/rejected도 상한 대폭 상향(중복발굴 방지).
+    qs=list(dict.fromkeys(qs))   # 중복 제거(순서 유지)
+    return jsonify({'ok':True,'provider':provider,'queries':qs,'query_count':len(qs),
+                    'known_domains':sorted(d for d in known if d),
+                    'rejected_domains':sorted(str(d).lower() for d in rej)})
 
 @app.route('/api/rejected-domains',methods=['GET','POST'])
 def api_rejected_domains():
