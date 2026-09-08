@@ -637,6 +637,8 @@ def load_config():
        'publish_loop_enabled':True,'publish_interval_sec':300,   # 24시간 상시발행 루프(5분 주기 큐 보충)
        'workroom_workers':4,   # 작업실별 전용 발행 워커(=동시 크롬) 수 상한. VPS 사양에 맞게 조절(4vCPU→4)
        'strict_screen':True,   # ★빡센 검수(대표님 지시): 홍보글 흔적 있는 방치·개방 게시판만 ready 통과
+       'signup_parallel':4,   # ★자동가입 전담 병렬 수(대표님 지시). 후보들을 동시에 가입 시도. 전역 크롬상한 내에서.
+
        'publish_fanout':4,   # ★한 조합을 발행가능 사이트들에 '동시에' 뿌리는 병렬 크롬 수(대표님 '속도'). 1=순차
        'publish_max_chromes':6,   # ★전역 동시 크롬 상한(모든 작업실 슬롯×fanout 통틀어). VPS 메모리 보호. 크롬1개~400MB
 
@@ -5725,16 +5727,17 @@ def auto_signup_guarded(site, submit=True, timeout=100):
             box['done']=True
     t=_th.Thread(target=_work,name=f'SUWORK-{secrets.token_hex(3)}',daemon=True)
     t.start(); t.join(timeout)
+    # ★가입 워커(SUWORK) 스레드의 크롬을 항상 정리(성공/타임아웃 무관). 예전엔 타임아웃 때만 정리해
+    #   가입 크롬이 누수됐음 — 병렬 가입(signup_parallel)에선 크롬이 빠르게 쌓여 OOM. 반드시 quit.
+    wt=box.get('wtid')
+    try:
+        with _drv_lock:
+            dd=_drivers.pop(wt,None) if wt else None
+        if dd:
+            try: dd.quit()
+            except Exception: pass
+    except Exception: pass
     if not box['done']:
-        # 타임아웃 → 작업 스레드가 쓰던 드라이버를 quit해 hang을 깨운다(그 스레드는 예외로 종료)
-        wt=box.get('wtid')
-        try:
-            with _drv_lock:
-                dd=_drivers.pop(wt,None) if wt else None
-            if dd:
-                try: dd.quit()
-                except Exception: pass
-        except Exception: pass
         add_log(f'[자동가입 타임아웃] {site.get("name") or site.get("site_url","")} — {timeout}초 초과, 드라이버 리셋 후 다음 후보로')
         return False,f'자동가입 타임아웃({timeout}초 초과)'
     return box['ret']
@@ -6161,10 +6164,19 @@ def auto_pipeline_once(limit=5):
         no_cap=not c.get('captcha')
         return (0 if need_verify else 1, 1 if no_cap else 0, c.get('score',0))
     _login.sort(key=_login_prio, reverse=True)
-    _login_cap=int(cfg.get('login_signup_per_cycle',2) or 2)
+    # ★자동가입 전담 병렬(대표님 지시 2026-09-08 '워커 다른 데 쓰기'): 가입 실패 92%가 최대 병목.
+    #   가입은 이메일 인증 대기로 느려 순차 처리하면 슬롯 낭비 → 후보들을 병렬 스레드로 동시 처리.
+    #   로그인 후보 상한도 크게(병렬이라 슬롯 안 막힘). 동시 크롬은 전역 세마포어로 상한.
+    _login_cap=int(cfg.get('signup_parallel',4) or 4)*3   # 병렬이라 더 많이 잡아도 됨
     pend=_manual + _guest[:max(1,limit)] + _login[:max(0,_login_cap)]
     done=0; registered=0; signed=0; results=[]
-    for c in pend:
+    _pipe_lock=threading.Lock()
+    _sfan=max(1,min(6,int(cfg.get('signup_parallel',4) or 4)))
+    _ssem=threading.Semaphore(_sfan)          # 동시 가입/발행테스트 수(이 배치 내)
+    _gsem=_global_chrome_sem()                # 전역 크롬 상한(발행 워커와 공유)
+    def _proc(c):
+      with _ssem, _gsem:
+        nonlocal done,registered,signed
         name=c.get('board_name') or c.get('domain') or c.get('url','')[:30]
         # 쿨다운 기록: 이 후보를 방금 시도했음을 남겨, 실패/hang해도 다음 사이클에 곧바로 다시
         # 잡아 루프를 독점하지 않게 한다(김정은처럼 한 사이트가 파이프라인을 막던 문제 해결).
@@ -6200,12 +6212,14 @@ def auto_pipeline_once(limit=5):
             if _login_first:
                 # 게시판 자체가 로그인 필수 + 저장된 계정 없음 → 자동가입으로 계정 생성(성공시 저장·재사용)
                 ok_su,msg_su=auto_signup_guarded(tmp,submit=True)
-                if ok_su: signed+=1; _just_signed=True
+                if ok_su:
+                    with _pipe_lock: signed+=1
+                    _just_signed=True
                 else:
                     _cand_set(c['id'],status='rejected',reject_reason=f'자동가입 실패: {msg_su[:80]}')
-                    results.append({'name':name,'stage':'signup','ok':False,'msg':msg_su})
+                    with _pipe_lock: results.append({'name':name,'stage':'signup','ok':False,'msg':msg_su})
                     add_log(f'[자동가입 실패] {name} — {str(msg_su)[:90]}')
-                    continue
+                    return   # (병렬 처리: continue → return)
             # 발행 시도(②: 비회원 우선, 또는 방금 가입한 세션으로)
             ok,msg=do_post(tmp,title,html,skip_login=_just_signed)
             # 검수는 비회원 글쓰기로 봤지만 실제 write.php가 로그인으로 튕기는 게시판이 있다.
@@ -6215,7 +6229,8 @@ def auto_pipeline_once(limit=5):
                 add_log(f'[파이프라인] {name} 로그인필요 → 자동가입 시도')
                 ok_su,msg_su=auto_signup_guarded(tmp,submit=True)
                 if ok_su:
-                    signed+=1; add_log(f'[파이프라인] {name} 자동가입 성공 → 세션 재사용 재발행')
+                    with _pipe_lock: signed+=1
+                    add_log(f'[파이프라인] {name} 자동가입 성공 → 세션 재사용 재발행')
                     # reset_driver 하지 않음 — 가입 직후 로그인된 세션을 그대로 써서 발행(비표준 로그인폼 구제)
                     ok,msg=do_post(tmp,title,html,skip_login=True)
                 else:
@@ -6228,12 +6243,13 @@ def auto_pipeline_once(limit=5):
                 # 가입정보가 생겼으면 등록 사이트에 반영
                 if tmp.get('mb_id'):
                     set_site_flag(_promoted_site_id(c),mb_id=tmp.get('mb_id'),mb_pass=tmp.get('mb_pass'))
-                registered+=1
-                results.append({'name':name,'stage':'post','ok':True,'url':result_url})
+                with _pipe_lock:
+                    registered+=1
+                    results.append({'name':name,'stage':'post','ok':True,'url':result_url})
                 add_log(f'[발행가능 등록] {name} — 검증 통과 → 발행가능 {result_url}'.rstrip())  # URL 포함 → 클릭 가능
             elif ok:
                 _cand_set(c['id'],status='rejected',reject_reason='발행됨(결과 URL 확인 불가)')
-                results.append({'name':name,'stage':'post','ok':False,'msg':'결과 URL 없음'})
+                with _pipe_lock: results.append({'name':name,'stage':'post','ok':False,'msg':'결과 URL 없음'})
                 add_log(f'[탈락] {name} — 발행됐으나 결과 URL 확인 불가')
             else:
                 reason,_,is_temp=classify_fail(msg)
@@ -6245,12 +6261,18 @@ def auto_pipeline_once(limit=5):
                 else:
                     _cand_set(c['id'],status='rejected',reject_reason=(str(msg)[:90] if not is_temp else f'재시도 {attempts}회 초과: {str(msg)[:60]}'),pipeline_attempts=attempts)
                     add_log(f'[탈락] {name} — {str(msg)[:80]}')  # 안 되는 곳 탈락 로그
-                results.append({'name':name,'stage':'post','ok':False,'msg':str(msg)[:90]})
+                with _pipe_lock: results.append({'name':name,'stage':'post','ok':False,'msg':str(msg)[:90]})
         except Exception as e:
-            results.append({'name':name,'stage':'error','ok':False,'msg':str(e)[:100]})
+            with _pipe_lock: results.append({'name':name,'stage':'error','ok':False,'msg':str(e)[:100]})
         finally:
-            done+=1
-            reset_driver(); time.sleep(3)
+            with _pipe_lock: done+=1
+            reset_driver(); time.sleep(1)   # 각 스레드 자기 크롬 정리(병렬이라 긴 대기 불필요)
+    # ★후보들을 병렬 스레드로 동시 처리(가입 전담 병렬). 각 스레드=자기 크롬, 전역 세마포어로 상한.
+    _pthreads=[]
+    for c in pend:
+        t=threading.Thread(target=_proc,args=(c,),name=f'SIGNUP-{c.get("id","")[:6]}',daemon=True)
+        t.start(); _pthreads.append(t)
+    for t in _pthreads: t.join()
     # 3) 등록됐지만 '준비됨/캡차대기/메일대기'에서 멈춘 사이트: 자동가입을 실제로 끝내고
     #    스케줄/작업실 랜덤 키워드로 발행 테스트까지 완료 → 성공 시 발행가능으로 등록.
     prepared=[s for s in load_sites()
