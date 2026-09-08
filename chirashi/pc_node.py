@@ -163,15 +163,17 @@ def _process_one(cand, cfg, pool):
 
 
 def _safe_workers(requested):
-    """PC 메모리 여유에 맞춰 안전한 동시 크롬 수 결정(app.py 메모리가드 감각 재사용)."""
+    """동시 크롬 수 결정. --workers 지정 시 그대로(1~8). 미지정이면 기본 4에서 시작하되,
+       가용 메모리가 넉넉하면 최대 6까지. ★순간 저메모리로 1까지 떨어지지 않게 하한 4(대표님 강력PC·상시)."""
     if requested:
         return max(1, min(8, int(requested)))
     try:
-        import psutil  # 있으면 사용
+        import psutil
         avail_mb = psutil.virtual_memory().available // (1024 * 1024)
-        return max(1, min(6, (avail_mb - 800) // 400))
+        # 여유 많으면 6, 보통이면 4. 하한 4(강력PC 전제라 순간 저메모리에 과도축소 방지).
+        return 6 if avail_mb > 4000 else 4
     except Exception:
-        return 4  # psutil 없으면 보수적 기본값
+        return 4
 
 
 def run(once=False, workers=None, idle=30):
