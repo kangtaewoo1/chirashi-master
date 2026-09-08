@@ -9083,21 +9083,22 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 <div id="wlogTasks" style="margin:8px 0"></div>
 <div class="card" style="margin:10px 0"><div class="row" style="align-items:center"><h3 style="margin:0">🛰️ 관제실 — 실시간 작업 현황</h3><span style="flex:1"></span>
 <span id="actCounts" style="font-size:11px;color:var(--d)"></span></div>
-<!-- ★관제실(대표님 지시): 필터로 하나씩 보지 말고 워커/러너 세계를 한 화면에 나란히, 종류별 구획으로 -->
-<div id="ctrlGrid" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px">
-  <!-- 워커 세계 -->
+<!-- ★관제실(대표님 지시 2026-09-09): 세로 배치 — 위=워커 세계(발행), 아래=러너 세계(PC발굴 포함).
+     좌우 2단은 러너가 잘 안 보인다 하여 상하로. PC 발굴은 '발굴' 구획에 실시간으로 흐름. -->
+<div id="ctrlGrid" style="display:grid;grid-template-rows:auto auto;gap:10px;margin-top:8px">
+  <!-- 워커 세계(위) -->
   <div style="border:1px solid #166534;border-radius:8px;overflow:hidden">
     <div style="background:#0d2a17;color:var(--g);padding:6px 10px;font-weight:700;font-size:12px">🖥️ 워커 세계 <span style="color:var(--d);font-weight:400">· 실제 글 올리는 발행</span> <span id="cnt발행" style="float:right;color:var(--d)"></span></div>
-    <div style="max-height:260px;overflow-y:auto" id="col발행"></div>
+    <div style="max-height:240px;overflow-y:auto" id="col발행"></div>
   </div>
-  <!-- 러너 세계(4구획) -->
+  <!-- 러너 세계(아래, PC발굴 포함) — 4구획을 좌우로 나눠 한눈에 -->
   <div style="border:1px solid #4c1d95;border-radius:8px;overflow:hidden">
-    <div style="background:#1a0f2e;color:var(--v);padding:6px 10px;font-weight:700;font-size:12px">🏃 러너 세계 <span style="color:var(--d);font-weight:400">· 발굴·검수·가입·정리</span></div>
-    <div style="display:grid;grid-template-rows:auto auto auto auto">
-      <div style="border-top:1px solid #33425f"><div style="padding:4px 10px;font-size:11px;color:var(--p)">🔍 발굴 <span id="cnt발굴" style="float:right;color:var(--d)"></span></div><div style="max-height:120px;overflow-y:auto" id="col발굴"></div></div>
-      <div style="border-top:1px solid #33425f"><div style="padding:4px 10px;font-size:11px;color:var(--v)">📋 검수 <span id="cnt검수" style="float:right;color:var(--d)"></span></div><div style="max-height:120px;overflow-y:auto" id="col검수"></div></div>
-      <div style="border-top:1px solid #33425f"><div style="padding:4px 10px;font-size:11px;color:var(--y)">👤 가입 <span id="cnt가입" style="float:right;color:var(--d)"></span></div><div style="max-height:120px;overflow-y:auto" id="col가입"></div></div>
-      <div style="border-top:1px solid #33425f"><div style="padding:4px 10px;font-size:11px;color:var(--r)">🧹 정리 <span id="cnt정리" style="float:right;color:var(--d)"></span></div><div style="max-height:120px;overflow-y:auto" id="col정리"></div></div>
+    <div style="background:#1a0f2e;color:var(--v);padding:6px 10px;font-weight:700;font-size:12px">🏃 러너 세계 <span style="color:var(--d);font-weight:400">· 발굴(PC 연동)·검수·가입·정리</span></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr">
+      <div style="border-top:1px solid #33425f;border-right:1px solid #33425f"><div style="padding:4px 10px;font-size:11px;color:var(--p)">🔍 발굴(PC) <span id="cnt발굴" style="float:right;color:var(--d)"></span></div><div style="max-height:150px;overflow-y:auto" id="col발굴"></div></div>
+      <div style="border-top:1px solid #33425f"><div style="padding:4px 10px;font-size:11px;color:var(--v)">📋 검수 <span id="cnt검수" style="float:right;color:var(--d)"></span></div><div style="max-height:150px;overflow-y:auto" id="col검수"></div></div>
+      <div style="border-top:1px solid #33425f;border-right:1px solid #33425f"><div style="padding:4px 10px;font-size:11px;color:var(--y)">👤 가입 <span id="cnt가입" style="float:right;color:var(--d)"></span></div><div style="max-height:150px;overflow-y:auto" id="col가입"></div></div>
+      <div style="border-top:1px solid #33425f"><div style="padding:4px 10px;font-size:11px;color:var(--r)">🧹 정리 <span id="cnt정리" style="float:right;color:var(--d)"></span></div><div style="max-height:150px;overflow-y:auto" id="col정리"></div></div>
     </div>
   </div>
 </div>
