@@ -6088,6 +6088,20 @@ def _promote_candidate_to_site(cand, result_url, write_url='', bo='', permission
     add_log(f'[자동등록] {domain} · {bo} · '+('발행허용 ON' if permission else '발행잠금'))
     return site
 
+# ★PC 발행노드(대표님 지시 2026-09-09): 서버·PC가 같은 후보를 겹쳐 처리하지 않도록 claim 잠금.
+def _claim_active(c):
+    """이 후보가 다른 노드(PC)에 잡혀 있고 아직 만료 안 됐으면 True → 서버 파이프라인은 건너뜀."""
+    try: return bool(c.get('claimed_by')) and float(c.get('claim_expire',0) or 0) > time.time()
+    except Exception: return False
+
+def _has_write_path(c):
+    """게시판형(글쓰기 가능성) 후보인지 — auto_pipeline_once와 /api/pipeline/claim 공통 판정(DRY)."""
+    if c.get('write_form'): return True
+    if c.get('platform') in ('gnuboard','cafe24','kboard'): return True
+    if c.get('promo_ok') or c.get('board_name'): return True
+    u=(c.get('url') or '').lower()
+    return bool(re.search(r'(bbs/|board\.php|write\.php|bo_table=|/board/|board_no=|kboard)', u))
+
 def auto_pipeline_once(limit=5):
     """완전 자동 파이프라인: ready 후보 → (필요시)자동가입 → 실제 글1건 발행 → 성공시 자동등록.
        배치당 limit개만 처리(부하·탐지 회피). 반환: 요약 dict."""
@@ -6137,16 +6151,7 @@ def auto_pipeline_once(limit=5):
     # 대상: 검수완료(ready) + 아직 사이트 미등록 + 자동탈락 아님 + '글쓰기 가능성'이 있는 것.
     # (114/맵 등 전화번호·디렉토리 사이트는 게시판이 아니라 제외. 그 외 게시판형 후보는
     #  글쓰기폼 미확인이라도 일단 자동가입→발행 시도해 되는지 판별한다 — 방치 없이 되거나 탈락)
-    def _has_write_path(c):
-        if c.get('write_form'): return True
-        # 플랫폼(그누보드/카페24/kboard)이 확인되면 bo_table 미추출이어도 시도 — discover_write_page가
-        # 그 도메인에서 실제 게시판을 찾아 발행 시도(쌓인 후보 소진·대표님 지시). 없으면 자동 탈락.
-        if c.get('platform') in ('gnuboard','cafe24','kboard'): return True
-        # 홍보허용 흔적이 있거나 게시판형 URL이면 시도 대상
-        if c.get('promo_ok') or c.get('board_name'): return True
-        u=(c.get('url') or '').lower()
-        return bool(re.search(r'(bbs/|board\.php|write\.php|bo_table=|/board/|board_no=|kboard)', u))
-    # 오류안내 페이지 제목 후보는 처리 전에 즉시 탈락(뚜뚜월드처럼 홈이 '오류안내 페이지' — 발행 무의미).
+    # _has_write_path는 모듈 레벨(PC claim과 공통). 오류안내 페이지 후보는 처리 전 즉시 탈락.
     for _c in cands:
         if _c.get('status') in ('ready','new') and any(k in str(_c.get('title') or '') for k in ERROR_PAGE_HINTS):
             try: _cand_set(_c['id'],status='rejected',reject_reason='오류안내 페이지'); _c['status']='rejected'
@@ -6171,6 +6176,7 @@ def auto_pipeline_once(limit=5):
           and not c.get('parked') and not c.get('illegal') and not c.get('ad_banned')
           and (c.get('domain') or '').lower() not in site_domains
           and c.get('reachable') and _has_write_path(c)
+          and not _claim_active(c)   # ★PC 노드가 잡고 있는(만료 전) 후보는 서버가 건드리지 않음
           and float(c.get('last_pipeline_at',0) or 0) < _cool]
     # (파이프라인 진단 로그 제거 — 처리할 후보 없을 때마다 매 주기 찍혀 화면 도배. 대표님 지시)
     # 비회원 글쓰기 가능(로그인 불필요) 게시판을 먼저 처리한다. 로그인 필요 게시판은
@@ -7068,7 +7074,7 @@ def chk():
     #  /api/test/* = 발행 테스트 트리거(등록 사이트에 실제 글1건 발행해 검증).
     _p=request.path
     if _p=='/api/version': return  # 배포 SHA 확인 — 공개(민감정보 없음)
-    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/candidates','/api/candidates/ingest','/api/discovery/queries','/api/unlocker/test','/api/sbr/test') or _p.startswith('/api/test/'):
+    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/candidates','/api/candidates/ingest','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/unlocker/test','/api/sbr/test') or _p.startswith('/api/test/'):
         tok=(request.args.get('token') or '').strip()
         cfgtok=(load_config().get('log_token') or '').strip()
         if cfgtok and tok==cfgtok:
@@ -7324,6 +7330,101 @@ def api_cand_ingest():
     threading.Thread(target=_screen_then_pipeline,daemon=True).start()
     add_log(f'[PC발굴 연동] URL {len(urls)}개 수신(신규 {n}개) — 자동 검수·발행테스트 진행')
     return jsonify({'ok':True,'received':len(urls),'added':n,'screening':True,'auto_test':True})
+
+@app.route('/api/pipeline/claim',methods=['POST'])
+def api_pipeline_claim():
+    """★PC 발행노드(대표님 지시 2026-09-09): PC가 '가입·발행 대기' 후보를 원자적으로 잠그고 받아간다.
+       서버 auto_pipeline_once의 pend 선별과 동일 조건(공통 _has_write_path·_claim_active) 사용 →
+       서버·PC가 겹쳐 처리하지 않음. body: {node_id, n}. claim TTL 후 자동 회수(PC 죽어도 안전)."""
+    d=request.get_json(silent=True) or {}
+    node_id=str(d.get('node_id') or '').strip() or 'pc'
+    n=max(1,min(20,int(d.get('n',4) or 4)))
+    ttl=max(120,min(1800,int(load_config().get('pc_claim_ttl',600) or 600)))
+    now=time.time()
+    site_domains={_domain_of(s.get('site_url','')) for s in load_sites()}
+    _cool=now-1200
+    picked=[]
+    with _cand_lock:
+        cands=load_cands()
+        # 만료된 claim은 먼저 회수(claimed_by 비움) — 죽은 노드가 잡고 있던 것 되살리기.
+        for c in cands:
+            if c.get('claimed_by') and float(c.get('claim_expire',0) or 0) <= now:
+                c['claimed_by']=''; c['claim_expire']=0
+        elig=[c for c in cands
+              if c.get('screened') and c.get('status') in ('ready','approved')
+              and not c.get('parked') and not c.get('illegal') and not c.get('ad_banned')
+              and (c.get('domain') or '').lower() not in site_domains
+              and c.get('reachable') and _has_write_path(c)
+              and not _claim_active(c)
+              and not (c.get('signup_email_verify') or c.get('signup_phone_cert'))  # 인증벽은 자동가입 불가 → 제외
+              and float(c.get('last_pipeline_at',0) or 0) < _cool]
+        # 비회원(바로발행) 우선 → 그다음 로그인. (서버 파이프라인과 동일한 우선순위 감각)
+        def _prio(c):
+            direct=c.get('write_form') and not c.get('login_required')
+            return (1 if direct else 0, 1 if not c.get('captcha') else 0, c.get('score',0))
+        elig.sort(key=_prio,reverse=True)
+        for c in elig[:n]:
+            c['claimed_by']=node_id; c['claim_expire']=now+ttl
+            c['last_pipeline_at']=now   # 쿨다운도 찍어 서버가 곧바로 다시 후보로 안 봄
+            # PC가 발행에 필요로 하는 필드만 추려 전달(민감정보 최소화).
+            picked.append({'id':c.get('id'),'url':c.get('url'),'domain':c.get('domain'),
+                'platform':c.get('platform','gnuboard'),'bo_table':c.get('bo_table') or 'free',
+                'board_name':c.get('board_name'),'login_required':bool(c.get('login_required')),
+                'write_form':bool(c.get('write_form')),'captcha':bool(c.get('captcha'))})
+        if picked: save_cands(cands)
+    if picked: add_log(f'[PC노드] {node_id} 후보 {len(picked)}곳 claim(가입·발행 위임)','파이프라인')
+    return jsonify({'ok':True,'candidates':picked,'ttl':ttl})
+
+@app.route('/api/pipeline/report',methods=['POST'])
+def api_pipeline_report():
+    """★PC 발행노드 결과 회신: PC가 가입·발행한 결과를 서버에 반영(사이트등록·이력·상태·claim해제).
+       서버 auto_pipeline_once의 성공/실패 처리와 동일 효과. body: {node_id, results:[...]}
+       각 result: {cand_id, ok, result_url, mb_id?, mb_pass?, bo_table?, msg?, is_temp?, signed?}"""
+    d=request.get_json(silent=True) or {}
+    node_id=str(d.get('node_id') or '').strip() or 'pc'
+    results=d.get('results') or []
+    if not isinstance(results,list): return jsonify({'ok':False,'error':'results 배열 필요'}),400
+    applied=0; registered=0
+    for r in results:
+        cid=str(r.get('cand_id') or '').strip()
+        if not cid: continue
+        # 이 후보가 이 노드의 claim이 맞는지 확인(엉뚱한/늦은 회신 무시)
+        c=None
+        with _cand_lock:
+            for x in load_cands():
+                if x.get('id')==cid: c=x; break
+        if not c: continue
+        if c.get('claimed_by') and c.get('claimed_by')!=node_id:
+            continue   # 다른 노드/서버로 이미 넘어간 claim — 무시
+        ok=bool(r.get('ok')); result_url=str(r.get('result_url') or '')
+        name=c.get('board_name') or c.get('domain') or (c.get('url','') or '')[:30]
+        try:
+            if ok and result_url.startswith(('http://','https://')):
+                _promote_candidate_to_site(c,result_url,bo=r.get('bo_table') or c.get('bo_table'),permission=True)
+                if r.get('mb_id'):
+                    sid=_promoted_site_id(c)
+                    if sid: set_site_flag(sid,mb_id=r.get('mb_id'),mb_pass=r.get('mb_pass',''))
+                registered+=1
+                add_log(f'[발행가능 등록] {name} — PC노드 검증 통과 → 발행가능 {result_url}'.rstrip())
+            elif ok:
+                _cand_set(cid,status='rejected',reject_reason='발행됨(결과 URL 확인 불가)',claimed_by='',claim_expire=0)
+                add_log(f'[탈락] {name} — PC노드 발행됐으나 결과 URL 확인 불가')
+            else:
+                msg=str(r.get('msg') or '')[:90]; is_temp=bool(r.get('is_temp'))
+                att=int(c.get('pipeline_attempts',0) or 0)+1
+                if is_temp and att<5:
+                    _cand_set(cid,status='ready',reject_reason=f'일시적 실패({att}/5): {msg}',pipeline_attempts=att,claimed_by='',claim_expire=0)
+                    add_log(f'[발행 재시도] {name} ({att}/5) — {msg}')
+                else:
+                    _cand_set(cid,status='rejected',reject_reason=msg or '발행 실패',pipeline_attempts=att,claimed_by='',claim_expire=0)
+                    add_log(f'[탈락] {name} — {msg}')
+            # 성공/등록 케이스도 claim 해제(_promote가 status=approved로 바꾸지만 claim 필드는 남으므로 정리)
+            if ok:
+                _cand_set(cid,claimed_by='',claim_expire=0)
+            applied+=1
+        except Exception as e:
+            add_log(f'[PC노드 회신오류] {name} {str(e)[:60]}')
+    return jsonify({'ok':True,'applied':applied,'registered':registered})
 
 @app.route('/api/discovery/queries',methods=['GET'])
 def api_discovery_queries():
