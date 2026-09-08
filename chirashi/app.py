@@ -6958,7 +6958,14 @@ def compute_stats():
         if st=='failed':
             rk=x.get('fail_reason_ko') or '기타'; reasons[rk]=reasons.get(rk,0)+1
     rate=round(ok/(ok+fail)*100,1) if (ok+fail) else 0.0
-    days=sorted(by_day.items())[-14:]
+    # ★일별 통계(대표님 지시 2026-09-09): 데이터 있는 날만 뽑지 말고 최근 14일 '연속 달력'으로.
+    #   빈 날도 0으로 채워 항상 14개 칸이 실제 날짜에 정렬되게(안 그러면 4일치가 14일인 척 늘어남).
+    _now=datetime.now().astimezone()
+    days=[]
+    for i in range(13,-1,-1):
+        dd=(_now-timedelta(days=i)).strftime('%Y-%m-%d')
+        v=by_day.get(dd,{'done':0,'failed':0})
+        days.append((dd,v))
     top_sites=sorted(by_site.items(),key=lambda kv:-(kv[1]['done']+kv[1]['failed']))[:12]
     return {'total':total,'ok':ok,'fail':fail,'skip':skip,'rate':rate,
             'alive':alive,'dead':dead,'alive_rate':alive_rate,
@@ -9805,8 +9812,10 @@ $('statTop').innerHTML=tile('전체',s.total,'var(--t)')+tile('성공',s.ok,'var
 const rz=(s.reasons||[]);
 $('statReasons').innerHTML=rz.length?('<div style="font-size:11px;color:var(--d);margin:10px 0 4px">실패 원인 분류</div><div style="display:flex;gap:6px;flex-wrap:wrap">'+rz.map(r=>`<span class="st st-f">${esc(r.reason)} ${r.n}</span>`).join('')+'</div>'):'';
 $('statSurvival').innerHTML=(s.alive+s.dead)?`<div style="font-size:11px;color:var(--d);margin:12px 0 4px">발행글 생존 (검증됨 ${s.alive+s.dead}건)</div><span class="st st-ok">생존 ${s.alive}</span> <span class="st st-f">삭제 ${s.dead}</span>`:'';
-const mx=Math.max(1,...s.by_day.map(d=>d.done+d.failed));
-$('statDays').innerHTML='<div style="display:flex;align-items:flex-end;gap:4px;height:120px">'+s.by_day.map(d=>{const h=Math.round((d.done+d.failed)/mx*100);const go=d.done+d.failed?Math.round(d.done/(d.done+d.failed)*h):0;return `<div style="flex:1;text-align:center" title="${d.day}: 성공${d.done}/실패${d.failed}"><div style="height:${h}px;display:flex;flex-direction:column-reverse;border-radius:3px;overflow:hidden;background:var(--b)"><div style="height:${h-go}px;background:var(--r)"></div><div style="height:${go}px;background:var(--g)"></div></div><div style="font-size:8px;color:var(--d);margin-top:2px">${(d.day||'').slice(5)}</div></div>`}).join('')+'</div>';
+// ★일별 통계 막대(대표님 지시 2026-09-09): 최근 14일 연속 달력. 날짜별 총건수를 막대 위에 표시,
+//   데이터 없는 날도 옅은 바닥선으로 구분. 성공(초록)+실패(빨강) 누적막대.
+const mx=Math.max(1,...s.by_day.map(d=>d.done+d.failed));const CH=140;
+$('statDays').innerHTML='<div style="display:flex;align-items:flex-end;gap:3px;height:'+(CH+18)+'px">'+s.by_day.map(d=>{const tot=d.done+d.failed;const h=tot?Math.max(4,Math.round(tot/mx*CH)):0;const go=tot?Math.round(d.done/tot*h):0;return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%" title="${d.day}: 성공 ${d.done} · 실패 ${d.failed} (총 ${tot})"><div style="font-size:9px;color:${tot?'var(--t)':'#33425f'};margin-bottom:2px;font-weight:${tot?600:400}">${tot||''}</div>${tot?`<div style="width:100%;height:${h}px;display:flex;flex-direction:column-reverse;border-radius:3px 3px 0 0;overflow:hidden;background:var(--b)"><div style="height:${h-go}px;background:var(--r)"></div><div style="height:${go}px;background:var(--g)"></div></div>`:'<div style="width:100%;height:2px;background:#1c2740;border-radius:2px"></div>'}<div style="font-size:8px;color:var(--d);margin-top:3px;white-space:nowrap">${(d.day||'').slice(5)}</div></div>`}).join('')+'</div>';
 $('statSites').innerHTML='<table><thead><tr><th>사이트</th><th>성공</th><th>실패</th><th>생존</th><th>삭제</th></tr></thead><tbody>'+s.by_site.map(x=>`<tr><td>${esc(x.site)}</td><td style="color:var(--g)">${x.done}</td><td style="color:var(--r)">${x.failed}</td><td style="color:var(--v)">${x.alive||0}</td><td style="color:var(--d)">${x.dead||0}</td></tr>`).join('')+'</tbody></table>'}
 
 // ---- 사이트 목록 실시간 렌더 (새로고침 없이) ----
