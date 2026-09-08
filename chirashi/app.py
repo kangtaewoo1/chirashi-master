@@ -9325,26 +9325,17 @@ function getSiteIds(){return Array.from(document.querySelectorAll('.cb:checked')
 function getAllSiteIds(){return Array.from(document.querySelectorAll('#siteList tr[data-id]')).map(r=>r.dataset.id)}
 async function postSel(){const t=$('gTitle').value.trim();const c=$('gContent').value.trim();if(!t||!c){toast('제목/본문 입력','er');return}const ids=getSiteIds();if(!ids.length){toast('사이트 선택','er');return}const r=await api('/post','POST',{site_ids:ids,title:t,content:c,region:$('k1').value.trim(),service:$('k2').value.trim(),brand:$('k3').value.trim()});if(r&&r.ok)toast(r.queued+'개 큐 등록'+(r.blocked?` · 미허용 ${r.blocked}개 제외`:''),r.queued?'ok':'er')}
 async function postAll(){const t=$('gTitle').value.trim();const c=$('gContent').value.trim();if(!t||!c){toast('제목/본문 입력','er');return}const ids=getAllSiteIds();if(!ids.length){toast('사이트 없음','er');return}const r=await api('/post','POST',{site_ids:ids,title:t,content:c,region:$('k1').value.trim(),service:$('k2').value.trim(),brand:$('k3').value.trim()});if(r&&r.ok)toast(r.queued+'개 큐 등록'+(r.blocked?` · 미허용 ${r.blocked}개 제외`:''),r.queued?'ok':'er')}
-// ---- 발행 이력 렌더 ----
-function histRow(h){const stc=h.status==='done'?'ok':(h.status==='failed'?'f':(h.status==='retry'?'y':'i'));
-// 상태 한국어(대표님 지시)
-const STMAP={done:'완료',posting:'발행중',failed:'실패',retry:'재시도',queued:'대기',skipped:'건너뜀'};
-const stt=STMAP[h.status]||h.status||'';
-const av=h.alive==='yes'?'<span class="st st-ok">생존</span>':(h.alive==='no'?'<span class="st st-f">삭제</span>':(h.status==='done'?'<span style="color:var(--d)">-</span>':''));
-const fr=h.fail_reason_ko?`<span style="color:var(--r)">${esc(h.fail_reason_ko)}</span>`:'';
-// 사용 키워드 3개: 메인1(지역)·키2(서비스)·키3(브랜드). title에서 못 뽑으면 region/service.
-const kws=[h.region,h.service,h.brand].filter(Boolean).join(' / ')||(esc(h.region||'')+' '+esc(h.service||''));
-// 제목=발행글 링크(대표님 지시: URL/열기 열 합침). result_url 있으면 클릭시 그 글로 이동.
-const ttl=esc(h.title||'(제목없음)');
-const titleCell=h.result_url
-  ? `<a href="${esc(h.result_url)}" target="_blank" rel="noopener" title="${esc(h.result_url)}" style="color:var(--p);text-decoration:none">🔗 ${ttl}</a>`
-  : ttl;
-// ★메시지 열: URL이면 클릭 가능 링크로(대표님 지시 2026-09-09). linkifyLog가 http(s)를 <a>로 변환.
-const msgCell=linkifyLog(h.message||'');
-return `<tr><td style="color:var(--d);white-space:nowrap">${esc((h.time||'').slice(5,16))}</td><td style="color:var(--t)">${esc(kws)}</td><td style="max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${ttl}">${titleCell}</td><td><span class="st st-${stc}">${esc(stt)}</span></td><td>${fr}</td><td>${av}</td><td style="color:var(--d);max-width:220px;overflow:hidden;text-overflow:ellipsis">${msgCell}</td></tr>`}
-// ★작업실별 발행이력(대표님 지시 2026-09-09 '작업실별로 나눠줘 마사지·노래방'):
-//   workroom_name으로 그룹핑해 작업실마다 섹션(제목+표)으로 나눠 렌더.
-function _histTable(rows){return '<table><thead><tr><th>시간</th><th>키워드</th><th>제목(클릭시 글로 이동)</th><th>상태</th><th>실패원인</th><th>생존</th><th>메시지</th></tr></thead><tbody>'+rows.map(histRow).join('')+'</tbody></table>';}
+// ---- 발행 이력 렌더 (2열 컴팩트) ----
+// ★2열용 컴팩트 행(대표님 지시 2026-09-09 '한눈에'): 좁은 2열에서 키워드가 세로로 쪼개지던 것 해결.
+//   열을 시간·상태·제목(링크)만으로 간결하게, 모두 nowrap+말줄임 → 한 줄씩 깔끔.
+function histRowC(h){const stc=h.status==='done'?'ok':(h.status==='failed'?'f':(h.status==='retry'?'y':'i'));
+  const STMAP={done:'완료',posting:'발행중',failed:'실패',retry:'재시도',queued:'대기',skipped:'건너뜀'};
+  const stt=STMAP[h.status]||h.status||'';
+  const ttl=esc(h.title||'(제목없음)');
+  const cell=h.result_url?`<a href="${esc(h.result_url)}" target="_blank" rel="noopener" title="${esc(h.result_url)}" style="color:var(--p);text-decoration:none">🔗 ${ttl}</a>`:ttl;
+  const av=h.alive==='no'?' <span style="color:var(--r)">✕삭제</span>':'';
+  return `<tr><td style="color:var(--d);white-space:nowrap;font-size:11px">${esc((h.time||'').slice(5,16))}</td><td style="white-space:nowrap"><span class="st st-${stc}">${esc(stt)}</span>${av}</td><td style="max-width:0;width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${ttl}">${cell}</td></tr>`}
+function _histTable(rows){return '<table style="table-layout:fixed;width:100%"><thead><tr><th style="width:78px">시간</th><th style="width:66px">상태</th><th>제목(클릭시 글로 이동)</th></tr></thead><tbody>'+rows.map(histRowC).join('')+'</tbody></table>';}
 async function renderHistory(){const h=await api('/history','GET');if(!Array.isArray(h))return;$('histCount').textContent=h.length+'건';
 if(!h.length){$('histList').innerHTML='<p style="color:var(--d);padding:30px;text-align:center">아직 발행 이력이 없습니다</p>';return}
 // 작업실별 그룹핑(순서: 이력에 먼저 등장한 작업실 순)
