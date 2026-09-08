@@ -658,7 +658,9 @@ def load_config():
        #   미지원이라, 타카고 등 로그인 필요 Cafe24는 이걸로. Selenium Remote로 brd.superproxy.io:9515 연결.
        #   endpoint 예: brd-customer-xxx-zone-scraping_browser:PASS@brd.superproxy.io:9515
        'sbr_enabled':False,'sbr_endpoint':'',   # 전체 endpoint(user:pass@host:port) 한 줄로 저장
-       'sbr_country':'kr',   # ★Scraping Browser 접속국가(username에 -country-XX 주입). kr=한국프록시(왕복지연↓)
+       'sbr_country':'',   # ★Scraping Browser 접속국가. 빈값=주입안함(Browser API 자동IP, 권장).
+                           #   'kr' 주입이 endpoint customer name을 깨 'Wrong customer name' 오류 유발(2026-09-09)
+                           #   → 기본 끔. Browser API가 자동으로 최적 IP 선택하므로 geo 불필요.
        # ★자동가입 고정계정(대표님 지시 2026-09-08: 랜덤 대신 통일). 비면 기존 랜덤 생성.
        #   설정 시 모든 자동가입에 이 아이디/비번 사용(대표님이 관리·중복ID 감소).
        'signup_fixed_id':'','signup_fixed_pw':'',
@@ -694,6 +696,13 @@ def load_config():
             if _ch: save_sites(_ss)
         except Exception: pass
         c['interval1_unlimited_migrated']=True
+        try: save_json(CONFIG_FILE,c)
+        except Exception: pass
+    # 1회 마이그레이션: sbr_country='kr' 제거 — endpoint customer name 깨서 'Wrong customer name'
+    #   오류로 SBR(Cafe24 로그인 발행) 전부 실패시킴(2026-09-09). Browser API 자동IP로 충분.
+    if not c.get('sbr_country_cleared'):
+        if str(c.get('sbr_country') or '')=='kr': c['sbr_country']=''
+        c['sbr_country_cleared']=True
         try: save_json(CONFIG_FILE,c)
         except Exception: pass
     # 1회 마이그레이션: IMAP 설정 후 쌓인 로그인 게시판 후보 소진 위해 주기당 처리 2→5.
@@ -2070,11 +2079,10 @@ def get_driver(remote=False):
                         _drivers.pop(rkey,None)
                 if not ep.startswith('http'): ep='https://'+ep
                 if ':9515' not in ep and not re.search(r':\d+',ep.split('@')[-1]): ep=ep.rstrip('/')+':9515'
-                # ★한국 geo 고정(대표님 지시 2026-09-08): username 뒤에 -country-kr 삽입.
-                #   Bright Data 공식형식 https://USER-country-kr:PASS@brd.superproxy.io:9515 —
-                #   한국VPS↔한국프록시가 되어 왕복지연↓(이전 renderer timeout 근본원인 우회).
-                #   endpoint(비번 포함)는 원본 그대로 두고 연결시점에만 주입 → 저장값 무손상.
-                _cc=str(cfg.get('sbr_country') or 'kr').strip().lower()
+                # ★geo 주입(sbr_country) — 기본 끔(빈값). 'kr' 등 명시할 때만 username 뒤에 -country-XX.
+                #   주의: 이게 endpoint customer name을 깨 'Wrong customer name' 오류를 유발했음(2026-09-09).
+                #   Browser API는 자동으로 최적 IP를 고르므로 geo 없이도 잘 됨 → 기본 미주입이 안전.
+                _cc=str(cfg.get('sbr_country') or '').strip().lower()   # ★빈값이면 주입 안 함(fallback 'kr' 제거)
                 if _cc and '-country-' not in ep:
                     _mm=re.match(r'(https?://)([^:@/]+)(.*)$',ep)   # 스킴 / username / 나머지(:pass@host:port)
                     if _mm: ep=f'{_mm.group(1)}{_mm.group(2)}-country-{_cc}{_mm.group(3)}'
