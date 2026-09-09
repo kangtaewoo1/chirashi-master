@@ -208,10 +208,55 @@ def run(once=False, workers=None, idle=30):
             log(f"루프 오류: {e} — 15초 후 계속"); time.sleep(15)
 
 
+def cafe24_test(url):
+    """★Cafe24 로컬크롬 발행 테스트(대표님 지시 2026-09-09 'PC 로컬크롬로 Cafe24 뚫기').
+       Bright Data 없이 PC 실제 IP·실제 크롬으로 CF 통과 + 실제 글1건 발행을 시도해 되는지 즉시 검증.
+       (서버 claim 안 기다리고 직접 URL 지정.)"""
+    import re as _re
+    m = _re.match(r"(https?://[^/]+)", url); base = m.group(1) if m else url
+    cfg = app.load_config()
+    if cfg.get("sbr_enabled"):
+        log("⚠ 로컬 config에 sbr_enabled=True — 로컬크롬 테스트 위해 이번 실행만 강제 OFF")
+        cfg["sbr_enabled"] = False
+    # bo_table 추출(있으면). /article/ SEO-URL·board_no 등은 엔진이 자동 처리.
+    bo = ""
+    bm = _re.search(r"[?&]board_no=(\d+)", url) or _re.search(r"bo_table=([A-Za-z0-9_]+)", url)
+    if bm: bo = bm.group(1)
+    site = {"id": "cafe24test", "site_url": base, "platform": "cafe24",
+            "bo_table": bo or "1", "name": base, "mb_id": "", "mb_pass": ""}
+    log(f"Cafe24 로컬크롬 발행 테스트 — {base} (bo={site['bo_table']})")
+    log("크롬 띄우는 중... CF 통과 시도(실제 IP라 데이터센터보다 유리). 최대 1~2분.")
+    try:
+        kw = {"지역": "인천", "서비스": "노래방", "브랜드": cfg.get("brand", "") or "테스트"}
+        html, title = app.generate_article(kw, cfg, unique=True)
+        ok, msg = app.cafe24_post(site, title, html, skip_login=True)  # 계정 없으면 비회원/CF만 검증
+        if ok and str(msg).startswith(("http://", "https://")):
+            log(f"✅ 발행 성공! → {msg}")
+            log("→ PC 로컬크롬이 이 Cafe24의 CF를 통과했습니다. Bright Data 불필요.")
+        elif ok:
+            log(f"△ 발행됐으나 결과 URL 불명: {str(msg)[:100]}")
+        else:
+            log(f"✗ 실패: {str(msg)[:140]}")
+            low = str(msg).lower()
+            if "just a moment" in low or "cloudflare" in low or "챌린지" in msg:
+                log("→ CF를 아직 못 넘음. 크롬이 챌린지에 걸림(재시도/수동확인 필요).")
+            elif "로그인" in msg or "권한" in msg:
+                log("→ CF는 넘었으나 로그인 필요. 이 게시판은 계정이 있어야 발행 가능.")
+    except Exception as e:
+        log(f"✗ 예외: {str(e)[:140]}")
+    finally:
+        try: app.reset_driver()
+        except Exception: pass
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--once", action="store_true", help="한 배치만 처리하고 종료")
     ap.add_argument("--workers", type=int, default=0, help="동시 발행 크롬 수(미지정=메모리 자동)")
     ap.add_argument("--idle", type=int, default=30, help="claim 없을 때 대기 초")
+    ap.add_argument("--cafe24-test", dest="cafe24_test", default="", help="지정 Cafe24 URL에 로컬크롬 발행 테스트")
     a = ap.parse_args()
-    run(once=a.once, workers=a.workers, idle=a.idle)
+    if a.cafe24_test:
+        cafe24_test(a.cafe24_test)
+    else:
+        run(once=a.once, workers=a.workers, idle=a.idle)
