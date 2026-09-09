@@ -9050,6 +9050,12 @@ header{background:var(--c);border-bottom:1px solid var(--b);padding:10px 16px;di
 .tab.on{background:var(--c);border-color:var(--b);border-bottom-color:var(--c);color:var(--t);font-weight:600}
 .wrap{max-width:1200px;margin:0 auto;padding:10px 14px}
 .panel{display:none;padding:10px 0}.panel.on{display:block}
+/* ★발행현황 탭 가독성 개선(대표님 '글씨·간격 빽빽함' 2026-09-09): 이 탭에서만 여백·글자 키움. 다른 탭 무영향. */
+#p-wlog .card{padding:16px}
+#p-wlog .note{font-size:13px;line-height:1.6;padding:12px 14px}
+#p-wlog h3{font-size:15px}
+#p-wlog table td,#p-wlog table th{padding:7px 9px;font-size:12.5px}
+#p-wlog table th{font-size:11.5px}
 .card{background:var(--c);border:1px solid var(--b);border-radius:10px;padding:14px;margin-bottom:10px}
 .card h3{font-size:10px;color:var(--d);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px}
 .row{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px}
@@ -9236,17 +9242,17 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 <div id="ctrlGrid" style="display:grid;grid-template-rows:auto auto;gap:10px;margin-top:8px">
   <!-- 워커 세계(위) -->
   <div style="border:1px solid #166534;border-radius:8px;overflow:hidden">
-    <div style="background:#0d2a17;color:var(--g);padding:6px 10px;font-weight:700;font-size:12px">🖥️ 워커 세계 <span style="color:var(--d);font-weight:400">· 실제 글 올리는 발행</span> <span id="cnt발행" style="float:right;color:var(--d)"></span></div>
-    <div style="max-height:240px;overflow-y:auto" id="col발행"></div>
+    <div style="background:#0d2a17;color:var(--g);padding:8px 12px;font-weight:700;font-size:13px">🖥️ 워커 세계 <span style="color:var(--d);font-weight:400">· 실제 글 올리는 발행</span> <span id="cnt발행" style="float:right;color:var(--d)"></span></div>
+    <div style="max-height:280px;overflow-y:auto" id="col발행"></div>
   </div>
   <!-- 러너 세계(아래, PC발굴 포함) — 4구획을 좌우로 나눠 한눈에 -->
   <div style="border:1px solid #4c1d95;border-radius:8px;overflow:hidden">
-    <div style="background:#1a0f2e;color:var(--v);padding:6px 10px;font-weight:700;font-size:12px">🏃 러너 세계 <span style="color:var(--d);font-weight:400">· 발굴(PC 연동)·검수·가입·정리</span></div>
+    <div style="background:#1a0f2e;color:var(--v);padding:8px 12px;font-weight:700;font-size:13px">🏃 러너 세계 <span style="color:var(--d);font-weight:400">· 발굴(PC 연동)·검수·가입·정리</span></div>
     <div style="display:grid;grid-template-columns:1fr 1fr">
-      <div style="border-top:1px solid #33425f;border-right:1px solid #33425f"><div style="padding:4px 10px;font-size:11px;color:var(--p)">🔍 발굴(PC) <span id="cnt발굴" style="float:right;color:var(--d)"></span></div><div style="max-height:150px;overflow-y:auto" id="col발굴"></div></div>
-      <div style="border-top:1px solid #33425f"><div style="padding:4px 10px;font-size:11px;color:var(--v)">📋 검수 <span id="cnt검수" style="float:right;color:var(--d)"></span></div><div style="max-height:150px;overflow-y:auto" id="col검수"></div></div>
-      <div style="border-top:1px solid #33425f;border-right:1px solid #33425f"><div style="padding:4px 10px;font-size:11px;color:var(--y)">👤 가입 <span id="cnt가입" style="float:right;color:var(--d)"></span></div><div style="max-height:150px;overflow-y:auto" id="col가입"></div></div>
-      <div style="border-top:1px solid #33425f"><div style="padding:4px 10px;font-size:11px;color:var(--r)">🧹 정리 <span id="cnt정리" style="float:right;color:var(--d)"></span></div><div style="max-height:150px;overflow-y:auto" id="col정리"></div></div>
+      <div style="border-top:1px solid #33425f;border-right:1px solid #33425f"><div style="padding:6px 11px;font-size:12px;color:var(--p)">🔍 발굴(PC) <span id="cnt발굴" style="float:right;color:var(--d)"></span></div><div style="max-height:190px;overflow-y:auto" id="col발굴"></div></div>
+      <div style="border-top:1px solid #33425f"><div style="padding:6px 11px;font-size:12px;color:var(--v)">📋 검수 <span id="cnt검수" style="float:right;color:var(--d)"></span></div><div style="max-height:190px;overflow-y:auto" id="col검수"></div></div>
+      <div style="border-top:1px solid #33425f;border-right:1px solid #33425f"><div style="padding:6px 11px;font-size:12px;color:var(--y)">👤 가입 <span id="cnt가입" style="float:right;color:var(--d)"></span></div><div style="max-height:190px;overflow-y:auto" id="col가입"></div></div>
+      <div style="border-top:1px solid #33425f"><div style="padding:6px 11px;font-size:12px;color:var(--r)">🧹 정리 <span id="cnt정리" style="float:right;color:var(--d)"></span></div><div style="max-height:190px;overflow-y:auto" id="col정리"></div></div>
     </div>
   </div>
 </div>
@@ -9517,7 +9523,7 @@ function renderActivity(){
   const time=x=>esc((x.time||'').slice(-8));   // HH:MM:SS
   function fill(cat){const el=$('col'+cat);if(!el)return;const arr=buckets[cat]||[];
     const cn=$('cnt'+cat);if(cn)cn.textContent=arr.length?arr.length+'건':'';
-    el.innerHTML=arr.length?arr.map(x=>'<div style="padding:3px 10px;border-bottom:1px solid #1c2740;font-size:11px;line-height:1.4"><span style="color:var(--d)">'+time(x)+'</span> '+linkifyLog(x.msg||'')+'</div>').join(''):'<div style="padding:14px;text-align:center;color:var(--d);font-size:11px">대기 중…</div>';}
+    el.innerHTML=arr.length?arr.map(x=>'<div style="padding:5px 11px;border-bottom:1px solid #1c2740;font-size:12.5px;line-height:1.55"><span style="color:var(--d)">'+time(x)+'</span> '+linkifyLog(x.msg||'')+'</div>').join(''):'<div style="padding:16px;text-align:center;color:var(--d);font-size:12px">대기 중…</div>';}
   ['발행','발굴','검수','가입','정리'].forEach(fill);
   const cc=$('actCounts');if(cc)cc.textContent='발행 '+buckets['발행'].length+' · 발굴 '+buckets['발굴'].length+' · 검수 '+buckets['검수'].length+' · 가입 '+buckets['가입'].length+' · 정리 '+buckets['정리'].length;
 }
@@ -9576,8 +9582,14 @@ const _stationsByProvince={
 "광주광역시":["광주송정역","송정공원역","도산역","공항역","김대중컨벤션센터역","상무역","운천역","돌고개역","농성역","화정역","쌍촌역","금남로4가역","금남로5가역","문화전당역","남광주역","학동증심사입구역","소태역","녹동역","평동역"]
 };
 let _workrooms=[];
-async function loadWorkrooms(){const r=await api('/workrooms','GET');if(!Array.isArray(r))return;_workrooms=r;const s=$('wrSelect');const keep=s.value;s.innerHTML='<option value="">작업실 선택</option>'+r.map(x=>'<option value="'+esc(x.id)+'">'+esc(x.name)+'</option>').join('');if(r.some(x=>x.id===keep))s.value=keep;else if(r.length)s.value=r[0].id;showWorkroom();if(typeof loadImgWorkrooms==='function')loadImgWorkrooms()}
-function showWorkroom(){const r=_workrooms.find(x=>x.id===$('wrSelect').value);$('wrName').value=r?r.name:'';$('wrKeywords').value=r?r.keyword_csv:'';if($('wrBases'))$('wrBases').value=(r&&r.bases)?r.bases:'';if($('wrWriter'))$('wrWriter').value=(r&&r.writer_name)?r.writer_name:'';$('wrSite').value=r?r.site_id:'';$('wrSaved').textContent=r?('저장 '+(r.updated_at||'')):''}
+// ★작업실 조합 수 계산(대표님 '새 작업실 안 들어옴' 2026-09-09): 조합 0이면 발행풀에 안 잡힘 → 셀렉터에 표시.
+function _wrComboCount(x){return String(x.keyword_csv||'').split(/\r?\n/).map(s=>s.trim()).filter(s=>s&&!s.startsWith('#')).length}
+async function loadWorkrooms(){const r=await api('/workrooms','GET');if(!Array.isArray(r))return;_workrooms=r;const s=$('wrSelect');const keep=s.value;s.innerHTML='<option value="">작업실 선택</option>'+r.map(x=>{const n=_wrComboCount(x);const tag=n?(' ('+n+'조합)'):' (⚠비어있음)';return '<option value="'+esc(x.id)+'">'+esc(x.name)+tag+'</option>'}).join('');if(r.some(x=>x.id===keep))s.value=keep;else if(r.length)s.value=r[0].id;showWorkroom();if(typeof loadImgWorkrooms==='function')loadImgWorkrooms()}
+function showWorkroom(){const r=_workrooms.find(x=>x.id===$('wrSelect').value);$('wrName').value=r?r.name:'';$('wrKeywords').value=r?r.keyword_csv:'';if($('wrBases'))$('wrBases').value=(r&&r.bases)?r.bases:'';if($('wrWriter'))$('wrWriter').value=(r&&r.writer_name)?r.writer_name:'';$('wrSite').value=r?r.site_id:'';
+  // ★조합 0개면 발행풀에 안 잡힌다는 걸 명확히 경고(대표님 '새 작업실 안 들어옴').
+  const el=$('wrSaved');if(!el){return}
+  if(r){const n=_wrComboCount(r);el.innerHTML=n?('저장 '+(r.updated_at||'')+' · '+n+'조합'):'<span style="color:var(--r)">⚠ 조합 0개 — 아래 키워드 넣고 \'생성+저장\'을 눌러야 발행됩니다</span>'}
+  else el.textContent=''}
 async function newWorkroom(){const name=(prompt('새 작업실 이름','작업실'+(_workrooms.length+1))||'').trim();if(!name)return;const r=await api('/workrooms','POST',{name:name,keyword_csv:'',site_id:'',bases:''});if(r&&r.ok){await loadWorkrooms();$('wrSelect').value=r.id;showWorkroom();toast(name+' 추가됨','ok')}}
 async function saveWorkroom(){const id=$('wrSelect').value;if(!id){toast('먼저 작업실을 추가하세요','er');return}const r=await api('/workrooms','POST',{id:id,name:$('wrName').value.trim(),keyword_csv:$('wrKeywords').value,site_id:$('wrSite').value,bases:($('wrBases')?$('wrBases').value:''),writer_name:($('wrWriter')?$('wrWriter').value:'')});if(r&&r.ok){toast('작업실 저장 완료 · '+r.count+'개 조합','ok');await loadWorkrooms();$('wrSelect').value=id;showWorkroom()}else toast((r&&r.error)||'저장 실패','er')}
 async function deleteWorkroom(){const id=$('wrSelect').value;if(!id)return;if(!confirm('선택한 작업실과 키워드 목록을 삭제할까요?'))return;await api('/workrooms','DELETE',{id:id});await loadWorkrooms();toast('작업실 삭제됨')}
