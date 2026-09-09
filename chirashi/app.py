@@ -9140,6 +9140,20 @@ td{padding:5px 8px;border-bottom:1px solid #111827}
 @keyframes in{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
 .toast-ok{background:#052e16;color:var(--g)}.toast-er{background:#450a0a;color:var(--r)}
 input[type=checkbox]{accent-color:var(--p)}
+/* ★모바일 UI 개선(대표님 지시 2026-09-09 '한 화면에 안 들어옴'): 좁은 화면에서 헤더 세로쌓기·글자축소·여백정리. */
+@media (max-width:640px){
+  header{flex-direction:column;align-items:flex-start;gap:6px;padding:8px 12px}
+  .logo{font-size:14px;white-space:nowrap}
+  .stats{gap:8px 10px;flex-wrap:wrap;font-size:10px;width:100%}
+  .stats > span, .stats > div{white-space:nowrap}
+  .tabs{padding:8px 8px 0;gap:3px;overflow-x:auto;flex-wrap:nowrap;-webkit-overflow-scrolling:touch}
+  .tab{padding:6px 10px;font-size:11px;white-space:nowrap;flex:0 0 auto}
+  .wrap{padding:8px 10px}
+  .card{padding:11px}
+  input,select,textarea{font-size:16px}   /* iOS 확대 방지 위해 16px */
+  /* 발행이력 표: 모바일에선 시간·상태·제목이 한 줄에 들어오게 폰트·여백 축소 */
+  #p-wlog table td,#p-wlog table th{padding:5px 6px;font-size:12px}
+}
 .twocap-shell{background:linear-gradient(180deg,#0f1729 0%,#0b1322 100%);border:1px solid var(--b);border-radius:12px;padding:10px 10px 8px}
 .twocap-header{display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--d);margin-bottom:8px}
 .twocap-chip{display:inline-flex;align-items:center;gap:6px;padding:3px 7px;border-radius:999px;font-size:10px;font-weight:700}
@@ -9557,12 +9571,13 @@ if(!h.length){$('histList').innerHTML='<p style="color:var(--d);padding:30px;tex
 // 작업실별 그룹핑(순서: 이력에 먼저 등장한 작업실 순)
 const groups={},order=[];
 h.forEach(x=>{const wn=x.workroom_name||'직접 입력';if(!(wn in groups)){groups[wn]=[];order.push(wn)}groups[wn].push(x)});
-// ★2열로 분류(대표님 지시 2026-09-09): 작업실 섹션을 좌우 2열 그리드로 나란히(마사지·노래방).
+// ★반응형(대표님 지시 2026-09-09 '모바일 한화면에 안들어옴'): 넓으면 2열, 좁으면(모바일) 자동 1열.
+//   auto-fill+minmax(320px)로 화면폭에 맞춰 열 수 자동 결정. 모바일에선 세로로 쌓임.
 let cells='';
 for(const wn of order){const rows=groups[wn];
-  cells+=`<div style="border:1px solid #33425f;border-radius:8px;overflow:hidden"><div style="font-weight:700;color:var(--p);padding:6px 10px;background:#0f1830;border-bottom:1px solid #33425f">📂 ${esc(wn)} <span style="color:var(--d);font-weight:400;font-size:11px">${rows.length}건</span></div><div style="max-height:460px;overflow:auto">`+_histTable(rows)+'</div></div>';
+  cells+=`<div style="border:1px solid #33425f;border-radius:8px;overflow:hidden"><div style="font-weight:700;color:var(--p);padding:6px 10px;background:#0f1830;border-bottom:1px solid #33425f">📂 ${esc(wn)} <span style="color:var(--d);font-weight:400;font-size:11px">${rows.length}건</span></div><div style="max-height:360px;overflow:auto">`+_histTable(rows)+'</div></div>';
 }
-$('histList').innerHTML=`<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">${cells}</div>`}
+$('histList').innerHTML=`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:10px">${cells}</div>`}
 async function submitCaptcha(id){const el=$('cap_'+id);const value=(el&&el.value||'').trim();if(!value){toast('CAPTCHA 값을 입력하세요','er');return}const r=await api('/manual-checks/'+id+'/submit','POST',{value});if(r&&r.ok){toast('입력 완료 · 자동 발행을 계속합니다');renderCaptchaTasks()}else toast((r&&r.error)||'전달 실패','er')}
 async function cancelCaptcha(id){const r=await api('/manual-checks/'+id+'/cancel','POST',{});if(r&&r.ok){toast('CAPTCHA 작업 취소됨');renderCaptchaTasks()}}
 async function renderCaptchaTasks(){const box=$('captchaTasks');if(!box)return;const r=await api('/manual-checks','GET');if(!r||!r.ok)return;const waiting=(r.tasks||[]).filter(t=>['waiting_input','input_received','submitting'].includes(t.status));if(!waiting.length){box.innerHTML='';return}box.innerHTML=waiting.map(t=>'<div class="card" style="border-color:#a16207;background:#171205"><h3 style="color:var(--y)">🧩 '+esc(t.site_name)+' · CAPTCHA 입력 후 자동 발행</h3><div class="row">'+(t.image_data?'<img src="'+t.image_data+'" alt="CAPTCHA" style="max-width:240px;max-height:90px;background:#fff;border-radius:4px;padding:4px">':'<span style="color:var(--y)">이미지 캡처 실패 — 사이트 화면에서 CAPTCHA를 확인하세요.</span>')+'<input id="cap_'+esc(t.id)+'" autocomplete="off" placeholder="보이는 문자를 직접 입력" style="width:220px" '+(t.status!=='waiting_input'?'disabled':'')+'><button class="btn btn-g" onclick="submitCaptcha(\''+esc(t.id)+'\')" '+(t.status!=='waiting_input'?'disabled':'')+'>입력 후 자동 발행</button><button class="btn btn-r btn-xs" onclick="cancelCaptcha(\''+esc(t.id)+'\')">취소</button></div><div style="color:var(--d);font-size:10px;margin-top:6px">'+esc(t.message||'')+' · 만료 '+esc(t.expires_at||'')+'</div></div>').join('')}
