@@ -208,10 +208,10 @@ def run(once=False, workers=None, idle=30):
             log(f"루프 오류: {e} — 15초 후 계속"); time.sleep(15)
 
 
-def cafe24_test(url):
+def cafe24_test(url, mb_id="", mb_pass=""):
     """★Cafe24 로컬크롬 발행 테스트(대표님 지시 2026-09-09 'PC 로컬크롬로 Cafe24 뚫기').
-       Bright Data 없이 PC 실제 IP·실제 크롬으로 CF 통과 + 실제 글1건 발행을 시도해 되는지 즉시 검증.
-       (서버 claim 안 기다리고 직접 URL 지정.)"""
+       Bright Data 없이 PC 실제 IP·실제 크롬으로 CF 통과 + (계정 주면)로그인 + 실제 글1건 발행 검증.
+       계정(--id/--pw)을 주면 로그인 발행, 안 주면 비회원/CF만 확인. (서버 claim 안 기다리고 직접 URL 지정.)"""
     import re as _re
     m = _re.match(r"(https?://[^/]+)", url); base = m.group(1) if m else url
     cfg = app.load_config()
@@ -227,17 +227,18 @@ def cafe24_test(url):
         bm = _re.search(r"[?&]board_no=(\d+)", url) or _re.search(r"bo_table=([A-Za-z0-9_]+)", url)
         if bm: bo = bm.group(1)
     site = {"id": "cafe24test", "site_url": base, "platform": "cafe24",
-            "bo_table": bo or "1", "name": base, "mb_id": "", "mb_pass": ""}
+            "bo_table": bo or "1", "name": base, "mb_id": mb_id, "mb_pass": mb_pass}
     # ★대표님이 지정한 '진짜 글쓰기 진입 링크'를 최우선 진입점으로(엔진 write_entry_url/article_board_name 재사용).
     if url != base and "/article/" in url:
         site["write_entry_url"] = url
         if art_name: site["article_board_name"] = art_name
-    log(f"Cafe24 로컬크롬 발행 테스트 — {base} (bo={site['bo_table']})")
+    _login = bool(mb_id)
+    log(f"Cafe24 로컬크롬 발행 테스트 — {base} (bo={site['bo_table']}) · {'계정 로그인' if _login else '비회원(계정없음)'}")
     log("크롬 띄우는 중... CF 통과 시도(실제 IP라 데이터센터보다 유리). 최대 1~2분.")
     try:
         kw = {"지역": "인천", "서비스": "노래방", "브랜드": cfg.get("brand", "") or "테스트"}
         html, title = app.generate_article(kw, cfg, unique=True)
-        ok, msg = app.cafe24_post(site, title, html, skip_login=True)  # 계정 없으면 비회원/CF만 검증
+        ok, msg = app.cafe24_post(site, title, html, skip_login=not _login)  # 계정 주면 로그인 발행
         if ok and str(msg).startswith(("http://", "https://")):
             log(f"✅ 발행 성공! → {msg}")
             log("→ PC 로컬크롬이 이 Cafe24의 CF를 통과했습니다. Bright Data 불필요.")
@@ -257,14 +258,87 @@ def cafe24_test(url):
         except Exception: pass
 
 
+def cafe24_inspect(url):
+    """★Cafe24 사이트 구조 분석(대표님 지시 2026-09-09 '해당 사이트 로직에 맞게').
+       로컬크롬으로 CF통과 후, 로그인폼·글쓰기 진입·게시판 구조의 실제 DOM을 뽑아
+       cafe24_post 로직을 이 사이트에 맞출 근거를 만든다. 계정 불필요(구조만 관찰)."""
+    from selenium.webdriver.common.by import By
+    import re as _re, json as _json
+    m = _re.match(r"(https?://[^/]+)", url); base = m.group(1) if m else url
+    cfg = app.load_config()
+    if cfg.get("sbr_enabled"): cfg["sbr_enabled"] = False
+    d = app.get_driver(remote=False)
+    out = {}
+    def _grab(u, label):
+        log(f"[{label}] 접속: {u}")
+        try: d.get(u)
+        except Exception: pass
+        # CF 통과 대기
+        t0 = time.time()
+        while time.time() - t0 < 20:
+            try:
+                t = (d.title or "").lower()
+                if not ("just a moment" in t or "attention" in t or "잠시" in t): break
+            except Exception: pass
+            time.sleep(0.7)
+        info = {}
+        try: info["title"] = d.title
+        except Exception: info["title"] = "?"
+        try: info["url"] = d.current_url
+        except Exception: info["url"] = "?"
+        # 로그인 관련 필드/버튼
+        try:
+            info["inputs"] = d.execute_script(
+                "return Array.from(document.querySelectorAll('input')).slice(0,40).map(function(i){return (i.name||i.id||i.type||'?')+'['+i.type+']'});")
+        except Exception as e: info["inputs"] = "js오류:"+str(e)[:40]
+        # 글쓰기/로그인 버튼·링크
+        try:
+            info["buttons"] = d.execute_script(
+                "return Array.from(document.querySelectorAll('a,button')).map(function(b){var t=(b.textContent||'').trim().slice(0,14);var h=b.getAttribute('href')||b.getAttribute('onclick')||'';return t?(t+(h?(' → '+String(h).slice(0,40)):'')):null}).filter(Boolean).slice(0,40);")
+        except Exception as e: info["buttons"] = "js오류:"+str(e)[:40]
+        # /article/ 링크(글쓰기 진입 후보)
+        try:
+            info["article_links"] = d.execute_script(
+                "return Array.from(document.querySelectorAll(\"a[href*='/article/'],a[href*='write'],a[href*='login'],a[href*='member']\")).map(function(a){return a.getAttribute('href')}).slice(0,30);")
+        except Exception as e: info["article_links"] = "js오류:"+str(e)[:40]
+        return info
+    try:
+        out["home"] = _grab(base, "홈")
+        out["login"] = _grab(base + "/member/login.html", "로그인페이지")
+        if url != base:
+            out["target"] = _grab(url, "지정링크(글목록)")
+        # 결과를 파일로 저장(대표님이 보여줄 수 있게)
+        p = "cafe24_inspect.json"
+        open(p, "w", encoding="utf-8").write(_json.dumps(out, ensure_ascii=False, indent=2))
+        log("─" * 40)
+        log(f"구조 분석 완료 → {p} 저장됨. 아래 요약:")
+        for k, v in out.items():
+            log(f"[{k}] title={str(v.get('title'))[:40]} url={str(v.get('url'))[:60]}")
+            log(f"   inputs={v.get('inputs')}")
+            log(f"   buttons(일부)={str(v.get('buttons'))[:200]}")
+            log(f"   links={str(v.get('article_links'))[:200]}")
+        log("─" * 40)
+        log("이 출력을 캡처해 보내주시면 Claude가 이 사이트 로직에 맞게 코드를 맞춥니다.")
+    except Exception as e:
+        log(f"✗ 분석 예외: {str(e)[:140]}")
+    finally:
+        try: app.reset_driver()
+        except Exception: pass
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--once", action="store_true", help="한 배치만 처리하고 종료")
     ap.add_argument("--workers", type=int, default=0, help="동시 발행 크롬 수(미지정=메모리 자동)")
     ap.add_argument("--idle", type=int, default=30, help="claim 없을 때 대기 초")
     ap.add_argument("--cafe24-test", dest="cafe24_test", default="", help="지정 Cafe24 URL에 로컬크롬 발행 테스트")
+    ap.add_argument("--cafe24-inspect", dest="cafe24_inspect", default="", help="지정 Cafe24 사이트 구조 분석(로그인폼·글쓰기 진입 DOM 추출)")
+    ap.add_argument("--id", dest="mb_id", default="", help="(선택) Cafe24 로그인 아이디 — 주면 로그인 발행 테스트")
+    ap.add_argument("--pw", dest="mb_pass", default="", help="(선택) Cafe24 로그인 비번 — 명령줄 노출 주의, 테스트 후 창 닫기 권장")
     a = ap.parse_args()
-    if a.cafe24_test:
-        cafe24_test(a.cafe24_test)
+    if a.cafe24_inspect:
+        cafe24_inspect(a.cafe24_inspect)
+    elif a.cafe24_test:
+        cafe24_test(a.cafe24_test, mb_id=a.mb_id, mb_pass=a.mb_pass)
     else:
         run(once=a.once, workers=a.workers, idle=a.idle)
