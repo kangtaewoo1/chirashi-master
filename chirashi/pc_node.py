@@ -107,6 +107,59 @@ def _report(results):
     log("report 최종 실패 — 결과 유실(다음 배치에서 서버가 만료 회수 후 재처리)")
 
 
+def _claim_sites(n):
+    """★등록 Cafe24 사이트(집 IP 필요)를 서버에서 claim. 반환: 사이트 리스트(비번 포함)."""
+    try:
+        r = requests.post(f"{SERVER}/api/pipeline/claim-sites?token={SERVER_TOKEN}",
+                          json={"node_id": NODE_ID, "n": n}, headers=UA, timeout=30, verify=False)
+        if r.status_code != 200:
+            return []
+        return (r.json() or {}).get("sites") or []
+    except Exception:
+        return []
+
+
+def _report_sites(results):
+    """등록 Cafe24 사이트 로컬발행 결과 회신(재시도 포함)."""
+    if not results: return
+    for attempt in range(1, 4):
+        try:
+            r = requests.post(f"{SERVER}/api/pipeline/report-site?token={SERVER_TOKEN}",
+                              json={"node_id": NODE_ID, "results": results}, headers=UA, timeout=60, verify=False)
+            if r.status_code == 200:
+                d = r.json(); log(f"Cafe24 회신: 반영 {d.get('applied',0)} · 발행성공 {d.get('passed',0)}"); return
+        except Exception:
+            pass
+        if attempt < 3: time.sleep(5 * attempt)
+
+
+def _process_site(s, cfg):
+    """등록 Cafe24 사이트 1개를 로컬크롬으로 로그인·발행(app.py cafe24 엔진 경유). 반환: report용 dict.
+       ★비번은 site dict 안에서만 쓰고 로그엔 남기지 않는다."""
+    sid = s.get("id"); base = str(s.get("site_url") or "").rstrip("/")
+    name = s.get("name") or base
+    site = {"id": sid or "pcsite", "site_url": base, "platform": "cafe24",
+            "bo_table": s.get("bo_table") or "1", "name": name,
+            "mb_id": s.get("mb_id", ""), "mb_pass": s.get("mb_pass", ""),
+            "write_entry_url": s.get("write_entry_url", ""), "article_board_name": s.get("article_board_name", "")}
+    res = {"site_id": sid, "ok": False, "result_url": "", "msg": ""}
+    try:
+        pool = app.collect_all_keywords()
+        kw = app.pick_keywords(pool, cfg) if pool else {"지역": "인천", "서비스": "노래방", "브랜드": cfg.get("brand", "") or "테스트"}
+        html, title = app.generate_article(kw, cfg, unique=True)
+        ok, msg = app.do_post(site, title, html, skip_login=False)   # 저장 계정으로 로그인 발행
+        if ok and str(msg).startswith(("http://", "https://")):
+            res.update({"ok": True, "result_url": msg}); log(f"[Cafe24 발행성공] {name} → {msg}")
+        else:
+            res["msg"] = str(msg)[:120]; log(f"[Cafe24 발행실패] {name} — {str(msg)[:80]}")
+    except Exception as e:
+        res["msg"] = f"예외:{str(e)[:80]}"; log(f"[Cafe24 예외] {name} — {str(e)[:70]}")
+    finally:
+        try: app.reset_driver()
+        except Exception: pass
+    return res
+
+
 def _process_one(cand, cfg, pool):
     """후보 1개를 PC 크롬으로 가입·발행테스트(app.py 엔진). auto_pipeline_once의 _proc 로직과 동일.
        반환: report용 result dict."""
@@ -184,22 +237,30 @@ def run(once=False, workers=None, idle=30):
         try:
             cfg = app.load_config()
             pool = app.collect_all_keywords()
+            # ① 등록 Cafe24 사이트(집 IP 필요) 먼저 처리 — 서버가 CF 못 넘는 것들. 순차(로그인·CF라 무겁게).
+            sites = _claim_sites(min(2, n))
+            if sites:
+                log(f"등록 Cafe24 {len(sites)}곳 로컬발행(로그인)")
+                sres = [_process_site(s, cfg) for s in sites]
+                _report_sites(sres)
+            # ② 미등록 후보 가입·발행테스트(동시 n).
             cands = _claim(n)
-            if not cands:
+            if not cands and not sites:
                 if once:
                     log("claim할 후보 없음 — 종료(--once)"); break
                 log(f"대기 후보 없음 — {idle}초 후 재시도"); time.sleep(idle); continue
-            log(f"{len(cands)}곳 claim — 가입·발행 시작(동시 {n})")
-            results = []; lock = threading.Lock(); threads = []
-            def _w(c):
-                r = _process_one(c, cfg, pool)
-                with lock: results.append(r)
-            for c in cands:
-                t = threading.Thread(target=_w, args=(c,), name=f"NODE-{str(c.get('id',''))[:6]}", daemon=True)
-                t.start(); threads.append(t)
-            for t in threads:
-                t.join()
-            _report(results)
+            if cands:
+                log(f"{len(cands)}곳 claim — 가입·발행 시작(동시 {n})")
+                results = []; lock = threading.Lock(); threads = []
+                def _w(c):
+                    r = _process_one(c, cfg, pool)
+                    with lock: results.append(r)
+                for c in cands:
+                    t = threading.Thread(target=_w, args=(c,), name=f"NODE-{str(c.get('id',''))[:6]}", daemon=True)
+                    t.start(); threads.append(t)
+                for t in threads:
+                    t.join()
+                _report(results)
             if once:
                 log("배치 1회 완료 — 종료(--once)"); break
         except KeyboardInterrupt:

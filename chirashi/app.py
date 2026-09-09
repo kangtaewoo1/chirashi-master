@@ -7076,7 +7076,7 @@ def chk():
     #  /api/test/* = 발행 테스트 트리거(등록 사이트에 실제 글1건 발행해 검증).
     _p=request.path
     if _p=='/api/version': return  # 배포 SHA 확인 — 공개(민감정보 없음)
-    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/candidates','/api/candidates/ingest','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/unlocker/test','/api/sbr/test') or _p.startswith('/api/test/'):
+    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/candidates','/api/candidates/ingest','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/report-site','/api/unlocker/test','/api/sbr/test') or _p.startswith('/api/test/'):
         tok=(request.args.get('token') or '').strip()
         cfgtok=(load_config().get('log_token') or '').strip()
         if cfgtok and tok==cfgtok:
@@ -7427,6 +7427,66 @@ def api_pipeline_report():
         except Exception as e:
             add_log(f'[PC노드 회신오류] {name} {str(e)[:60]}')
     return jsonify({'ok':True,'applied':applied,'registered':registered})
+
+@app.route('/api/pipeline/claim-sites',methods=['POST'])
+def api_pipeline_claim_sites():
+    """★PC 발행노드용 '등록 Cafe24 사이트' 위임(대표님 지시 2026-09-09 'PC노드가 등록Cafe24도 발행').
+       서버(데이터센터 IP)는 CF가 막는 Cafe24 로그인 사이트를, 집 IP인 PC가 로컬크롬으로 발행하도록 넘긴다.
+       조건: platform=cafe24 + 저장 계정 있음 + 아직 발행검증 안 됨(또는 재검증 필요) + 최근 시도 아님.
+       비번(mb_pass) 포함해 반환(토큰 인증, PC 신뢰). PC는 로그·화면에 비번 노출 안 함. TTL 후 자동 회수."""
+    d=request.get_json(silent=True) or {}
+    node_id=str(d.get('node_id') or '').strip() or 'pc'
+    n=max(1,min(5,int(d.get('n',2) or 2)))
+    ttl=max(300,min(3600,int(load_config().get('pc_site_claim_ttl',1200) or 1200)))
+    now=time.time(); picked=[]
+    with POST_LOCK:
+        sites=load_sites()
+        for s in sites:   # 만료 claim 회수
+            if s.get('pc_claim_by') and float(s.get('pc_claim_expire',0) or 0)<=now:
+                s['pc_claim_by']=''; s['pc_claim_expire']=0
+        elig=[s for s in sites
+              if (s.get('platform')=='cafe24')
+              and str(s.get('mb_id') or '').strip()
+              and str(s.get('verified_post_url') or '')[:4]!='http'   # 아직 실게시 검증 전
+              and s.get('status')!='rejected'
+              and not (s.get('pc_claim_by') and float(s.get('pc_claim_expire',0) or 0)>now)
+              and float(s.get('pc_last_try',0) or 0) < now-1800]      # 30분 쿨다운
+        for s in elig[:n]:
+            s['pc_claim_by']=node_id; s['pc_claim_expire']=now+ttl; s['pc_last_try']=now
+            picked.append({'id':s.get('id'),'site_url':s.get('site_url'),'platform':'cafe24',
+                'bo_table':s.get('bo_table') or '1','name':s.get('name') or s.get('site_url'),
+                'mb_id':s.get('mb_id',''),'mb_pass':s.get('mb_pass',''),   # ★비번 포함(PC 로컬 로그인용)
+                'write_entry_url':s.get('write_entry_url',''),'article_board_name':s.get('article_board_name','')})
+        if picked: save_sites(sites)
+    if picked: add_log(f'[PC노드] {node_id} 등록Cafe24 {len(picked)}곳 위임(로컬크롬 로그인발행)','파이프라인')
+    return jsonify({'ok':True,'sites':picked,'ttl':ttl})
+
+@app.route('/api/pipeline/report-site',methods=['POST'])
+def api_pipeline_report_site():
+    """★PC가 등록 Cafe24 사이트 로컬발행 결과 회신 → write_test_status·verified_post_url 갱신 + claim 해제.
+       body: {node_id, results:[{site_id, ok, result_url, msg}]}"""
+    d=request.get_json(silent=True) or {}
+    node_id=str(d.get('node_id') or '').strip() or 'pc'
+    results=d.get('results') or []
+    if not isinstance(results,list): return jsonify({'ok':False,'error':'results 배열 필요'}),400
+    applied=0; passed=0; now=_kst_now().strftime('%Y-%m-%d %H:%M')
+    for r in results:
+        sid=str(r.get('site_id') or '').strip()
+        if not sid: continue
+        ok=bool(r.get('ok')); url=str(r.get('result_url') or '')
+        try:
+            if ok and url.startswith(('http://','https://')):
+                set_site_flag(sid,write_test_status='passed',verified_post_url=url,verified_at=now,
+                              registration_source='verified_test',pc_claim_by='',pc_claim_expire=0)
+                passed+=1
+                add_log(f'[Cafe24 발행성공] {sid[:8]} — PC로컬 검증 통과 → {url}'.rstrip())
+            else:
+                set_site_flag(sid,write_test_status='failed',pc_claim_by='',pc_claim_expire=0)
+                add_log(f'[Cafe24 발행실패] {sid[:8]} — {str(r.get("msg") or "")[:80]}')
+            applied+=1
+        except Exception as e:
+            add_log(f'[PC노드 사이트회신오류] {str(e)[:60]}')
+    return jsonify({'ok':True,'applied':applied,'passed':passed})
 
 @app.route('/api/discovery/queries',methods=['GET'])
 def api_discovery_queries():
