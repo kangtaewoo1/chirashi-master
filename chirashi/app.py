@@ -2119,7 +2119,11 @@ def get_driver(remote=False):
         from selenium.webdriver.chrome.service import Service
         from webdriver_manager.chrome import ChromeDriverManager
         opts = webdriver.ChromeOptions()
-        opts.add_argument('--headless=new'); opts.add_argument('--no-sandbox')
+        # ★환경변수 CHIRASHI_HEADFUL=1이면 크롬 창을 보이게(non-headless) 띄운다(대표님 PC에서 Cafe24
+        #   로그인·Turnstile을 눈으로 보며·통과율 높이려고. headless는 CF가 더 잘 막음). 서버는 미설정=headless 유지.
+        if os.environ.get('CHIRASHI_HEADFUL','') not in ('1','true','yes'):
+            opts.add_argument('--headless=new')
+        opts.add_argument('--no-sandbox')
         opts.add_argument('--disable-dev-shm-usage'); opts.add_argument('--disable-gpu')
         opts.add_argument('--window-size=1920,1080'); opts.add_argument('--log-level=3')
         # 정상 환경 일치(위조 아님): 서버가 한국(Seoul)에 있으므로 로케일/언어를 실제와 맞춤.
