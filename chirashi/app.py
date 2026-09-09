@@ -3146,9 +3146,11 @@ def cafe24_post(site, title, content_html, skip_login=False):
                 return _an
         return None
     try:
-        # ★SBR(원격)+board_no 숫자면, 대표님 발견 /article/ 경유가 write.html 직접보다 안정적 →
+        # ★board_no 숫자면, 대표님 발견 /article/ 경유가 write.html 직접보다 안정적 →
         #   먼저 홈에서 /article/ 경로를 찾아 list_urls 최우선에 넣는다(저장된 게 없을 때 1회).
-        if _use_sbr and bo.isdigit() and not _art_name:
+        #   (SBR 게이트 제거 2026-09-09: Bright Data 계정정지로 PC 로컬크롬 발행 시에도 이 탐지가 필요.
+        #    로컬크롬은 실제 IP라 CF는 넘지만 /article/ 탐지가 안 돌아 '글쓰기 페이지 못찾음' 났음.)
+        if bo.isdigit() and not _art_name:
             _art_name=_scrape_article_path() or _art_name
         for wu in write_urls:
             if opened or time.time()>_entry_deadline: break

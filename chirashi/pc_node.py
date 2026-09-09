@@ -218,12 +218,20 @@ def cafe24_test(url):
     if cfg.get("sbr_enabled"):
         log("⚠ 로컬 config에 sbr_enabled=True — 로컬크롬 테스트 위해 이번 실행만 강제 OFF")
         cfg["sbr_enabled"] = False
-    # bo_table 추출(있으면). /article/ SEO-URL·board_no 등은 엔진이 자동 처리.
-    bo = ""
-    bm = _re.search(r"[?&]board_no=(\d+)", url) or _re.search(r"bo_table=([A-Za-z0-9_]+)", url)
-    if bm: bo = bm.group(1)
+    # bo_table 추출. /article/{게시판명}/{board_no}/... SEO-URL 또는 ?board_no=·bo_table= 지원.
+    bo = ""; art_name = ""
+    am = _re.search(r"/article/([^/]+)/(\d+)/", url)
+    if am:
+        art_name = am.group(1); bo = am.group(2)
+    else:
+        bm = _re.search(r"[?&]board_no=(\d+)", url) or _re.search(r"bo_table=([A-Za-z0-9_]+)", url)
+        if bm: bo = bm.group(1)
     site = {"id": "cafe24test", "site_url": base, "platform": "cafe24",
             "bo_table": bo or "1", "name": base, "mb_id": "", "mb_pass": ""}
+    # ★대표님이 지정한 '진짜 글쓰기 진입 링크'를 최우선 진입점으로(엔진 write_entry_url/article_board_name 재사용).
+    if url != base and "/article/" in url:
+        site["write_entry_url"] = url
+        if art_name: site["article_board_name"] = art_name
     log(f"Cafe24 로컬크롬 발행 테스트 — {base} (bo={site['bo_table']})")
     log("크롬 띄우는 중... CF 통과 시도(실제 IP라 데이터센터보다 유리). 최대 1~2분.")
     try:
