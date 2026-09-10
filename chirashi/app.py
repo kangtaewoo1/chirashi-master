@@ -2076,6 +2076,15 @@ def verify_loop():
 # ==================== Selenium 드라이버 (회피코드 제거) ====================
 _drivers = {}
 _drv_lock = threading.Lock()
+# ★chromedriver 경로 1회 캐시(대표님 WinError5 2026-09-11): 동시 4워커가 ChromeDriverManager().install()을
+#   각자 호출하면 같은 driver.exe 파일을 동시에 만지다 'WinError 5 액세스 거부'. 락으로 1회만 설치·재사용.
+_driver_path=[None]; _driver_path_lock=threading.Lock()
+def _get_driver_path():
+    with _driver_path_lock:
+        if not _driver_path[0]:
+            from webdriver_manager.chrome import ChromeDriverManager
+            _driver_path[0]=ChromeDriverManager().install()
+        return _driver_path[0]
 
 def get_driver(remote=False):
     """remote=True면 Bright Data Scraping Browser(원격 크롬)로 연결 — CF+로그인 사이트(타카고 등)용.
@@ -2151,7 +2160,13 @@ def get_driver(remote=False):
         opts.page_load_strategy='eager'
         cb=os.environ.get('CHROME_BIN')  # 리눅스 VPS: chromium 경로 지정 가능
         if cb: opts.binary_location=cb
-        svc=Service(ChromeDriverManager().install())
+        # ★스레드별 독립 프로파일(WinError5·프로파일잠금 방지): 동시 크롬이 같은 기본 프로파일을 공유하면 충돌.
+        try:
+            import tempfile
+            _udd=os.path.join(tempfile.gettempdir(),f'chr_{re.sub(r"[^A-Za-z0-9]","_",tid)}')
+            opts.add_argument('--user-data-dir='+_udd)
+        except Exception: pass
+        svc=Service(_get_driver_path())   # 캐시된 driver 경로(동시 install 충돌 방지)
         d=webdriver.Chrome(service=svc,options=opts)
         d.set_page_load_timeout(25); d.implicitly_wait(3)
         _drivers[tid]=d; return d
