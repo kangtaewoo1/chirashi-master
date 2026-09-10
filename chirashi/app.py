@@ -9362,9 +9362,10 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 </div>
 <!-- ★결과탭 병합(대표님 지시 2026-09-09): 관제실 아래에 발행이력 표를 함께(제목=링크·발행링크 클릭). -->
 <div class="card" style="margin-top:10px"><div class="row" style="align-items:center"><h3 style="margin:0">📮 발행 이력</h3><span id="histCount" style="color:var(--d);font-size:11px"></span><span style="flex:1"></span>
-<button class="btn btn-d btn-xs" onclick="renderHistory()">새로고침</button>
+<select id="histDate" style="width:auto" onchange="renderHistory(true)" title="날짜별 보기"><option value="">전체 날짜</option></select>
+<button class="btn btn-d btn-xs" onclick="renderHistory(true)">새로고침</button>
 <button class="btn btn-g btn-xs" onclick="window.open('/api/history/export','_blank')">엑셀 내보내기</button>
-<button class="btn btn-r btn-xs" onclick="if(confirm('이력 전체 삭제?'))api('/history/clear','POST').then(()=>{toast('이력 삭제됨');renderHistory()})">이력 비우기</button></div>
+<button class="btn btn-r btn-xs" onclick="if(confirm('이력 전체 삭제?'))api('/history/clear','POST').then(()=>{toast('이력 삭제됨');renderHistory(true)})">이력 비우기</button></div>
 <div style="max-height:520px;overflow-y:auto;margin-top:6px" id="histList"></div></div>
 </div></div>
 
@@ -9590,18 +9591,27 @@ function histRowC(h){const stc=h.status==='done'?'ok':(h.status==='failed'?'f':(
   const av=h.alive==='no'?' <span style="color:var(--r)">✕삭제</span>':'';
   return `<tr><td style="color:var(--d);white-space:nowrap;font-size:11px">${esc((h.time||'').slice(5,16))}</td><td style="white-space:nowrap"><span class="st st-${stc}">${esc(stt)}</span>${av}</td><td style="max-width:0;width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${ttl}">${cell}</td></tr>`}
 function _histTable(rows){return '<table style="table-layout:fixed;width:100%"><thead><tr><th style="width:78px">시간</th><th style="width:66px">상태</th><th>제목(클릭시 글로 이동)</th></tr></thead><tbody>'+rows.map(histRowC).join('')+'</tbody></table>';}
-async function renderHistory(){const h=await api('/history','GET');if(!Array.isArray(h))return;$('histCount').textContent=h.length+'건';
+async function renderHistory(force){const h=await api('/history','GET');if(!Array.isArray(h))return;$('histCount').textContent=h.length+'건';
 if(!h.length){$('histList').innerHTML='<p style="color:var(--d);padding:30px;text-align:center">아직 발행 이력이 없습니다</p>';return}
+// ★날짜별 보기(대표님 지시 2026-09-10): 날짜 드롭다운 채우고, 선택 날짜만 필터. force일 때만 옵션 갱신.
+const dsel=$('histDate');
+const dates=[...new Set(h.map(x=>String(x.time||'').slice(0,10)).filter(Boolean))].sort().reverse();
+if(dsel && (force || !dsel.dataset.filled)){const keep=dsel.value;dsel.innerHTML='<option value="">전체 날짜</option>'+dates.map(d=>'<option value="'+d+'">'+d+'</option>').join('');if(dates.includes(keep))dsel.value=keep;dsel.dataset.filled='1'}
+const pick=dsel?dsel.value:'';
+const hf=pick?h.filter(x=>String(x.time||'').slice(0,10)===pick):h;
+// ★스크롤 튐 방지(대표님 '내리면 다시 올라감'): 갱신 전 각 섹션 스크롤 위치 저장→갱신 후 복원.
+const scroll={};document.querySelectorAll('#histList [data-wn]').forEach(el=>{scroll[el.getAttribute('data-wn')]=el.scrollTop});
 // 작업실별 그룹핑(순서: 이력에 먼저 등장한 작업실 순)
 const groups={},order=[];
-h.forEach(x=>{const wn=x.workroom_name||'직접 입력';if(!(wn in groups)){groups[wn]=[];order.push(wn)}groups[wn].push(x)});
-// ★반응형(대표님 지시 2026-09-09 '모바일 한화면에 안들어옴'): 넓으면 2열, 좁으면(모바일) 자동 1열.
-//   auto-fill+minmax(320px)로 화면폭에 맞춰 열 수 자동 결정. 모바일에선 세로로 쌓임.
+hf.forEach(x=>{const wn=x.workroom_name||'직접 입력';if(!(wn in groups)){groups[wn]=[];order.push(wn)}groups[wn].push(x)});
+// 반응형: 넓으면 다열, 좁으면(모바일) 1열.
 let cells='';
 for(const wn of order){const rows=groups[wn];
-  cells+=`<div style="border:1px solid #33425f;border-radius:8px;overflow:hidden"><div style="font-weight:700;color:var(--p);padding:6px 10px;background:#0f1830;border-bottom:1px solid #33425f">📂 ${esc(wn)} <span style="color:var(--d);font-weight:400;font-size:11px">${rows.length}건</span></div><div style="max-height:360px;overflow:auto">`+_histTable(rows)+'</div></div>';
+  cells+=`<div style="border:1px solid #33425f;border-radius:8px;overflow:hidden"><div style="font-weight:700;color:var(--p);padding:6px 10px;background:#0f1830;border-bottom:1px solid #33425f">📂 ${esc(wn)} <span style="color:var(--d);font-weight:400;font-size:11px">${rows.length}건</span></div><div data-wn="${esc(wn)}" style="max-height:360px;overflow:auto">`+_histTable(rows)+'</div></div>';
 }
-$('histList').innerHTML=`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:10px">${cells}</div>`}
+$('histList').innerHTML=`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:10px">${cells}</div>`;
+// 스크롤 위치 복원(자동 갱신 시 보던 위치 유지)
+document.querySelectorAll('#histList [data-wn]').forEach(el=>{const s=scroll[el.getAttribute('data-wn')];if(s)el.scrollTop=s})}
 async function submitCaptcha(id){const el=$('cap_'+id);const value=(el&&el.value||'').trim();if(!value){toast('CAPTCHA 값을 입력하세요','er');return}const r=await api('/manual-checks/'+id+'/submit','POST',{value});if(r&&r.ok){toast('입력 완료 · 자동 발행을 계속합니다');renderCaptchaTasks()}else toast((r&&r.error)||'전달 실패','er')}
 async function cancelCaptcha(id){const r=await api('/manual-checks/'+id+'/cancel','POST',{});if(r&&r.ok){toast('CAPTCHA 작업 취소됨');renderCaptchaTasks()}}
 async function renderCaptchaTasks(){const box=$('captchaTasks');if(!box)return;const r=await api('/manual-checks','GET');if(!r||!r.ok)return;const waiting=(r.tasks||[]).filter(t=>['waiting_input','input_received','submitting'].includes(t.status));if(!waiting.length){box.innerHTML='';return}box.innerHTML=waiting.map(t=>'<div class="card" style="border-color:#a16207;background:#171205"><h3 style="color:var(--y)">🧩 '+esc(t.site_name)+' · CAPTCHA 입력 후 자동 발행</h3><div class="row">'+(t.image_data?'<img src="'+t.image_data+'" alt="CAPTCHA" style="max-width:240px;max-height:90px;background:#fff;border-radius:4px;padding:4px">':'<span style="color:var(--y)">이미지 캡처 실패 — 사이트 화면에서 CAPTCHA를 확인하세요.</span>')+'<input id="cap_'+esc(t.id)+'" autocomplete="off" placeholder="보이는 문자를 직접 입력" style="width:220px" '+(t.status!=='waiting_input'?'disabled':'')+'><button class="btn btn-g" onclick="submitCaptcha(\''+esc(t.id)+'\')" '+(t.status!=='waiting_input'?'disabled':'')+'>입력 후 자동 발행</button><button class="btn btn-r btn-xs" onclick="cancelCaptcha(\''+esc(t.id)+'\')">취소</button></div><div style="color:var(--d);font-size:10px;margin-top:6px">'+esc(t.message||'')+' · 만료 '+esc(t.expires_at||'')+'</div></div>').join('')}
