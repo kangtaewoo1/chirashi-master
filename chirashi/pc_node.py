@@ -317,6 +317,19 @@ def cafe24_test(url, mb_id="", mb_pass=""):
     finally:
         try: app.reset_driver()
         except Exception: pass
+    # ★엔진 내부 진단로그 출력(대표님 'Cafe24 글쓰기 못찾음 더 파기'): app.py add_log는 로컬 logs.json에만
+    #   쌓여 콘솔에 안 보인다 → 방금 시도의 Cafe24 관련 진단([Cafe24글쓰기시도]·[Cafe24폼진단] 등)을 뽑아 출력.
+    try:
+        import json as _j
+        lg = _j.load(open(app.LOG_FILE, encoding="utf-8"))
+        rel = [l for l in lg if any(k in l.get("msg","") for k in
+               ["Cafe24", "글쓰기", "폼진단", "Turnstile", "로그인"])][-12:]
+        if rel:
+            log("──── 엔진 내부 진단(최근) ────")
+            for l in rel: log(f"  {l.get('time','')} {l.get('msg','')[:150]}")
+            log("────────────────────────────")
+    except Exception as e:
+        log(f"(진단로그 읽기 실패: {str(e)[:50]})")
 
 
 def cafe24_inspect(url):
