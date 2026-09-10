@@ -6365,7 +6365,10 @@ def auto_pipeline_once(limit=5):
             ok,msg=do_post(tmp,title,html,skip_login=_just_signed)
             # 검수는 비회원 글쓰기로 봤지만 실제 write.php가 로그인으로 튕기는 게시판이 있다.
             # 이 경우 자동가입 후 1회 재시도(gjsec처럼 login_required 오판된 케이스 구제).
-            if (not ok) and (not tmp.get('mb_id')) and re.search(r'(로그인이 필요|로그인 실패|로그인 화면|권한이 없|권한 없)',str(msg)):
+            # ★Cafe24는 '글쓰기 페이지 못찾음'도 대개 로그인 필요 → 자동가입 트리거에 포함(대표님 지시 2026-09-11).
+            _need_su=re.search(r'(로그인이 필요|로그인 실패|로그인 화면|권한이 없|권한 없)',str(msg)) or \
+                     (tmp.get('platform')=='cafe24' and ('글쓰기 페이지 못찾음' in str(msg) or '게시판번호' in str(msg)))
+            if (not ok) and (not tmp.get('mb_id')) and _need_su:
                 reset_driver(); time.sleep(1)
                 add_log(f'[파이프라인] {name} 로그인필요 → 자동가입 시도')
                 ok_su,msg_su=auto_signup_guarded(tmp,submit=True)
