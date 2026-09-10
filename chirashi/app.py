@@ -1835,21 +1835,39 @@ def solve_captcha_with_2captcha(d,site,cap_type,cfg,timeout=300):
         elif cap_type=='turnstile':
             try: src=d.page_source or ''
             except Exception: src=''
-            # sitekey: cf-turnstile data-sitekey 또는 0x로 시작하는 위젯키
+            try: page_url=d.current_url
+            except Exception: page_url=''
+            # sitekey: cf-turnstile data-sitekey 또는 0x로 시작하는 위젯키.
+            #  ★관리형 챌린지(veritas-hub 등)는 DOM에 data-sitekey가 없고 turnstile iframe src·JS에 숨어있다.
+            #   여러 경로로 추출 시도(2026-09-11 대표님 '2captcha 왜 안됨' 진단강화).
             sitekey=None
             mk=re.search(r'data-sitekey=["\']([A-Za-z0-9_\-]{15,})["\']',src)
             if mk: sitekey=mk.group(1)
+            if not sitekey:  # turnstile iframe src의 sitekey/k 파라미터
+                mk=re.search(r'challenges\.cloudflare\.com/[^"\']*?/([0x][A-Za-z0-9_]{18,})',src) or re.search(r'[?&](?:sitekey|k)=([A-Za-z0-9_\-]{18,})',src)
+                if mk: sitekey=mk.group(1)
+            if not sitekey:  # JS 내 turnstile.render('#el',{sitekey:'0x...'})
+                mk=re.search(r'sitekey["\']?\s*[:=]\s*["\']([A-Za-z0-9_\-]{18,})["\']',src)
+                if mk: sitekey=mk.group(1)
+            if not sitekey:  # DOM에서 직접(iframe src 조회)
+                try:
+                    for fr in d.find_elements(By.CSS_SELECTOR,"iframe[src*='challenges.cloudflare.com']"):
+                        _s=fr.get_attribute('src') or ''
+                        _m=re.search(r'/([0x][A-Za-z0-9_]{18,})',_s) or re.search(r'[?&](?:sitekey|k)=([A-Za-z0-9_\-]{18,})',_s)
+                        if _m: sitekey=_m.group(1); break
+                except Exception: pass
             if not sitekey:
                 mk=re.search(r'(0x[A-Za-z0-9_]{18,})',src)
                 if mk: sitekey=mk.group(1)
             if not sitekey:
+                add_log(f'[Turnstile진단] sitekey 못찾음 url={page_url[:60]} src길이={len(src)}')
                 return False,'turnstile sitekey를 찾을 수 없음','',{}
-            try: page_url=d.current_url
-            except Exception: page_url=''
+            add_log(f'[Turnstile진단] sitekey={sitekey[:24]} url={page_url[:50]} — 2captcha 요청')
             try:
                 result=solver.turnstile(sitekey=sitekey,url=page_url)
                 token=result.get('code') if isinstance(result,dict) else str(result)
             except Exception as e:
+                add_log(f'[Turnstile진단] 2captcha 해결실패: {str(e)[:100]}')
                 return False,f'turnstile 해결 실패: {str(e)[:80]}','',{}
             if not token:
                 return False,'turnstile 토큰 없음','',{}
