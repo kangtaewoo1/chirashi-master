@@ -3076,6 +3076,12 @@ def cafe24_post(site, title, content_html, skip_login=False):
         # 목록 경유 폴백용 — write.html 직접접근이 홈으로 리다이렉트되는 스킨(takago 등) 대비.
         list_urls=[base+f'/board/product/list.html?board_no={bo}',
                    base+f'/board/list.html?board_no={bo}']
+        # ★타카고 실측(2026-09-11 headful): write.html 직접접근은 404('다시 확인해주세요'). 진짜 글쓰기는
+        #   /article/{한글게시판명}/{bo}/ 또는 /board/{한글게시판명}/{bo}/ 목록에서 로그인 후 '글쓰기' 클릭.
+        #   게시판명(article_board_name)이 있으면 그 목록을 list_urls 맨 앞에 넣어 클릭경유 우선.
+        _abn=str(site.get('article_board_name') or '').strip()
+        if _abn:
+            list_urls=[base+f'/article/{_abn}/{bo}/', base+f'/board/{_abn}/{bo}/']+list_urls
     elif bo:
         write_urls=[base+f'/board/{bo}/write.html', base+f'/board/product/write.html?board_no=1',
                     base+f'/board/write.html?board_no=1', base+f'/board/write.html?board_no={bo}']
@@ -3130,23 +3136,27 @@ def cafe24_post(site, title, content_html, skip_login=False):
         try: return (d.current_url or '')
         except Exception: return ''
     def _scrape_article_path():
-        """로그인 세션 홈에서 /article/게시판명/board_no/ 링크를 찾아 그 글목록을 list_urls 최우선에
-           추가하고 article_board_name 저장(대표님 발견: 이 SEO-URL엔 로그인 시 글쓰기 버튼 있음).
-           page_source 대신 JS로 링크만 추출(가벼움). 반환: 찾은 게시판명 or None."""
+        """로그인 세션 홈에서 게시판 글목록 링크(/article/{명}/{bo}/ 또는 /board/{명}/{bo}/)를 찾아
+           list_urls 최우선에 추가하고 article_board_name 저장.
+           ★타카고 실측(2026-09-11): 메뉴의 '상품 Q&A → /board/상품-qa/6/'가 진짜 글목록(대표님 확인).
+           /article/·/board/ 둘 다 감지. page_source 대신 JS로 링크만 추출(가벼움). 반환: 게시판명 or None."""
         try:
             d.get(base+'/'); _settle_nav()
             _hrefs=d.execute_script(
-                "return Array.from(document.querySelectorAll(\"a[href*='/article/']\")).map(a=>a.getAttribute('href')).slice(0,300);"
+                "return Array.from(document.querySelectorAll(\"a[href*='/article/'],a[href*='/board/']\")).map(a=>a.getAttribute('href')).slice(0,400);"
             ) or []
         except Exception: _hrefs=[]
         for _h in _hrefs:
-            _am=re.search(r'/article/([^/"\']+)/'+re.escape(bo)+r'/', str(_h or ''))
-            if _am:
-                _an=_am.group(1); _aurl=base+f'/article/{_an}/{bo}/'
-                if _aurl not in list_urls: list_urls.insert(0,_aurl)
+            # /article/{명}/{bo}/  또는  /board/{명}/{bo}/  (명은 write/list/read/product 같은 예약어 제외)
+            _am=re.search(r'/(?:article|board)/([^/"\']+)/'+re.escape(bo)+r'/', str(_h or ''))
+            if _am and _am.group(1).lower() not in ('write','list','read','view','product','free'):
+                _an=_am.group(1)
+                # 타카고식: /board/{명}/{bo}/ 와 /article/{명}/{bo}/ 둘 다 후보로(어느쪽이든 글쓰기 버튼 노출).
+                for _u in (base+f'/board/{_an}/{bo}/', base+f'/article/{_an}/{bo}/'):
+                    if _u not in list_urls: list_urls.insert(0,_u)
                 try: set_site_flag(site.get('id'),article_board_name=_an); site['article_board_name']=_an
                 except Exception: pass
-                add_log(f"[Cafe24경로탐지] 홈에서 글목록 발견 — /article/{_an}/{bo}/")
+                add_log(f"[Cafe24경로탐지] 홈에서 글목록 발견 — /board/{_an}/{bo}/")
                 return _an
         return None
     try:
@@ -3173,6 +3183,15 @@ def cafe24_post(site, title, content_html, skip_login=False):
             _cl=_cur.lower()
             if _cur and _cur not in ('about:blank','data:,') and not any(k in _cl for k in ('/board/','write','/article/','board_no','bo_table')):
                 continue
+            # ★타카고 404 오류페이지 즉시 스킵(2026-09-11 실측): write.html 직접접근이 '다시 한번 확인해주세요'
+            #   (사라졌거나 다른 페이지) 오류를 띄운다. URL은 그대로라 위 리다이렉트 체크에 안 걸림 → 제목/본문으로 감지.
+            try:
+                _t=(d.title or ''); _ps=(d.page_source or '')[:3000]
+                if ('다시 한번 확인' in _ps or '사라졌거나 다른 페이지' in _ps or '페이지를 찾을 수 없' in _ps
+                        or '주소를 다시 확인' in _ps):
+                    add_log(f"[Cafe24글쓰기시도] {wu.split('/board/')[-1][:40]} → 404 오류페이지, 다음 후보로")
+                    continue
+            except Exception: pass
             # subject 입력칸이 나타날 때까지 폴링(폼은 JS로 그려짐 — 로딩 끊지 않음). 원격은 넉넉히.
             #   단 전체 시간상한(_entry_deadline)을 넘지 않게 캡.
             deadline=min(time.time()+(28 if _use_sbr else 18), _entry_deadline)
