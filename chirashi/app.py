@@ -6299,9 +6299,19 @@ def auto_pipeline_once(limit=5):
         try: _cand_set(c['id'], last_pipeline_at=time.time())
         except Exception: pass
         # 임시 site dict(발행 함수는 site 형태를 기대) — 후보 정보로 구성
-        m=re.match(r'(https?://[^/]+)',c.get('url','')); base=m.group(1) if m else c.get('url','')
+        _curl=c.get('url','')
+        m=re.match(r'(https?://[^/]+)',_curl); base=m.group(1) if m else _curl
         tmp={'id':'cand_'+c.get('id',''),'site_url':base,'platform':c.get('platform','gnuboard'),
              'bo_table':c.get('bo_table') or 'free','name':name,'mb_id':'','mb_pass':''}
+        # ★Cafe24: 처음 발굴한 URL(글목록 /article|/board/{명}/{no}/)을 진입점으로(대표님 지시 2026-09-11
+        #   '처음 발굴한 사이트로 접속→로그인→진짜 글쓰기 링크'). 이게 없으면 write.html 추측→404.
+        if c.get('platform')=='cafe24':
+            _am=re.search(r'/(?:article|board)/([^/]+)/(\d+)/', _curl)
+            if _am and _am.group(1).lower() not in ('write','list','read','view','product','free'):
+                tmp['article_board_name']=_am.group(1); tmp['bo_table']=_am.group(2)
+                tmp['write_entry_url']=base+f'/board/{_am.group(1)}/{_am.group(2)}/'
+            elif _curl:
+                tmp['write_entry_url']=_curl   # /article/ 아니어도 발굴 URL을 진입 후보로
         # ★대표님 지시: 이미 등록된 사이트에 저장된 계정(mb_id/mb_pass)이 있으면 그걸 써서 로그인 발행한다.
         #   (계정이 있는데 새로 자동가입하려다 '중복ID'로 실패하던 버그 — sungsim처럼 대표님이 준 계정)
         try:

@@ -167,9 +167,18 @@ def _process_one(cand, cfg, pool):
     name = cand.get("board_name") or cand.get("domain") or (cand.get("url", "") or "")[:30]
     # 발행 엔진이 기대하는 site dict를 후보로 구성(_proc와 동일)
     import re as _re
-    m = _re.match(r"(https?://[^/]+)", cand.get("url", "")); base = m.group(1) if m else cand.get("url", "")
+    _curl = cand.get("url", "")
+    m = _re.match(r"(https?://[^/]+)", _curl); base = m.group(1) if m else _curl
     tmp = {"id": "cand_" + str(cid), "site_url": base, "platform": cand.get("platform", "gnuboard"),
            "bo_table": cand.get("bo_table") or "free", "name": name, "mb_id": "", "mb_pass": ""}
+    # ★Cafe24: 처음 발굴한 글목록 URL을 진입점으로(대표님 지시 2026-09-11). write.html 추측→404 방지.
+    if cand.get("platform") == "cafe24":
+        _am = _re.search(r"/(?:article|board)/([^/]+)/(\d+)/", _curl)
+        if _am and _am.group(1).lower() not in ("write", "list", "read", "view", "product", "free"):
+            tmp["article_board_name"] = _am.group(1); tmp["bo_table"] = _am.group(2)
+            tmp["write_entry_url"] = base + f"/board/{_am.group(1)}/{_am.group(2)}/"
+        elif _curl:
+            tmp["write_entry_url"] = _curl
     res = {"cand_id": cid, "ok": False, "result_url": "", "mb_id": "", "mb_pass": "",
            "bo_table": tmp["bo_table"], "msg": "", "is_temp": False}
     try:
