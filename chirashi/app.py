@@ -2006,6 +2006,37 @@ def build_backup_zip():
         z.writestr('config.json',json.dumps(c,ensure_ascii=False,indent=2))
     buf.seek(0); return buf.read()
 
+def cleanup_disk():
+    """★디스크 풀(Errno 28) 방지(대표님 서버 2026-09-11): 누적된 크롬 임시프로파일·백업·오래된 파일 정리.
+       크롬 user-data-dir(chr_*), app.py.safebak-*, .tmp, 오래된 스크린샷/코어덤프를 삭제한다."""
+    import tempfile, glob, shutil
+    removed=0
+    try:
+        # 1) 크롬 임시 프로파일 폴더(chr_*) — selenium이 남긴 것 포함. 크게 쌓임.
+        tmp=tempfile.gettempdir()
+        for p in glob.glob(os.path.join(tmp,'chr_*'))+glob.glob(os.path.join(tmp,'.com.google.Chrome.*'))+glob.glob(os.path.join(tmp,'.org.chromium.*'))+glob.glob(os.path.join(tmp,'scoped_dir*')):
+            try: shutil.rmtree(p,ignore_errors=True); removed+=1
+            except Exception: pass
+    except Exception: pass
+    try:
+        # 2) app.py 백업 — 최신 5개만 남김.
+        baks=sorted(glob.glob(os.path.join(str(BASE_DIR),'app.py.safebak-*'))+glob.glob(os.path.join(str(BASE_DIR),'app.py.bak*')),reverse=True)
+        for p in baks[5:]:
+            try: os.remove(p); removed+=1
+            except Exception: pass
+    except Exception: pass
+    try:
+        # 3) data/의 옛 .bak·.tmp 정리.
+        for p in glob.glob(os.path.join(str(BASE_DIR),'data','*.bak'))+glob.glob(os.path.join(str(BASE_DIR),'data','.*.tmp')):
+            try:
+                if os.path.getmtime(p) < time.time()-86400: os.remove(p); removed+=1
+            except Exception: pass
+    except Exception: pass
+    if removed:
+        try: add_log(f'[디스크정리] 임시·백업 {removed}개 삭제','정리')
+        except Exception: pass
+    return removed
+
 def do_backup(cfg=None, reason='자동'):
     cfg=cfg or load_config()
     try:
@@ -6686,8 +6717,14 @@ def publish_loop():
        유지해 작업실들을 나눠 맡아 '진짜 동시' 발행한다. 죽은 슬롯은 재스폰, 작업실이 늘면 슬롯 증설.
        발행 실제 로직은 workroom_worker/_publish_one_combo가 담당(post_queue 미사용).
        ※ 동시 크롬 수가 많아 VPS가 버거우면 workroom_workers를 낮추거나 VPS 업그레이드."""
+    _last_clean=[0]
     while True:
         try:
+            # ★주기적 디스크 정리(Errno 28 방지): 30분마다 크롬 임시프로파일·백업 삭제.
+            if time.time()-_last_clean[0] > 1800:
+                _last_clean[0]=time.time()
+                try: cleanup_disk()
+                except Exception: pass
             cfg=load_config()
             if cfg.get('publish_loop_enabled'):
                 rooms=[r for r in (load_json(WORKROOMS_FILE,[]) or []) if _workroom_combos(r)]
@@ -10327,6 +10364,11 @@ def main():
                 if not wk_active: start_workers(cfg.get('workers',2))
             except Exception as e: print('워커 자동시작 실패:',e)
     except Exception as e: print('복구 건너뜀:',e)
+    # ★시작 시 디스크 정리(Errno 28 방지) — 크롬 임시프로파일·백업 누적 삭제.
+    try:
+        _rm=cleanup_disk()
+        if _rm: print(f'🧹 디스크 정리 {_rm}개 (임시·백업)')
+    except Exception as e: print('디스크정리 건너뜀:',e)
     # 시작 시 사이트 목록 최신화: 발행 막힌 사이트 자동 탈락
     try:
         dn=reconcile_sites()
