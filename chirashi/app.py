@@ -3416,6 +3416,32 @@ def cafe24_post(site, title, content_html, skip_login=False):
         return True,'등록됨'
     if any(k in blob for k in ['승인 대기','승인대기','관리자 확인']):
         return True,'등록됨(승인 대기)'
+    # ★목록 재조회로 등록 확정(대표님 실측 2026-09-11): takago는 제출 후 URL이 write에 머물고(AJAX 등록)
+    #   페이지 이동이 없어 위 판정들이 다 실패했지만, 글은 실제로 등록됨(106072 확인). → 글목록을 다시 열어
+    #   방금 쓴 제목이 목록에 있으면 성공으로 확정하고 그 글의 /article/ URL을 결과로 반환.
+    if 'write' in (curl.split('?')[0].split('/')[-1] or ''):   # 아직 write 페이지에 머물면
+        try:
+            _abn=str(site.get('article_board_name') or '').strip()
+            _list=(base+f'/board/{_abn}/{bo}/') if (_abn and bo) else (base+f'/board/list.html?board_no={bo}' if bo else '')
+            if _list:
+                d.get(_list); time.sleep(2); dismiss_alerts(d)
+                # 제목 핵심 조각(앞 12자)이 목록에 보이면 등록된 것. 글의 /article/ 상세링크도 함께 회수.
+                _needle=(title or '')[:12].strip()
+                _hit=d.execute_script("""
+                    var needle=arguments[0];
+                    var as=Array.from(document.querySelectorAll("a[href*='/article/']"));
+                    for(var i=0;i<as.length;i++){ if((as[i].textContent||'').indexOf(needle)>=0){ return as[i].href; } }
+                    // 텍스트 매칭 실패 시, 목록 최상단 글 링크라도 반환(방금 쓴 글이 맨 위)
+                    return as.length? as[0].href : (document.body.innerText.indexOf(needle)>=0?'FOUND':'');
+                """, _needle) if _needle else ''
+                if _hit and _hit.startswith('http'):
+                    add_log(f'[Cafe24등록] 성공(목록확인) → {_hit[:60]}')
+                    return True,_hit
+                if _hit=='FOUND':
+                    add_log('[Cafe24등록] 성공(목록에 제목 확인)')
+                    return True,_list
+        except Exception as _e:
+            add_log(f'[Cafe24등록] 목록재조회 실패 {str(_e)[:50]}')
     # 실패 원인 로그(제출 후 어디에 있는지·알림)
     add_log(f'[Cafe24등록] 확인불가 — url={curl[:40]} 알림={_al[:40]}')
     if any(k in blob for k in ['자동등록방지','보안문자','캡차','captcha','일치하지']):
