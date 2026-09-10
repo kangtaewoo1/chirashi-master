@@ -7080,7 +7080,7 @@ def chk():
     #  /api/test/* = 발행 테스트 트리거(등록 사이트에 실제 글1건 발행해 검증).
     _p=request.path
     if _p=='/api/version': return  # 배포 SHA 확인 — 공개(민감정보 없음)
-    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/candidates','/api/candidates/ingest','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/report-site','/api/unlocker/test','/api/sbr/test') or _p.startswith('/api/test/'):
+    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/candidates','/api/candidates/ingest','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/report-site','/api/unlocker/test','/api/sbr/test') or _p.startswith('/api/test/'):
         tok=(request.args.get('token') or '').strip()
         cfgtok=(load_config().get('log_token') or '').strip()
         if cfgtok and tok==cfgtok:
@@ -8187,6 +8187,30 @@ def api_sites_limits():
         if found: save_sites(sites)
     if not found: return jsonify({'ok':False,'error':'사이트 없음'}),404
     return jsonify({'ok':True,'daily_limit':daily,'min_interval_minutes':interval})
+
+@app.route('/api/sites/creds',methods=['POST'])
+def api_sites_creds():
+    """사이트 로그인 계정(mb_id/mb_pass)만 변경. 토큰 인증(로그인 세션 없이 관리 가능).
+       ★비번은 응답·로그에 표기하지 않는다. 계정 변경 시 이전 실패 검증상태를 초기화해 재발행 시도되게 한다."""
+    d=request.get_json(silent=True) or {}; sid=str(d.get('id','')).strip()
+    mb_id=str(d.get('mb_id','') or '').strip(); mb_pass=str(d.get('mb_pass','') or '')
+    if not sid: return jsonify({'ok':False,'error':'id 필요'}),400
+    found=False
+    with POST_LOCK:
+        sites=load_sites()
+        for s in sites:
+            if s.get('id')==sid:
+                if mb_id: s['mb_id']=mb_id
+                if mb_pass: s['mb_pass']=mb_pass
+                # 계정 바뀌었으니 이전 로그인실패로 굳은 상태 초기화 → 새 계정으로 재발행 시도.
+                s['write_test_status']=''; s['verified_post_url']=''
+                s['pc_claim_by']=''; s['pc_claim_expire']=0; s['pc_last_try']=0
+                s['creds_updated_at']=_kst_now().strftime('%Y-%m-%d %H:%M')
+                found=True; break
+        if found: save_sites(sites)
+    if not found: return jsonify({'ok':False,'error':'사이트 없음'}),404
+    add_log(f'[계정변경] {sid[:8]} — 로그인 계정 갱신(mb_id={mb_id}) · 재발행 대상 초기화')  # 비번은 로그 미표기
+    return jsonify({'ok':True,'mb_id':mb_id})
 
 def _signup_credentials(site, rules=None):
     """사이트별 제약을 반영한 충돌 가능성이 낮은 가입정보를 생성한다.
