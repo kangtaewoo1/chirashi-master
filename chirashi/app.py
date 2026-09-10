@@ -3390,12 +3390,23 @@ def cafe24_post(site, title, content_html, skip_login=False):
                 if(f){ if(typeof f.requestSubmit==='function')f.requestSubmit(); else f.submit(); }
             """)
         except Exception: pass
-    time.sleep(3); dismiss_alerts(d)
-    curl=d.current_url or ''
+    # ★제출 후 리다이렉트 대기(대표님 실측 2026-09-11): 실제로는 /article/{명}/{bo}/{글번호}/로 이동해
+    #   등록되는데(글 106072 확인), sleep(3)이 짧아 아직 write 페이지일 때 확인해 '확인불가' 오탐 났다.
+    #   write.html을 벗어나 글목록/상세(article·read·view)로 갈 때까지 최대 15초 폴링.
+    dismiss_alerts(d)
+    curl=''
+    for _ in range(30):
+        try: curl=d.current_url or ''
+        except Exception: curl=''
+        _cl=curl.lower()
+        if curl and 'write' not in _cl and any(k in _cl for k in ['/article/','read.html','view.html','list.html','board_no']):
+            break
+        time.sleep(0.5)
+    dismiss_alerts(d)
     # 알림 문구도 수집(제출 막혔을 때 원인)
     _al=' '.join(getattr(d,'_last_alerts',[]) or [])
-    if any(k in curl for k in ['read.html','list.html','article','board_no','view.html']) and 'write.html' not in curl:
-        add_log(f'[Cafe24등록] 성공 → {curl[:50]}')
+    if any(k in curl for k in ['read.html','list.html','article','board_no','view.html']) and 'write.html' not in curl and 'write' not in curl.split('?')[0].split('/')[-1]:
+        add_log(f'[Cafe24등록] 성공 → {curl[:60]}')
         return True,(curl or '등록 완료')
     try: body=d.find_element(By.TAG_NAME,'body').text[:1500]
     except Exception: body=''
