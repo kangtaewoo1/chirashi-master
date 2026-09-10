@@ -171,9 +171,9 @@ def ddg_search(query, _retry=0):
             return []
         return _ddg_parse(r.text)
     except Exception as e:
-        # 연결 실패(ConnectionError/Max retries) = IP 차단 → 이번 실행 DDG 포기, Naver로.
+        # 연결 실패(ConnectionError/Max retries) = IP 차단 → 이번 실행 DDG 포기(네이버 폴백 없음).
         _ddg_blocked[0] = True
-        log(f"  DDG 연결차단 → 이번 실행은 Naver로 전환 ({str(e)[:50]})")
+        log(f"  DDG 연결차단 → 이번 실행 발굴 건너뜀 ({str(e)[:50]})")
         return []
 
 
@@ -200,18 +200,17 @@ def naver_search(query):
         log(f"  Naver 예외: {str(e)[:60]}"); return []
 
 
-# ★검색엔진 자동분산(대표님 지시): DDG가 IP차단(Max retries)돼도 Naver로 발굴 지속.
-#  ddg 모드면 [ddg → 실패 시 naver] 순으로 시도. 결과 있으면 즉시 반환.
+# ★구글만 발굴(대표님 지시 2026-09-11 '네이버까지 하는데 구글로만 타율↑'):
+#  네이버 폴백 제거 — 네이버 전용 게시판은 구글에 안 잡혀 발행해도 타율이 낮다.
+#  무료 경로는 DDG만 사용(DDG 결과는 구글 색인과 잘 일치). google/brave는 명시 모드 그대로.
+#  naver_search 함수는 보존(수동/추후용)하되 자동 발굴에선 호출하지 않는다.
 def do_search(query, prov="ddg"):
     if prov == "google" and GOOGLE_KEY:
         return google_search(query)
     if prov == "brave" and BRAVE_KEY:
         return brave_search(query)
-    # 무료 분산: DDG 먼저, 비거나 실패하면 Naver 폴백
-    res = ddg_search(query)
-    if res:
-        return res
-    return naver_search(query)
+    # 무료 발굴: DDG만(네이버 폴백 없음). DDG가 IP차단이면 이번 실행은 빈 결과.
+    return ddg_search(query)
 
 
 def domain_of(url):
