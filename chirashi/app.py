@@ -7154,7 +7154,7 @@ def chk():
     #  /api/test/* = 발행 테스트 트리거(등록 사이트에 실제 글1건 발행해 검증).
     _p=request.path
     if _p=='/api/version': return  # 배포 SHA 확인 — 공개(민감정보 없음)
-    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/candidates','/api/candidates/ingest','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/report-site','/api/unlocker/test','/api/sbr/test') or _p.startswith('/api/test/'):
+    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/report-site','/api/unlocker/test','/api/sbr/test') or _p.startswith('/api/test/'):
         tok=(request.args.get('token') or '').strip()
         cfgtok=(load_config().get('log_token') or '').strip()
         if cfgtok and tok==cfgtok:
@@ -7410,6 +7410,38 @@ def api_cand_ingest():
     threading.Thread(target=_screen_then_pipeline,daemon=True).start()
     add_log(f'[PC발굴 연동] URL {len(urls)}개 수신(신규 {n}개) — 자동 검수·발행테스트 진행')
     return jsonify({'ok':True,'received':len(urls),'added':n,'screening':True,'auto_test':True})
+
+@app.route('/api/candidates/revive-cafe24',methods=['POST'])
+def api_revive_cafe24():
+    """★쌓인 Cafe24 재시도(대표님 지시 2026-09-11): SBR 계정정지·경로문제로 rejected된 Cafe24 후보를
+       ready로 되살려 PC/노트북 노드가 로컬크롬으로 재시도하게 한다. 이제 로컬크롬 발행이 되므로.
+       ★선별: '재시도하면 될 만한' 사유만 복원. 오류안내·인증벽·불법·주차는 제외(되살려도 안 됨 → 크롬 낭비).
+       body: {limit?} — 한 번에 되살릴 최대 수(기본 전체). 반환: 되살린 수."""
+    d=request.get_json(silent=True) or {}
+    limit=int(d.get('limit',0) or 0)   # 0=전체
+    # 되살릴 사유(로컬크롬으로 재시도 가치 있음)
+    _revive_hit=['wrong customer','sbr','scraping browser','원격','글쓰기 페이지 못찾음','글쓰기 못찾음',
+                 'turnstile','캡차','타임아웃','일시적','확인 불가','확인불가','등록 확인']
+    # 되살리면 안 되는 사유(재시도 무의미)
+    _skip_hit=['오류안내','본인인증','실명인증','휴대폰','sms','문자인증','아이핀','성인인증','19금','인증필요',
+               '포인트','읽기 제한','권한']
+    revived=0
+    with _cand_lock:
+        cands=load_cands()
+        for c in cands:
+            if limit and revived>=limit: break
+            if c.get('platform')!='cafe24' or c.get('status')!='rejected': continue
+            if c.get('illegal') or c.get('parked') or c.get('ad_banned'): continue
+            rr=str(c.get('reject_reason') or '').lower()
+            if any(k in rr for k in _skip_hit): continue          # 안 될 사유 제외
+            if rr and not any(k in rr for k in _revive_hit): continue  # 되살릴 사유만(빈 사유는 스킵)
+            c['status']='ready'; c['reject_reason']=''
+            c['pipeline_attempts']=0; c['signup_retry']=0
+            c['claimed_by']=''; c['claim_expire']=0; c['last_pipeline_at']=0
+            revived+=1
+        if revived: save_cands(cands)
+    add_log(f'[Cafe24 재시도] rejected {revived}곳 ready 복원 — 노드가 로컬크롬으로 재발행 시도','파이프라인')
+    return jsonify({'ok':True,'revived':revived})
 
 @app.route('/api/pipeline/claim',methods=['POST'])
 def api_pipeline_claim():
