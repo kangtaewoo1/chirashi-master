@@ -279,10 +279,11 @@ def cafe24_test(url, mb_id="", mb_pass=""):
     if cfg.get("sbr_enabled"):
         log("⚠ 로컬 config에 sbr_enabled=True — 로컬크롬 테스트 위해 이번 실행만 강제 OFF")
         cfg["sbr_enabled"] = False
-    # bo_table 추출. /article/{게시판명}/{board_no}/... SEO-URL 또는 ?board_no=·bo_table= 지원.
+    # bo_table 추출. /article/{명}/{no}/ 또는 /board/{명}/{no}/ SEO-URL, ?board_no=·bo_table= 지원.
+    #  ★2026-09-11 버그수정: /board/상품-qa/6/ 이 매칭 안 돼 board_no=1로 잘못 파싱됐음(대표님 실측).
     bo = ""; art_name = ""
-    am = _re.search(r"/article/([^/]+)/(\d+)/", url)
-    if am:
+    am = _re.search(r"/(?:article|board)/([^/]+)/(\d+)/", url)
+    if am and am.group(1).lower() not in ("write", "list", "read", "view", "product", "free"):
         art_name = am.group(1); bo = am.group(2)
     else:
         bm = _re.search(r"[?&]board_no=(\d+)", url) or _re.search(r"bo_table=([A-Za-z0-9_]+)", url)
@@ -290,7 +291,8 @@ def cafe24_test(url, mb_id="", mb_pass=""):
     site = {"id": "cafe24test", "site_url": base, "platform": "cafe24",
             "bo_table": bo or "1", "name": base, "mb_id": mb_id, "mb_pass": mb_pass}
     # ★대표님이 지정한 '진짜 글쓰기 진입 링크'를 최우선 진입점으로(엔진 write_entry_url/article_board_name 재사용).
-    if url != base and "/article/" in url:
+    #   /article/ 뿐 아니라 /board/{명}/{no}/ 도 진입링크로(대표님 지정 URL이 /board/상품-qa/6/).
+    if url != base and ("/article/" in url or ("/board/" in url and art_name)):
         site["write_entry_url"] = url
         if art_name: site["article_board_name"] = art_name
     _login = bool(mb_id)
