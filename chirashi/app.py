@@ -4244,6 +4244,24 @@ def _global_chrome_sem():
 BULK_LOCK=threading.Lock()
 BULK_TASKS={}
 
+# ---- PC/노트북 노드 하트비트(대표님 지시 2026-09-11: 관제실에 기기별 실시간 현황판) ----
+#  노드가 claim/report/발굴ingest 호출할 때마다 마지막 활동시각·누적건수를 남긴다.
+#  worker-log가 이 값을 내려주면 UI가 'PC / 노트북' 각각 카드로 표시(🟢활성/🔴끊김).
+NODE_BEATS={}                     # node_id -> {'last':ts,'action':str,'publish':n,'signup':n,'discover':n,'seen':ts0}
+_NODE_LOCK=threading.Lock()
+def _node_beat(node_id, action='', publish=0, signup=0, discover=0):
+    """노드 활동 1건 기록. action은 최근 동작 요약(한글), 나머지는 누적 카운트 증분."""
+    nid=str(node_id or '').strip() or 'pc'
+    now=time.time()
+    with _NODE_LOCK:
+        b=NODE_BEATS.get(nid)
+        if not b:
+            b={'node_id':nid,'seen':now,'last':now,'action':'','publish':0,'signup':0,'discover':0}
+            NODE_BEATS[nid]=b
+        b['last']=now
+        if action: b['action']=str(action)[:80]
+        b['publish']+=int(publish or 0); b['signup']+=int(signup or 0); b['discover']+=int(discover or 0)
+
 # ---- 일시적 실패 자동 재시도(지연 재큐) ----
 RETRY_DELAY=300      # 5분 뒤 재시도
 RETRY_MAX=2          # 지연 재시도 최대 횟수
@@ -7455,13 +7473,16 @@ def api_cand_ingest():
        (수동탭 addManual과 달리 토큰 접근 가능 — 로그인 없이 PC가 POST. source='manual'로
         auto_pipeline 최우선 처리.) body: {urls:[...] 또는 "줄바꿈 문자열", note?} """
     d=request.get_json(silent=True) or {}; cfg=load_config()
+    node_id=str(d.get('node_id') or '').strip()   # 발굴 노드(선택) — 관제실 기기별 현황용
     raw=d.get('urls','')
     if isinstance(raw,list):
         urls=[str(x).strip() for x in raw if str(x).strip().startswith('http')]
     else:
         urls=[x.strip() for x in str(raw or '').splitlines() if x.strip().startswith('http')]
     urls=list(dict.fromkeys(urls))[:100]   # 중복 제거·1회 100개 상한(부하·탐지 회피)
-    if not urls: return jsonify({'ok':False,'error':'http로 시작하는 URL이 없습니다'})
+    if not urls:
+        if node_id: _node_beat(node_id, action='발굴 중(신규 URL 없음)')
+        return jsonify({'ok':False,'error':'http로 시작하는 URL이 없습니다'})
     # ★PC 발굴은 source='pc'(자동 발굴). 진짜 수동추가(manual)와 구분 — 빡센검수 예외는 manual만
     #   적용해야 함(PC발굴을 manual로 태깅했더니 빡센검수를 전부 우회해 대기가 안 줄던 버그, 2026-09-09).
     n=add_candidates_from([{'url':u} for u in urls],cfg,source='pc')
@@ -7474,6 +7495,7 @@ def api_cand_ingest():
         except Exception as e: add_log(f'[PC발굴 파이프라인오류] {str(e)[:80]}')
     threading.Thread(target=_screen_then_pipeline,daemon=True).start()
     add_log(f'[PC발굴 연동] URL {len(urls)}개 수신(신규 {n}개) — 자동 검수·발행테스트 진행')
+    if node_id: _node_beat(node_id, action=f'발굴 {len(urls)}개 수신(신규 {n})', discover=n)
     return jsonify({'ok':True,'received':len(urls),'added':n,'screening':True,'auto_test':True})
 
 @app.route('/api/candidates/revive-cafe24',methods=['POST'])
@@ -7550,6 +7572,7 @@ def api_pipeline_claim():
                 'write_form':bool(c.get('write_form')),'captcha':bool(c.get('captcha'))})
         if picked: save_cands(cands)
     if picked: add_log(f'[PC노드] {node_id} 후보 {len(picked)}곳 claim(가입·발행 위임)','파이프라인')
+    _node_beat(node_id, action=(f'후보 {len(picked)}곳 발행 시작' if picked else '대기(후보 없음)'))
     return jsonify({'ok':True,'candidates':picked,'ttl':ttl})
 
 @app.route('/api/pipeline/report',methods=['POST'])
@@ -7601,6 +7624,7 @@ def api_pipeline_report():
             applied+=1
         except Exception as e:
             add_log(f'[PC노드 회신오류] {name} {str(e)[:60]}')
+    _node_beat(node_id, action=(f'발행 {registered}곳 등록' if registered else f'회신 {applied}건'), publish=registered)
     return jsonify({'ok':True,'applied':applied,'registered':registered})
 
 @app.route('/api/pipeline/claim-sites',methods=['POST'])
@@ -7634,6 +7658,7 @@ def api_pipeline_claim_sites():
                 'write_entry_url':s.get('write_entry_url',''),'article_board_name':s.get('article_board_name','')})
         if picked: save_sites(sites)
     if picked: add_log(f'[PC노드] {node_id} 등록Cafe24 {len(picked)}곳 위임(로컬크롬 로그인발행)','파이프라인')
+    if picked: _node_beat(node_id, action=f'Cafe24 {len(picked)}곳 발행 시작')
     return jsonify({'ok':True,'sites':picked,'ttl':ttl})
 
 @app.route('/api/pipeline/report-site',methods=['POST'])
@@ -7661,6 +7686,7 @@ def api_pipeline_report_site():
             applied+=1
         except Exception as e:
             add_log(f'[PC노드 사이트회신오류] {str(e)[:60]}')
+    _node_beat(node_id, action=(f'Cafe24 {passed}곳 발행성공' if passed else f'Cafe24 회신 {applied}건'), publish=passed)
     return jsonify({'ok':True,'applied':applied,'passed':passed})
 
 @app.route('/api/discovery/queries',methods=['GET'])
@@ -7699,7 +7725,9 @@ def api_rejected_domains():
     raw=load_json(REJECTED_DOMAINS_FILE,{})
     if isinstance(raw,list): raw={'domains':raw,'log':[]}
     doms=sorted(x.lower() for x in (raw.get('domains') or []))
-    log=list(reversed(raw.get('log') or []))[:300]   # 최근 사유 300건
+    try: logn=max(1,min(2000,int(request.args.get('logn',300))))
+    except Exception: logn=300
+    log=list(reversed(raw.get('log') or []))[:logn]   # 최근 사유(기본 300, ?logn=2000까지)
     return jsonify({'ok':True,'count':len(doms),'domains':doms[:2000],'log':log})
 
 @app.route('/api/candidates/screen',methods=['POST'])
@@ -8262,9 +8290,13 @@ def api_worker_log():
     activity=list(reversed(load_json(LOG_FILE,[])))[:300]
     for a in activity:
         if 'cat' not in a: a['cat']=_log_category(a.get('msg',''))
+    # PC/노트북 노드 현황(관제실 기기별 카드). last 오래되면 UI가 '끊김'으로 표시.
+    with _NODE_LOCK:
+        nodes=sorted(NODE_BEATS.values(),key=lambda b:b.get('last',0),reverse=True)
+        nodes=[dict(b) for b in nodes]
     return jsonify({'ok':True,'tasks':tasks[:100],'history':history[:500],
                     'publishable_count':len(publishable),'assisted_count':len(assisted),'captcha_sites':captcha,
-                    'activity':activity,
+                    'activity':activity,'nodes':nodes,'now':time.time(),
                     'workers':{**wk_stats,'active':wk_active,'paused':wk_paused}})
 
 @app.route('/api/manual-checks',methods=['GET'])
@@ -9520,6 +9552,8 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
     <div style="background:#0d2a17;color:var(--g);padding:8px 12px;font-weight:700;font-size:13px">🖥️ 워커 세계 <span style="color:var(--d);font-weight:400">· 실제 글 올리는 발행</span> <span id="cnt발행" style="float:right;color:var(--d)"></span></div>
     <div style="max-height:280px;overflow-y:auto" id="col발행"></div>
   </div>
+  <!-- ★기기별 실시간 현황(대표님 지시 2026-09-11): PC/노트북 각각 마지막활동·발행·상태 카드 -->
+  <div id="nodeStrip" style="display:grid;grid-template-columns:1fr 1fr;gap:8px"></div>
   <!-- 러너 세계(아래, PC발굴 포함) — 4구획을 좌우로 나눠 한눈에 -->
   <div style="border:1px solid #4c1d95;border-radius:8px;overflow:hidden">
     <div style="background:#1a0f2e;color:var(--v);padding:8px 12px;font-weight:700;font-size:13px">🏃 러너 세계 <span style="color:var(--d);font-weight:400">· 발굴(PC 연동)·검수·가입·정리</span></div>
@@ -9789,7 +9823,7 @@ async function renderCaptchaTasks(){const box=$('captchaTasks');if(!box)return;c
 async function renderWorkerLog(){const roomSel=$('wlogRoom');if(!roomSel.dataset.loaded){const rooms=await api('/workrooms','GET');if(Array.isArray(rooms)){roomSel.innerHTML='<option value="">전체 작업실</option>'+rooms.map(r=>'<option value="'+esc(r.id)+'">'+esc(r.name)+'</option>').join('');roomSel.dataset.loaded='1'}}const rid=roomSel.value;const r=await api('/worker-log'+(rid?'?workroom_id='+encodeURIComponent(rid):''),'GET');if(!r||!r.ok)return;const w=r.workers||{};$('wlogWorker').textContent='워커 '+(w.active?(w.paused?'일시정지':'실행 중'):'정지')+' · 큐 '+(w.queued||0)+' · 성공 '+(w.success||0)+' · 실패 '+(w.fail||0)+' · 스킵 '+(w.skipped||0);$('wlogBlock').innerHTML=r.publishable_count?'<div class="note" style="border-color:#166534;color:var(--g)">발행 가능 검증 사이트 '+r.publishable_count+'곳</div>':'<div class="note" style="border-color:#991b1b;color:var(--r)">⛔ 현재 발행 가능 사이트 0곳'+((r.captcha_sites||[]).length?' · CAPTCHA 감지: '+esc(r.captcha_sites.join(', ')):'')+' — CAPTCHA를 우회하지 않으며 사람이 처리하고 실게시 재검증하기 전까지 자동 발행하지 않습니다.</div>';const sm={preparing:'준비',running:'글 생성 중',done:'준비 완료',failed:'준비 실패'};$('wlogTasks').innerHTML=(r.tasks||[]).length?'<table><thead><tr><th>작업실</th><th>시작</th><th>준비 진행</th><th>큐 등록</th><th>대기 필요</th><th>상태</th></tr></thead><tbody>'+r.tasks.map(t=>'<tr><td><b>'+esc(t.workroom_name||'직접 입력')+'</b></td><td>'+esc(t.created_at||'')+'</td><td>'+esc(t.done||0)+'/'+esc(t.total||0)+'</td><td>'+esc(t.queued||0)+'</td><td>'+esc(t.remaining||0)+'</td><td><span class="st st-'+(t.status==='done'?'ok':t.status==='failed'?'f':'y')+'">'+esc(sm[t.status]||t.status||'')+'</span> '+esc(t.error||'')+'</td></tr>').join('')+'</tbody></table>':'<p style="color:var(--d);padding:12px">선택한 작업실의 준비 작업이 없습니다.</p>';
 // ★작업실별 발행이력 표(wlogList) 제거(대표님 지시 2026-09-09): '결과' 탭과 중복 → 관제실만 유지.
 //   전체 발행이력·제목링크·발행링크는 '결과' 탭(renderHistory)에서 확인.
-window._actLog=r.activity||[];renderActivity()}
+window._actLog=r.activity||[];window._nodes=r.nodes||[];window._nodeNow=r.now||0;renderActivity();renderNodeStrip()}
 function linkifyLog(msg){
   // esc로 XSS 방지 후, 텍스트 내 http(s) URL을 클릭 가능한 링크로 변환
   var e=esc(msg||'');
@@ -9809,9 +9843,31 @@ function renderActivity(){
   const time=x=>esc((x.time||'').slice(-8));   // HH:MM:SS
   function fill(cat){const el=$('col'+cat);if(!el)return;const arr=buckets[cat]||[];
     const cn=$('cnt'+cat);if(cn)cn.textContent=arr.length?arr.length+'건':'';
-    el.innerHTML=arr.length?arr.map(x=>'<div style="padding:5px 11px;border-bottom:1px solid #1c2740;font-size:12.5px;line-height:1.55"><span style="color:var(--d)">'+time(x)+'</span> '+linkifyLog(x.msg||'')+'</div>').join(''):'<div style="padding:16px;text-align:center;color:var(--d);font-size:12px">대기 중…</div>';}
+    el.innerHTML=arr.length?arr.map(x=>'<div title="'+esc(x.msg||'')+'" style="padding:4px 11px;border-bottom:1px solid #1c2740;font-size:12.5px;line-height:1.5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><span style="color:var(--d)">'+time(x)+'</span> '+linkifyLog(x.msg||'')+'</div>').join(''):'<div style="padding:16px;text-align:center;color:var(--d);font-size:12px">대기 중…</div>';}
   ['발행','발굴','검수','가입','정리'].forEach(fill);
   const cc=$('actCounts');if(cc)cc.textContent='발행 '+buckets['발행'].length+' · 발굴 '+buckets['발굴'].length+' · 검수 '+buckets['검수'].length+' · 가입 '+buckets['가입'].length+' · 정리 '+buckets['정리'].length;
+}
+// ★기기별 실시간 현황판(대표님 지시 2026-09-11): PC/노트북 각각 마지막활동·발행·상태 카드.
+function _nodeLabel(id){id=(id||'').toLowerCase();
+  if(id.indexOf('kang')>=0)return '🖥️ 내 PC';
+  if(id.indexOf('desktop')>=0||id.indexOf('note')>=0||id.indexOf('laptop')>=0)return '💻 노트북';
+  return '🖥️ '+id;}
+function _ago(sec){sec=Math.max(0,Math.round(sec));
+  if(sec<60)return sec+'초 전';
+  if(sec<3600)return Math.floor(sec/60)+'분 '+(sec%60)+'초 전';
+  return Math.floor(sec/3600)+'시간 전';}
+function renderNodeStrip(){const box=$('nodeStrip');if(!box)return;
+  const nodes=window._nodes||[];const now=window._nodeNow||(Date.now()/1000);
+  if(!nodes.length){box.innerHTML='<div style="grid-column:1/3;padding:10px;text-align:center;color:var(--d);font-size:12px;border:1px dashed #33425f;border-radius:8px">아직 연결된 발행노드가 없습니다 — PC/노트북에서 pc_node.py 실행 시 여기에 표시됩니다</div>';return}
+  box.innerHTML=nodes.map(n=>{
+    const age=now-(n.last||0);const live=age<90;
+    const dot=live?'<span style="color:var(--g)">🟢 활성</span>':'<span style="color:var(--r)">🔴 끊김('+_ago(age)+')</span>';
+    const brd=live?'#166534':'#7f1d1d';const bg=live?'#0d2a17':'#2a0d0d';
+    return '<div style="border:1px solid '+brd+';border-radius:8px;background:'+bg+';padding:8px 11px">'
+      +'<div style="display:flex;justify-content:space-between;align-items:center"><b style="font-size:13px">'+esc(_nodeLabel(n.node_id))+'</b><span style="font-size:11px">'+dot+'</span></div>'
+      +'<div style="font-size:11.5px;color:var(--t);margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="'+esc(n.action||'')+'">'+esc(n.action||'대기 중')+'</div>'
+      +'<div style="font-size:10.5px;color:var(--d);margin-top:4px">마지막 '+_ago(age)+' · 발행 '+(n.publish||0)+'건 · 발굴 '+(n.discover||0)+'건</div>'
+      +'</div>';}).join('');
 }
 let _editId=null;
 async function runDiag(){$('diagOut').innerHTML='<p style="color:var(--d);padding:14px">🩺 진단 중... 크롬을 실제로 띄워보는 중이라 최대 60초 걸립니다.</p>';const r=await api('/diag','GET');if(!r){$('diagOut').innerHTML='<p style="color:var(--r)">진단 실패</p>';return}

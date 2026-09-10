@@ -27,7 +27,7 @@
 보안: 토큰·API키는 이 파일에 직접 넣지 말고 환경변수로 주는 걸 권장.
   Windows(PowerShell):  $env:CHIRASHI_TOKEN="..."; $env:BRAVE_KEY="..."; python pc_discovery.py
 """
-import os, sys, time, argparse, urllib.parse, re
+import os, sys, time, argparse, urllib.parse, re, socket
 
 try:
     import requests
@@ -49,6 +49,8 @@ except Exception:
 # 토큰을 여기 기본값으로 넣어 어떻게 실행하든(배치 없이 py 직접 실행 포함) 바로 동작하게 함.
 # (로그조회용 토큰. 서버 설정탭 '로그 토큰'과 동일. 대표님 시스템이라 내장.)
 SERVER      = os.environ.get("CHIRASHI_SERVER") or "https://google.twseo.kr"
+# 발행노드(pc_node.py)와 동일 규칙 → 같은 기기는 관제실에서 한 카드로 묶임.
+NODE_ID     = os.environ.get("PC_NODE_ID") or ("pc-" + socket.gethostname().lower()[:20])
 SERVER_TOKEN= os.environ.get("CHIRASHI_TOKEN") or "cae3aaa53d6f3576a1c1f6a258f79129"
 # 검색 제공자: 'ddg'(무료·키불필요, 기본) / 'brave' / 'google'. PC는 대표님 실제 IP라
 #  DuckDuckGo 무료 검색이 서버보다 훨씬 덜 차단됨 → 키 없이 발굴 가능(대표님 지시 '키없이 무료').
@@ -299,6 +301,8 @@ def run_once(max_queries):
     urls = list(found.values())
     if not urls:
         log("새 게시판 URL 없음(이미 다 알고 있거나 검색결과 없음).")
+        try: server_post("/api/candidates/ingest", {"urls": [], "node_id": NODE_ID})  # 관제실 하트비트만
+        except Exception: pass
         return
     log(f"새 URL {len(urls)}개 → 서버로 전송…")
     # 서버 ingest는 1회 100개 상한 → 100개씩 나눠 보낸다
@@ -306,7 +310,7 @@ def run_once(max_queries):
     for j in range(0, len(urls), 100):
         chunk = urls[j:j + 100]
         try:
-            res = server_post("/api/candidates/ingest", {"urls": chunk})
+            res = server_post("/api/candidates/ingest", {"urls": chunk, "node_id": NODE_ID})
             if res.get("ok"):
                 sent += res.get("received", len(chunk))
                 log(f"  전송 {res.get('received')}개(신규 {res.get('added')}개) — 서버가 검수·발행테스트 시작")
