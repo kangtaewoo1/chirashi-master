@@ -91,11 +91,13 @@ def _apply_llm(cfg):
         pass
     return cfg
 
+NODE_VER = 2   # ★노드 코드 세대. 서버는 ver<2(옛 가입 로직) 노드엔 cafe24 후보를 안 줌 — 옛 노드가 복원 후보를 태우던 사고 방지(2026-09-11)
+
 def _claim(n):
     """서버에서 후보 n개를 claim(잠금)해 받아온다. 반환: 후보 리스트(빈 리스트면 대기)."""
     try:
         r = requests.post(f"{SERVER}/api/pipeline/claim?token={SERVER_TOKEN}",
-                          json={"node_id": NODE_ID, "n": n}, headers=UA, timeout=30, verify=False)
+                          json={"node_id": NODE_ID, "n": n, "ver": NODE_VER}, headers=UA, timeout=60, verify=False)
         if r.status_code != 200:
             log(f"claim 실패 HTTP {r.status_code}"); return []
         d = r.json()

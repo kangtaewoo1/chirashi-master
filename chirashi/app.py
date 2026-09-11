@@ -8084,6 +8084,10 @@ def api_pipeline_claim():
     d=request.get_json(silent=True) or {}
     node_id=str(d.get('node_id') or '').strip() or 'pc'
     n=max(1,min(20,int(d.get('n',4) or 4)))
+    # ★노드 코드 세대 게이트(2026-09-11): 13:47 가입 관문 수정 뒤에도 재시작 안 된 옛 노드가 복원한 cafe24 후보 201곳을
+    #   옛 로직으로 전부 다시 태웠음. ver<2(옛 pc_node는 ver 미전송=0)엔 cafe24를 안 주고 일반 후보만 준다.
+    try: _ver=int(d.get('ver',0) or 0)
+    except Exception: _ver=0
     ttl=max(120,min(1800,int(load_config().get('pc_claim_ttl',600) or 600)))
     now=time.time()
     site_domains={_domain_of(s.get('site_url','')) for s in load_sites()}
@@ -8102,6 +8106,7 @@ def api_pipeline_claim():
               and c.get('reachable') and _has_write_path(c)
               and not _claim_active(c)
               and not (c.get('signup_email_verify') or c.get('signup_phone_cert'))  # 인증벽은 자동가입 불가 → 제외
+              and not (c.get('platform')=='cafe24' and _ver<2)   # 옛 노드(ver<2)엔 cafe24 안 줌(위 주석)
               and float(c.get('last_pipeline_at',0) or 0) < _cool]
         # 비회원(바로발행) 우선 → 그다음 로그인. (서버 파이프라인과 동일한 우선순위 감각)
         def _prio(c):
