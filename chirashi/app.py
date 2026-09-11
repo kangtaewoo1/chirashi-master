@@ -4967,6 +4967,11 @@ ILLEGAL_WORDS=['카지노','바카라','슬롯','토토','먹튀','배팅','베�
                '사설','환전','꽁머니','livecasino','casino','baccarat','betting']
 PROMO_WORDS=['홍보게시판','자유홍보','홍보 환영','홍보가능','홍보 가능','제휴문의','제휴 문의','링크등록',
              '업체등록','상호등록','광고게시판','홍보하기','업체홍보','파트너 모집']
+# ★업자 홍보 흔적 키워드(대표님 지시 2026-09-11): 게시판 글에 이런 단어가 있으면 이미 유흥·마사지
+#   업자들이 홍보 중인 '방치·개방 게시판'일 확률↑ = 우리 글도 잘 올라가고 색인 잘 됨(발굴 우선순위↑).
+BIZ_PROMO_WORDS=['찌라시','치라시','텔레','텔레그램','telegram','라인','line 문의','line상담',
+                 '마사지','안마','건마','스웨디시','1인샵','왁싱','노래방','가라오케','하이퍼블릭',
+                 '쓰리노','셔츠룸','풀싸롱','유흥','출장','오피','키스방','휴게텔']
 
 def _domain_of(url):
     m=re.match(r'https?://([^/]+)',url or '')
@@ -5033,7 +5038,13 @@ CAFE24_FRAGMENTS=['board/free/list.html 홍보','board/free/write.html 비회원
                   'article 상품-qa 홍보','article 상품문의 홍보 010','article qa 노래방 홍보',
                   'article 상품-사용후기 홍보','article voices-of-customers 홍보',
                   '채용공고 홍보 노래방','채용공고 010 유흥','공지사항 홍보 글쓰기 010',
-                  'kboard 자유게시판 홍보','kboard mod=document 홍보']
+                  'kboard 자유게시판 홍보','kboard mod=document 홍보',
+                  # ★업자 홍보글 역추적(대표님 지시 2026-09-11): 찌라시·텔레·라인 키워드가 이미 올라온
+                  #   게시판 = 업자들이 쓰는 개방 게시판 = 우리 글도 잘 붙는다. 그 형제 게시판 무더기 발굴.
+                  'bbs/board.php 찌라시 텔레 문의','article 상품-qa 텔레 라인 문의',
+                  'board list.html 찌라시 010 문의','bbs/board.php 라인 문의 마사지 010',
+                  'article qa 텔레그램 노래방','mod=document 찌라시 유흥 010',
+                  'bbs/board.php 텔레 상담 010 마사지','cafe24 게시판 라인 문의 노래방 010']
 
 # ★Cafe24 게시판 '이름' × 업종 검색 (대표님 지시 2026-09-07):
 #  이런 사이트들은 URL이 /article/상품-qa/ 처럼 '게시판 이름'을 담는다. 그래서 구글/Brave에
@@ -5321,7 +5332,12 @@ def screen_candidate(url, cfg=None):
     # 광고 금지 / 홍보 허용 흔적 (본문 + URL/게시판ID/타이틀까지 함께 판단)
     res['ad_banned']=any(w in html for w in AD_BAN_WORDS)
     hint_blob=html+' '+title+' '+(url or '')+' '+res['bo_table']
+    # ★업자 홍보 키워드 개수(대표님 지시 2026-09-11): 찌라시·텔레·라인·마사지·노래방 등이 게시판에
+    #   여러 번 나오면 이미 유흥/마사지 업자들이 쓰는 개방 게시판 = 발행·색인 잘 되는 황금 게시판.
+    try: res['biz_promo_count']=sum(html.count(w) for w in BIZ_PROMO_WORDS)
+    except Exception: res['biz_promo_count']=0
     res['promo_hint']=(any(w in hint_blob for w in PROMO_WORDS)
+                       or res['biz_promo_count']>=2   # 업자 키워드 2회+면 홍보허용 흔적으로 인정
                        or bool(re.search(r'bo_table=(promotion|hongbo|ad|link|partner|banner)',url or '',re.I)))
     # ★황금사이트 신호(대표님 지시 2026-09-08): 게시판 목록에 전화번호(010 등)가 여러 개 있으면
     #   이미 업자들이 활발히 홍보 중 = 발행 성공 확률 높은 방치·개방 게시판(samjinvalve식).
@@ -5446,6 +5462,12 @@ def score_candidate(c):
     if _pc>=8: s+=40
     elif _pc>=3: s+=20
     elif _pc>=1: s+=8
+    # ★업자 홍보 키워드 가점(대표님 지시 2026-09-11 '찌라시·텔레·라인·마사지·노래방 있으면 좋다'):
+    #   유흥·마사지 업자들이 이미 쓰는 개방 게시판 신호. 많을수록 발행·색인 잘 됨.
+    _bp=int(c.get('biz_promo_count',0) or 0)
+    if _bp>=8: s+=30
+    elif _bp>=3: s+=15
+    elif _bp>=2: s+=6
     if c.get('ad_banned'): s-=50
     if c.get('captcha'): s-=30
     if c.get('login_required'): s-=20
