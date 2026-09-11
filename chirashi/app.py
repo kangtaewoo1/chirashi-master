@@ -2396,6 +2396,24 @@ def fill_required_post_fields(d,site):
     post_email=_brand_email(cfg, site)  # wr_email 등 이메일 필수항목 자동 채움값(빈값 방지)
     try: page_text=(d.find_element(By.TAG_NAME,'body').text or '').lower()[:6000]
     except Exception: page_text=''
+    # ★비밀글 체크박스 해제(대표님 지시 2026-09-11): 기본 체크돼 있으면 글이 비밀글로 올라가 구글 색인0.
+    #   그누보드 wr_option[]=secret / '비밀글' 라벨 체크박스가 선택돼 있으면 풀어 공개글로 발행.
+    try:
+        for cb in d.find_elements(By.CSS_SELECTOR,"input[type='checkbox']"):
+            try:
+                if not cb.is_selected(): continue
+                _blob=(_sel_attr(cb,'name')+' '+_sel_attr(cb,'id')+' '+_sel_attr(cb,'value')).lower()
+                _lbl=''
+                try:
+                    _cid=_sel_attr(cb,'id')
+                    if _cid: _lbl=' '.join((x.text or '') for x in d.find_elements(By.CSS_SELECTOR,"label[for='"+_cid.replace("'","\\'")+"']")).lower()
+                    _lbl+=' '+(cb.find_element(By.XPATH,'..').text or '').lower()
+                except Exception: pass
+                if 'secret' in _blob or 'wr_option' in _blob or '비밀' in _lbl or '비밀글' in _blob:
+                    try: cb.click()
+                    except Exception: d.execute_script('arguments[0].checked=false;',cb)
+            except Exception: continue
+    except Exception: pass
     # KBoard 비회원 글쓰기는 별표 필수항목이어도 required 속성이 없는
     # 경우가 많다. 알려진 작성자/비밀번호 필드는 선제적으로 채운다.
     for sel,value,label in [
@@ -4769,6 +4787,10 @@ def is_autopostable(site):
     # 오류안내/데모 사이트는 검증됐어도 발행 대상에서 즉시 제외(reconcile이 곧 영구 탈락 처리).
     if _is_error_or_demo_site(site):
         return False
+    # ★비밀글 강제 게시판 제외(대표님 지시 2026-09-11): 글이 비밀글로만 올라가면 구글이 못읽어 SEO0.
+    #   한 번 비밀글로 발행된 게 확인되면 secret_forced 표시 → 더는 발행 안 함(헛발행 방지).
+    if site.get('secret_forced'):
+        return False
     return (is_permitted(site)
             and site.get('status')!='rejected'
             and site.get('write_test_status')=='passed'
@@ -6702,6 +6724,12 @@ def _publish_combo_to_site(s, kw, wname, rid, cfg, writer_name=''):
         if ok and str(msg).startswith('http'):
             try: _secret=str(_post_read_block_reason(msg) or '').startswith('비밀글')
             except Exception: _secret=False
+        # ★비밀글이면 '성공'으로 치지 않는다(대표님 지시 2026-09-11 '비밀글 발행 막기'): 구글이 못읽어
+        #   헛발행. 그 사이트는 secret_forced 표시 → 다음부터 발행 대상에서 제외.
+        if _secret:
+            try: set_site_flag(fresh.get('id'),secret_forced=True,secret_at=_kst_now().strftime('%Y-%m-%d %H:%M'))
+            except Exception: pass
+            ok=False; reason_ko='비밀글(구글 색인불가)'; reason='secret_post'
         history_update(jid,status='done' if ok else 'failed',
             result_url=(msg if ok and str(msg).startswith('http') else ''),
             fail_reason=('' if ok else reason),fail_reason_ko=('' if ok else reason_ko),
@@ -6712,7 +6740,7 @@ def _publish_combo_to_site(s, kw, wname, rid, cfg, writer_name=''):
             else: wk_stats['fail']+=1
             wk_stats['done']+=1
         add_log(f"[작업실:{wname}] {'성공' if ok else '실패:'+reason_ko} {fresh.get('name') or (fresh.get('site_url','') or '')[:20]}"
-                +(f" 🔒비밀글(비번 {_pw})" if _secret else ''))
+                +(f" 🔒비밀글→발행중단(구글 색인불가)" if _secret else ''))
     finally:
         _slk.release()
 
