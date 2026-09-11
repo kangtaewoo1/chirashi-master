@@ -251,14 +251,10 @@ def _write_cursor(v):
 
 
 def run_once(max_queries):
+    global BRAVE_KEY
     if not SERVER_TOKEN:
         log("SERVER_TOKEN이 비어 있습니다. 환경변수 CHIRASHI_TOKEN 또는 파일 CONFIG를 채우세요.")
         return
-    # ddg(무료)는 키 불필요. brave/google을 명시했는데 키가 없으면 자동으로 ddg로 폴백.
-    prov = SEARCH_PROVIDER
-    if prov == "brave" and not BRAVE_KEY: prov = "ddg"
-    if prov == "google" and not (GOOGLE_KEY and GOOGLE_CX): prov = "ddg"
-    log(f"검색 방식: {prov}{'(무료·키불필요)' if prov=='ddg' else ''}")
     log("서버에서 검색어·아는 도메인 받는 중…")
     try:
         info = server_get("/api/discovery/queries")
@@ -266,6 +262,15 @@ def run_once(max_queries):
         log(f"서버 쿼리 조회 실패: {str(e)[:100]}"); return
     if not info.get("ok"):
         log(f"서버 응답 오류: {info.get('error')}"); return
+    # ★PC도 Brave로 발굴(대표님 지시 2026-09-11 DDG차단): 서버가 내려준 provider·brave_key를 우선 사용.
+    #   서버가 brave 키를 주면 그 키로 Brave 검색(로컬 env BRAVE_KEY보다 우선). DDG는 안 씀.
+    srv_prov = (info.get("provider") or "").lower()
+    srv_bk = (info.get("brave_key") or "").strip()
+    if srv_bk: BRAVE_KEY = srv_bk
+    prov = srv_prov or SEARCH_PROVIDER
+    if prov == "brave" and not BRAVE_KEY: prov = "ddg"     # 키 없으면 최후에만 ddg
+    if prov == "google" and not (GOOGLE_KEY and GOOGLE_CX): prov = "ddg"
+    log(f"검색 방식: {prov}{'(서버 Brave키)' if (prov=='brave' and srv_bk) else ('(무료·키불필요)' if prov=='ddg' else '')}")
     all_q = info.get("queries", [])
     # ★로테이션: 커서 위치부터 max_queries개를 잘라 쓰고, 커서를 그만큼 전진(끝이면 처음으로).
     total = len(all_q)
