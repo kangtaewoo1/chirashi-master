@@ -3265,10 +3265,22 @@ def cafe24_post(site, title, content_html, skip_login=False):
         except Exception: cur=''
         _url_hit=('veritas-hub' in cur or 'challenge' in cur)
         if not _url_hit:
-            # URL이 챌린지가 아니면 page_source로 한 번만 더 확인(turnstile 위젯이 본문에 임베드된 경우).
-            try: psrc=(d.page_source or '')
-            except Exception: psrc=''
-            if not ('turnstile' in psrc.lower() or '사람인지' in psrc or '간단한 확인' in psrc):
+            # URL이 챌린지가 아니면 page_source로 확인(turnstile 위젯이 본문에 임베드된 경우).
+            # ★같은 URL에 챌린지가 그려지는 경우(2026-09-11 노드 실측: board/list.html?board_no=6 · title '카페24' · 입력칸 0)
+            #   위젯/문구가 JS로 늦게 붙어 한 번 읽으면 놓침 → 최대 4초 폴링, 제목 '카페24'+작은 본문도 챌린지로 간주.
+            _found=False
+            for _ in range(8):
+                try: psrc=(d.page_source or '')
+                except Exception: psrc=''
+                try: _tt=(d.title or '').strip()
+                except Exception: _tt=''
+                _pl=psrc.lower()
+                if ('turnstile' in _pl or '사람인지' in psrc or '간단한 확인' in psrc
+                        or (_tt=='카페24' and len(psrc)<12000)):
+                    _found=True; break
+                if len(psrc)>20000 and 'cf-' not in _pl: break   # 본문이 큰 정상 페이지 — 챌린지 아님, 더 기다리지 않음
+                time.sleep(0.5)
+            if not _found:
                 return True
         cfg=load_config()
         ok,msg,tok,info=solve_captcha_with_2captcha(d,site,'turnstile',cfg)
@@ -3705,20 +3717,23 @@ def cafe24_post(site, title, content_html, skip_login=False):
             if _list:
                 d.get(_list); time.sleep(2); dismiss_alerts(d)
                 # 제목 핵심 조각(앞 12자)이 목록에 보이면 등록된 것. 글의 /article/ 상세링크도 함께 회수.
-                _needle=(title or '')[:12].strip()
+                _needle=re.sub(r'\s+',' ',(title or '')).strip()[:12]
+                # ★가짜 성공 제거(2026-09-11 실측): 예전엔 제목이 목록에 없으면 '목록 최상단 글'을 우리 글로 반환해 takago에서
+                #   남의 스팸글(106090)을 9번이나 '발행성공'으로 기록했음. 반드시 우리 제목이 목록에 있을 때만 성공.
                 _hit=d.execute_script("""
-                    var needle=arguments[0];
+                    var needle=arguments[0]; var norm=function(s){return (s||'').replace(/\\s+/g,' ').trim();};
                     var as=Array.from(document.querySelectorAll("a[href*='/article/']"));
-                    for(var i=0;i<as.length;i++){ if((as[i].textContent||'').indexOf(needle)>=0){ return as[i].href; } }
-                    // 텍스트 매칭 실패 시, 목록 최상단 글 링크라도 반환(방금 쓴 글이 맨 위)
-                    return as.length? as[0].href : (document.body.innerText.indexOf(needle)>=0?'FOUND':'');
+                    for(var i=0;i<as.length;i++){ if(norm(as[i].textContent).indexOf(needle)>=0){ return as[i].href; } }
+                    return norm(document.body.innerText).indexOf(needle)>=0 ? 'FOUND' : '';
                 """, _needle) if _needle else ''
                 if _hit and _hit.startswith('http'):
-                    add_log(f'[Cafe24등록] 성공(목록확인) → {_hit[:60]}')
+                    add_log(f'[Cafe24등록] 성공(목록에서 제목 확인) → {_hit[:60]}')
                     return True,_hit
                 if _hit=='FOUND':
                     add_log('[Cafe24등록] 성공(목록에 제목 확인)')
                     return True,_list
+                add_log(f'[Cafe24등록] 미등록 — 제출 후 목록에 제목 없음({_needle}) · 승인대기/스팸필터/제출실패 의심')
+                return False,'Cafe24 등록 확인 불가 — 제출 후 목록에 글 없음(승인대기·스팸필터·제출실패)'
         except Exception as _e:
             add_log(f'[Cafe24등록] 목록재조회 실패 {str(_e)[:50]}')
     # 실패 원인 로그(제출 후 어디에 있는지·알림)
@@ -4972,7 +4987,9 @@ def is_assisted_postable(site):
             and verified_url.startswith(('http://','https://')))
 
 def is_publishable(site):
-    return is_autopostable(site)
+    """서버가 발행해도 되는 사이트. ★cafe24는 노드가 살아있으면 서버 발행 제외(2026-09-11: 워크룸이 enqueue를 안 거치고
+       직접 발행해 takago에 계속 서버 발행이 붙었음 — enqueue 필터만으론 부족해 여기서 막는다)."""
+    return is_autopostable(site) and not _cafe24_node_only(site)
 
 def _cafe24_node_only(site):
     """Cafe24 사이트는 PC 노드가 살아 있으면 노드(집 IP 로컬크롬)가 발행 — 서버(DC IP)는 Turnstile/CF에 막혀
