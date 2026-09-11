@@ -8115,6 +8115,15 @@ def api_purge_fake_cafe24():
     add_log(f'[가짜 cafe24 청소] 이력 {len(removed)}건 삭제 · 사이트 {len(reset)}곳 재검증 대기 — {dom or "전체"}','정리')
     return jsonify({'ok':True,'removed':len(removed),'sites_reset':len(reset),'sites':reset})
 
+def _cafe24_is_qa_board(url):
+    """cafe24 URL이 상품Q&A류 게시판인지(승인/상품연결/스팸필터로 글이 안 남기 쉬움 → claim 후순위)."""
+    try:
+        from urllib.parse import unquote
+        m=re.search(r'/(?:article|board)/([^/?]+)/',str(url or ''))
+        seg=unquote(m.group(1)).lower() if m else ''
+        return any(k in seg for k in ('qa','q&a','qna','상품','문의','묻고','제작문의','1:1'))
+    except Exception: return False
+
 def _cafe24_result_is_new(prev_url, new_url):
     """cafe24 결과 URL이 '새 글'인지 글번호로 판정. /article/<board>/<bo>/<N>/ 의 N이 이전 결과(prev)보다 커야 새 글.
        번호를 못 읽으면(비-cafe24·목록 URL 등) 판단 보류=True. ★takago 가짜 성공(남의 스팸글 106090 반복 보고) 차단용."""
@@ -8191,7 +8200,10 @@ def api_pipeline_claim():
         def _prio(c):
             is24=c.get('platform')=='cafe24'   # ★PC만 할 수 있는 cafe24를 최우선(서버는 이제 안 건드림)
             direct=c.get('write_form') and not c.get('login_required')
-            return (1 if is24 else 0, 1 if direct else 0, 1 if not c.get('captcha') else 0, c.get('score',0))
+            # ★게시판 유형 우선순위(2026-09-12 대표님 '다른 카페24로'): 상품Q&A는 승인/상품연결/스팸필터로 글이 안 남는
+            #   경우가 많아 뒤로 미루고, 자유게시판·후기·공지형(비회원 바로쓰기 잘 됨)을 먼저 태운다.
+            board_ok=1 if (is24 and not _cafe24_is_qa_board(c.get('url'))) else 0
+            return (1 if is24 else 0, board_ok, 1 if direct else 0, 1 if not c.get('captcha') else 0, c.get('score',0))
         elig.sort(key=_prio,reverse=True)
         for c in elig[:n]:
             c['claimed_by']=node_id; c['claim_expire']=now+ttl
