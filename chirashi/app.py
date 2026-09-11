@@ -6393,6 +6393,18 @@ def _claim_active(c):
     try: return bool(c.get('claimed_by')) and float(c.get('claim_expire',0) or 0) > time.time()
     except Exception: return False
 
+def _pc_node_alive(within=600):
+    """PC/노트북 발행노드가 최근 within초 내 하트비트를 보냈으면 True.
+       ★cafe24 라우팅(대표님 승인 2026-09-11): 노드 살아있으면 서버는 cafe24를 안 건드리고 PC에 맡긴다
+       (서버 DC IP는 Turnstile 못 넘어 탈락만 내고, 그러면 PC가 볼 기회조차 사라지던 구멍).
+       노드가 전부 죽어 있으면 False → 서버가 폴백으로 처리(후보 방치 방지)."""
+    try:
+        now=time.time()
+        with _NODE_LOCK:
+            return any(float(b.get('last',0) or 0) > now-within for b in NODE_BEATS.values())
+    except Exception:
+        return False
+
 def _has_write_path(c):
     """게시판형(글쓰기 가능성) 후보인지 — auto_pipeline_once와 /api/pipeline/claim 공통 판정(DRY)."""
     if c.get('write_form'): return True
@@ -6476,6 +6488,7 @@ def auto_pipeline_once(limit=5):
           and (c.get('domain') or '').lower() not in site_domains
           and c.get('reachable') and _has_write_path(c)
           and not _claim_active(c)   # ★PC 노드가 잡고 있는(만료 전) 후보는 서버가 건드리지 않음
+          and not (c.get('platform')=='cafe24' and _pc_node_alive())   # ★cafe24는 PC(로컬크롬)만 — 서버(DC IP)는 Turnstile 못넘어 탈락만 냄. 노드 다 죽으면 폴백.
           and float(c.get('last_pipeline_at',0) or 0) < _cool]
     # (파이프라인 진단 로그 제거 — 처리할 후보 없을 때마다 매 주기 찍혀 화면 도배. 대표님 지시)
     # 비회원 글쓰기 가능(로그인 불필요) 게시판을 먼저 처리한다. 로그인 필요 게시판은
@@ -7755,8 +7768,9 @@ def api_pipeline_claim():
               and float(c.get('last_pipeline_at',0) or 0) < _cool]
         # 비회원(바로발행) 우선 → 그다음 로그인. (서버 파이프라인과 동일한 우선순위 감각)
         def _prio(c):
+            is24=c.get('platform')=='cafe24'   # ★PC만 할 수 있는 cafe24를 최우선(서버는 이제 안 건드림)
             direct=c.get('write_form') and not c.get('login_required')
-            return (1 if direct else 0, 1 if not c.get('captcha') else 0, c.get('score',0))
+            return (1 if is24 else 0, 1 if direct else 0, 1 if not c.get('captcha') else 0, c.get('score',0))
         elig.sort(key=_prio,reverse=True)
         for c in elig[:n]:
             c['claimed_by']=node_id; c['claim_expire']=now+ttl
