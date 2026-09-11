@@ -10106,6 +10106,7 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 <div style="margin-top:5px"><small style="color:var(--d)">NVIDIA 모델</small><input id="cNvidiaModel" placeholder="nvidia/nemotron-3-ultra-550b-a55b"></div>
 <div style="margin-top:5px"><small style="color:var(--d)">OpenRouter API 키</small><input type="password" id="cOpenrouterKey" placeholder="변경시만 입력 (sk-or-v1-...)"></div>
 <div style="margin-top:5px"><small style="color:var(--d)">OpenRouter 모델</small><input id="cOpenrouterModel" placeholder="deepseek/deepseek-v4-flash-0731"></div>
+<div style="margin-top:6px"><button class="btn btn-g btn-xs" onclick="window.open('https://openrouter.ai','_blank')">OpenRouter 사이트 바로가기 ↗</button></div>
 <small style="color:var(--d)">무료 등급은 분당 요청 한도가 있어 한도에 걸리면 60초간 템플릿으로 자동 전환 후 재개</small></div>
 <details style="margin-top:8px;border-top:1px solid var(--bd);padding-top:8px"><summary style="cursor:pointer;color:var(--p);font-size:11px;font-weight:700">사용량·비용 상세 설정</summary>
 <div style="margin-top:7px"><small style="color:var(--d)">조직 관리자 키 (선택 · 실제 Costs API 조회용)</small><input type="password" id="cOpenaiAdmin" placeholder="관리자 키 없으면 로컬 예상비용 사용"></div>
