@@ -9996,15 +9996,16 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
     <div style="max-height:280px;overflow-y:auto" id="col발행"></div>
   </div>
   <!-- ★기기별 실시간 현황(대표님 지시 2026-09-11): PC/노트북 각각 마지막활동·발행·상태 카드 -->
-  <div id="nodeStrip" style="display:grid;grid-template-columns:1fr 1fr;gap:8px"></div>
+  <div id="nodeStrip" style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px"></div>
   <!-- 러너 세계(아래, PC발굴 포함) — 4구획을 좌우로 나눠 한눈에 -->
   <div style="border:1px solid #4c1d95;border-radius:8px;overflow:hidden">
     <div style="background:#1a0f2e;color:var(--v);padding:8px 12px;font-weight:700;font-size:13px">🏃 러너 세계 <span style="color:var(--d);font-weight:400">· 발굴(PC 연동)·검수·가입·정리</span></div>
-    <div style="display:grid;grid-template-columns:1fr 1fr">
-      <div style="border-top:1px solid #33425f;border-right:1px solid #33425f"><div style="padding:6px 11px;font-size:12px;color:var(--p)">🔍 발굴(PC) <span id="cnt발굴" style="float:right;color:var(--d)"></span></div><div style="max-height:190px;overflow-y:auto" id="col발굴"></div></div>
-      <div style="border-top:1px solid #33425f"><div style="padding:6px 11px;font-size:12px;color:var(--v)">📋 검수 <span id="cnt검수" style="float:right;color:var(--d)"></span></div><div style="max-height:190px;overflow-y:auto" id="col검수"></div></div>
-      <div style="border-top:1px solid #33425f;border-right:1px solid #33425f"><div style="padding:6px 11px;font-size:12px;color:var(--y)">👤 가입 <span id="cnt가입" style="float:right;color:var(--d)"></span></div><div style="max-height:190px;overflow-y:auto" id="col가입"></div></div>
-      <div style="border-top:1px solid #33425f"><div style="padding:6px 11px;font-size:12px;color:var(--r)">🧹 정리 <span id="cnt정리" style="float:right;color:var(--d)"></span></div><div style="max-height:190px;overflow-y:auto" id="col정리"></div></div>
+    <!-- minmax(0,1fr): 1fr만 쓰면 nowrap 로그 한 줄의 min-content가 열 최소폭이 돼 그리드가 화면 밖으로 넘침(대표님 2026-09-11 '오른쪽 짤림') -->
+    <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr)">
+      <div style="border-top:1px solid #33425f;border-right:1px solid #33425f;min-width:0"><div style="padding:6px 11px;font-size:12px;color:var(--p)">🔍 발굴(PC) <span id="cnt발굴" style="float:right;color:var(--d)"></span></div><div style="max-height:190px;overflow-y:auto" id="col발굴"></div></div>
+      <div style="border-top:1px solid #33425f;min-width:0"><div style="padding:6px 11px;font-size:12px;color:var(--v)">📋 검수 <span id="cnt검수" style="float:right;color:var(--d)"></span></div><div style="max-height:190px;overflow-y:auto" id="col검수"></div></div>
+      <div style="border-top:1px solid #33425f;border-right:1px solid #33425f;min-width:0"><div style="padding:6px 11px;font-size:12px;color:var(--y)">👤 가입 <span id="cnt가입" style="float:right;color:var(--d)"></span></div><div style="max-height:190px;overflow-y:auto" id="col가입"></div></div>
+      <div style="border-top:1px solid #33425f;min-width:0"><div style="padding:6px 11px;font-size:12px;color:var(--r)">🧹 정리 <span id="cnt정리" style="float:right;color:var(--d)"></span></div><div style="max-height:190px;overflow-y:auto" id="col정리"></div></div>
     </div>
   </div>
 </div>
