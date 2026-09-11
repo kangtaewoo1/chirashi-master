@@ -3725,27 +3725,42 @@ def cafe24_post(site, title, content_html, skip_login=False):
     if 'write' in (curl.split('?')[0].split('/')[-1] or ''):   # 아직 write 페이지에 머물면
         try:
             _abn=str(site.get('article_board_name') or '').strip()
-            _list=(base+f'/board/{_abn}/{bo}/') if (_abn and bo) else (base+f'/board/list.html?board_no={bo}' if bo else '')
-            if _list:
-                d.get(_list); time.sleep(2); dismiss_alerts(d)
-                # 제목 핵심 조각(앞 12자)이 목록에 보이면 등록된 것. 글의 /article/ 상세링크도 함께 회수.
-                _needle=re.sub(r'\s+',' ',(title or '')).strip()[:12]
-                # ★가짜 성공 제거(2026-09-11 실측): 예전엔 제목이 목록에 없으면 '목록 최상단 글'을 우리 글로 반환해 takago에서
-                #   남의 스팸글(106090)을 9번이나 '발행성공'으로 기록했음. 반드시 우리 제목이 목록에 있을 때만 성공.
+            # ★목록 URL 후보 넓게(2026-09-12 실측: 제출 후 board/product/list.html로 감). abn경로·product·기본 모두.
+            _lists=[l for l in [
+                (base+f'/board/{_abn}/{bo}/') if (_abn and bo) else '',
+                (base+f'/board/product/list.html?board_no={bo}') if bo else '',
+                (base+f'/board/list.html?board_no={bo}') if bo else '',
+                (base+f'/front/php/b/board_list.php?board_no={bo}') if bo else '',
+            ] if l]
+            # ★제목 매칭 개선(2026-09-12 실측: 제목 앞 12자에 [O1O]∼56O3 같은 랜덤기호가 있어 목록 텍스트와 안 맞아
+            #   실제 등록됐는데도 '미등록' 오판. → 기호·공백 제거한 한글+숫자 핵심부로 매칭. 지역명(맨 앞 단어)도 보조키.
+            def _core(s):
+                return re.sub(r'[^0-9A-Za-z가-힣]','',re.sub(r'\s+','',s or ''))
+            _tc=_core(title); _needle=_tc[:10]
+            _region=(re.split(r'[\s\[\(]',str(title or '').strip())+[''])[0]
+            _hit=None
+            for _list in _lists:
+                try:
+                    d.get(_list); time.sleep(2); dismiss_alerts(d)
+                except Exception: continue
                 _hit=d.execute_script("""
-                    var needle=arguments[0]; var norm=function(s){return (s||'').replace(/\\s+/g,' ').trim();};
-                    var as=Array.from(document.querySelectorAll("a[href*='/article/']"));
-                    for(var i=0;i<as.length;i++){ if(norm(as[i].textContent).indexOf(needle)>=0){ return as[i].href; } }
-                    return norm(document.body.innerText).indexOf(needle)>=0 ? 'FOUND' : '';
-                """, _needle) if _needle else ''
-                if _hit and _hit.startswith('http'):
-                    add_log(f'[Cafe24등록] 성공(목록에서 제목 확인) → {_hit[:60]}')
-                    return True,_hit
-                if _hit=='FOUND':
-                    add_log('[Cafe24등록] 성공(목록에 제목 확인)')
-                    return True,_list
-                add_log(f'[Cafe24등록] 미등록 — 제출 후 목록에 제목 없음({_needle}) · 승인대기/스팸필터/제출실패 의심')
-                return False,'Cafe24 등록 확인 불가 — 제출 후 목록에 글 없음(승인대기·스팸필터·제출실패)'
+                    var needle=arguments[0], region=arguments[1];
+                    var core=function(s){return (s||'').replace(/\\s+/g,'').replace(/[^0-9A-Za-z\\uAC00-\\uD7A3]/g,'');};
+                    var as=Array.from(document.querySelectorAll("a[href*='/article/'],a[href*='read.html'],a[href*='board_view'],a[href*='wr_id']"));
+                    for(var i=0;i<as.length;i++){ var t=core(as[i].textContent);
+                        if(needle && t.indexOf(needle)>=0){ return as[i].href; }
+                        if(region && region.length>=2 && t.indexOf(core(region))>=0 && t.length>region.length){ return as[i].href; } }
+                    return core(document.body.innerText).indexOf(needle)>=0 ? 'FOUND' : '';
+                """, _needle, _region)
+                if _hit: break
+            if _hit and str(_hit).startswith('http'):
+                add_log(f'[Cafe24등록] 성공(목록에서 제목 확인) → {_hit[:60]}')
+                return True,_hit
+            if _hit=='FOUND':
+                add_log('[Cafe24등록] 성공(목록에 제목 확인)')
+                return True,(_lists[0] if _lists else curl)
+            add_log(f'[Cafe24등록] 미등록 — 제출 후 목록에 제목 없음({_needle}) · 승인대기/스팸필터/제출실패 의심')
+            return False,'Cafe24 등록 확인 불가 — 제출 후 목록에 글 없음(승인대기·스팸필터·제출실패)'
         except Exception as _e:
             add_log(f'[Cafe24등록] 목록재조회 실패 {str(_e)[:50]}')
     # 실패 원인 로그(제출 후 어디에 있는지·알림)
@@ -6486,6 +6501,149 @@ def auto_signup(site, submit=True):
     for role,sel in GNU_STD.items():
         if role not in filled:
             _fill(role, sel)
+    # 3.5b) ★cafe24 표준 회원가입 필드(2026-09-12 대표님 실측: 구씨공방 가입폼에 주소·휴대전화·비번확인·이름이 필수인데
+    #   그누보드 필드명만 채워 미입력→가입실패). cafe24 실제 name들(member_id/passwd/user_passwd_confirm/name/email1/
+    #   phone[]/mobile[]/postcode1/addr1)을 직접 채운다. 전화·주소는 더미 유효값(가입만 통과하면 됨).
+    if site.get('platform')=='cafe24':
+        C24={
+            'password':"input[name='passwd']",
+            'password_confirm':"input[name='user_passwd_confirm']",
+            'name':"input[name='name']",
+        }
+        for role,sel in C24.items():
+            if role not in filled: _fill(role, sel)
+        # ★cafe24 아이디 중복확인(2026-09-12 대표님 실측: 중복확인→'사용하기' 안 하면 가입 거부).
+        #   member_id 입력 → 중복확인(팝업/iframe check_id.html) → '사용가능'이면 사용하기, '불가/중복'이면 아이디 바꿔 재시도.
+        def _cafe24_id_check(cur_id):
+            """cafe24 중복확인 실행. 사용가능→True(부모창 idDuplCheck 확정), 불가→False."""
+            from selenium.webdriver.common.by import By
+            # 아이디 입력칸 채우기
+            done=False
+            for el in _safe_find(d,"input[name='member_id']"):
+                try:
+                    if el.is_displayed(): el.clear(); el.send_keys(cur_id); done=True; break
+                except Exception: pass
+            if not done: return None   # member_id 칸 없음 = 이 폼은 중복확인 불필요
+            _wins_before=set(d.window_handles)
+            # 중복확인 버튼 클릭(텍스트/onclick 다양)
+            clicked=False
+            for el in d.find_elements(By.CSS_SELECTOR,"a,button,input[type='button']"):
+                try:
+                    tx=((el.text or '')+' '+(el.get_attribute('value') or '')+' '+(el.get_attribute('onclick') or '')).replace(' ','')
+                    if el.is_displayed() and ('중복확인' in tx or 'idcheck' in tx.lower() or 'checkid' in tx.lower() or 'check_id' in tx.lower() or 'duplication' in tx.lower()):
+                        d.execute_script('arguments[0].click()',el); clicked=True; break
+                except Exception: pass
+            if not clicked:
+                # 직접 check_id.html 호출형: cafe24 JS 함수 호출 시도
+                try: d.execute_script("if(typeof checkId==='function'){checkId();}else if(typeof id_check==='function'){id_check();}")
+                except Exception: pass
+            time.sleep(2)
+            # 팝업창이 떴으면 그 창에서 판정+사용하기
+            new_wins=[w for w in d.window_handles if w not in _wins_before]
+            _main=d.current_window_handle
+            def _judge_and_use(scope):
+                try: txt=scope.find_element(By.TAG_NAME,'body').text
+                except Exception: txt=''
+                if '사용 가능' in txt or '사용가능' in txt:
+                    # '사용하기' 버튼 클릭
+                    for el in scope.find_elements(By.CSS_SELECTOR,"a,button,input[type='button'],input[type='submit']"):
+                        try:
+                            t=((el.text or '')+' '+(el.get_attribute('value') or '')).replace(' ','')
+                            if el.is_displayed() and ('사용하기' in t or '확인' in t or 'use' in t.lower()):
+                                scope.execute_script('arguments[0].click()',el); return True
+                        except Exception: pass
+                    return True   # 사용가능 문구는 봤으나 버튼 못찾음 — 확정으로 간주
+                if '사용 불가' in txt or '이미 사용' in txt or '중복' in txt or '사용중' in txt: return False
+                return None
+            res=None
+            if new_wins:
+                d.switch_to.window(new_wins[0]); res=_judge_and_use(d)
+                try:
+                    if new_wins[0] in d.window_handles and d.current_window_handle==new_wins[0]: d.close()
+                except Exception: pass
+                d.switch_to.window(_main)
+            else:
+                # iframe/inline 형
+                res=_judge_and_use(d)
+                if res is None:
+                    for fr in d.find_elements(By.CSS_SELECTOR,"iframe"):
+                        try:
+                            d.switch_to.frame(fr); r=_judge_and_use(d); d.switch_to.default_content()
+                            if r is not None: res=r; break
+                        except Exception:
+                            try: d.switch_to.default_content()
+                            except Exception: pass
+            # 부모창 idDuplCheck hidden을 T로(사용가능 확정 신호)
+            if res:
+                try: d.execute_script("var e=document.querySelector(\"input[name='idDuplCheck']\");if(e)e.value='T';")
+                except Exception: pass
+            return res
+        # 될 때까지 아이디 바꿔 최대 5회
+        _base_id=mid
+        for _try in range(5):
+            _r=_cafe24_id_check(mid)
+            if _r is None: break            # 중복확인 UI 없음 → 그냥 진행
+            if _r:
+                if 'id' not in filled: filled.append('id')
+                add_log(f'[자동가입] cafe24 아이디 중복확인 통과: {mid}')
+                break
+            # 불가 → 아이디 변경 후 재시도
+            mid=(re.sub(r'[^a-z0-9]','',_base_id.lower())[:10]+secrets.token_hex(2))[:16]
+            vals_by_role['id']=mid; site['mb_id']=mid
+            add_log(f'[자동가입] cafe24 아이디 중복 → 변경 재시도({_try+1}/5): {mid}')
+            time.sleep(1)
+        # 이메일: cafe24는 email1(로컬)만 text인 경우가 많음 — 전체 이메일 또는 로컬파트 채움
+        try:
+            _elocal=str(vals_by_role.get('email') or '').split('@')[0]
+            for el in _safe_find(d,"input[name='email1'],input[name='email']"):
+                if el.is_displayed() and not (el.get_attribute('value') or '').strip():
+                    el.clear(); el.send_keys(_elocal if el.get_attribute('name')=='email1' else vals_by_role.get('email')); break
+        except Exception: pass
+        # 비밀번호 확인 질문: select에서 하나 고르고(빈값이면 첫 실제옵션) 답변 입력(2026-09-12 대표님: 질문 선택+답변 필수).
+        try:
+            for selq in _safe_find(d,"select[name='hint'],#hint,select[name*='hint']"):
+                if not selq.is_displayed(): continue
+                from selenium.webdriver.support.ui import Select as _Sel
+                try:
+                    _s=_Sel(selq); _opts=[o for o in _s.options if (o.get_attribute('value') or '').strip()]
+                    if _opts: _s.select_by_value(_opts[0].get_attribute('value'))   # 첫 실제 질문 선택
+                except Exception:
+                    d.execute_script("var s=arguments[0];for(var i=0;i<s.options.length;i++){if(s.options[i].value){s.selectedIndex=i;s.dispatchEvent(new Event('change',{bubbles:true}));break;}}",selq)
+                break
+        except Exception: pass
+        try:
+            for el in _safe_find(d,"input[name='hint_answer']"):
+                if el.is_displayed(): el.clear(); el.send_keys('인천'); break
+        except Exception: pass
+        # 휴대전화 mobile[] 3칸(앞자리 select는 010 기본), 유선 phone[]도 있으면 채움 — 더미 유효번호
+        _cfgc=load_config(); _ph=re.sub(r'\D','',(_cfgc.get('phone') or '01082755736'))[:11]
+        _p1,_p2,_p3=(_ph[:3] or '010'),(_ph[3:7] or '1234'),(_ph[7:11] or '5678')
+        for fld in ('mobile','phone'):
+            try:
+                cells=[el for el in _safe_find(d,f"input[name='{fld}[]']") if el.is_displayed()]
+                if len(cells)>=3:
+                    cells[0].clear(); cells[0].send_keys(_p1)
+                    cells[1].clear(); cells[1].send_keys(_p2)
+                    cells[2].clear(); cells[2].send_keys(_p3)
+                elif len(cells)==2:
+                    cells[0].clear(); cells[0].send_keys(_p2); cells[1].clear(); cells[1].send_keys(_p3)
+            except Exception: pass
+        # 주소(2026-09-12 대표님 '주소 입력도 해야?'): postcode1/addr1이 readonly(우편번호 팝업 전용)라 send_keys가 안 먹음
+        #   → JS로 value 강제 세팅 + change 이벤트. 필드가 있으면 채우고, 필수 표시(*)면 반드시 채워 제출 통과.
+        try:
+            d.execute_script("""
+              function setv(name,val){var e=document.querySelector("[name='"+name+"']");
+                if(e){e.removeAttribute('readonly');e.value=val;
+                      e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));return true;}
+                return false;}
+              setv('postcode1','04524'); setv('postcode2','');
+              setv('addr1','서울특별시 중구 세종대로 110');
+              setv('addr2','101호');
+              // 도로명/지번 라디오·직접입력 체크가 있으면 켜서 검증 통과
+              var di=document.querySelector("[name='address_direct_input_check'],[name='join_directInputCheck']");
+              if(di&&di.type==='checkbox'&&!di.checked){di.click();}
+            """)
+        except Exception: pass
     # 3.6) type 기반 위치추정 최후 폴백 — name/id가 완전 비표준이라 위에서 못 채운 경우,
     # 화면에 보이는 password 입력칸 순서로 비번/비번확인을, 첫 text 칸을 아이디로 채운다.
     if 'password' not in filled:
@@ -6533,18 +6691,43 @@ def auto_signup(site, submit=True):
         return True,f'가입 직전까지 성공(입력: {",".join(filled)}{" +캡차" if cap else ""}) — 실제 가입 안 함'
     # 5) 제출
     submitted=False
-    for sel in ("form#fregister input[type='submit']","form[name='fregister'] input[type='submit']",
-                "form#fregister button[type='submit']","#register_form input[type='submit']",
-                "form[action*='register_form_update'] input[type='submit']",
-                "form[action*='register_form_update'] button[type='submit']"):
-        for el in _safe_find(d,sel):
-            try:
-                if el.is_displayed(): d.execute_script('arguments[0].click()',el); submitted=True; break
-            except Exception: pass
-        if submitted: break
+    # ★cafe24 가입 버튼(2026-09-12): cafe24는 <a onclick="join_submit()"> 또는 텍스트 '회원가입/가입하기' 버튼.
+    #   그누보드 셀렉터(#fregister)로는 못 눌러 제출이 안 되고 join.html에 머물렀음. cafe24 먼저 시도.
+    if site.get('platform')=='cafe24':
+        from selenium.webdriver.common.by import By
+        # cafe24 표준 제출 함수 직접 호출(가장 확실) → 없으면 버튼 텍스트로
+        _safe_js(d,"try{if(typeof MemberJoinAction!=='undefined'&&MemberJoinAction.submit){MemberJoinAction.submit();}else if(typeof join_submit==='function'){join_submit();}else if(typeof fn_join==='function'){fn_join();}}catch(e){}")
+        time.sleep(1)
+        _cu=(d.current_url or '').lower()
+        if 'join.html' in _cu or 'join_step' in _cu:   # 아직 안 넘어감 → 버튼 클릭
+            for el in d.find_elements(By.CSS_SELECTOR,"a,button,input[type='submit'],input[type='button']"):
+                try:
+                    tx=((el.text or '')+' '+(el.get_attribute('value') or '')+' '+(el.get_attribute('onclick') or '')).replace(' ','')
+                    if el.is_displayed() and ('회원가입' in tx or '가입하기' in tx or '가입완료' in tx or 'join_submit' in tx.lower() or 'memberjoin' in tx.lower()) and '중복' not in tx and '아이디' not in tx:
+                        d.execute_script('arguments[0].click()',el); submitted=True; break
+                except Exception: pass
+        else:
+            submitted=True
     if not submitted:
-        _safe_js(d,"var f=document.getElementById('fregister')||document.forms['fregister']||document.querySelector(\"form[action*='register_form_update']\");if(f){if(f.requestSubmit)f.requestSubmit();else f.submit();}")
+        for sel in ("form#fregister input[type='submit']","form[name='fregister'] input[type='submit']",
+                    "form#fregister button[type='submit']","#register_form input[type='submit']",
+                    "form[action*='register_form_update'] input[type='submit']",
+                    "form[action*='register_form_update'] button[type='submit']"):
+            for el in _safe_find(d,sel):
+                try:
+                    if el.is_displayed(): d.execute_script('arguments[0].click()',el); submitted=True; break
+                except Exception: pass
+            if submitted: break
+    if not submitted:
+        _safe_js(d,"var f=document.getElementById('fregister')||document.forms['fregister']||document.querySelector(\"form[action*='register_form_update']\")||document.querySelector(\"form[action*='join']\");if(f){if(f.requestSubmit)f.requestSubmit();else f.submit();}")
     time.sleep(3); dismiss_alerts(d)
+    # ★제출 후 alert에 '필수' 문구가 있으면(주소/전화 등 미입력) 그 사유를 명확히 반환(2026-09-12 대표님 '주소 입력도 해야?').
+    try:
+        _al=' '.join(getattr(d,'_last_alerts',[]) or [])
+        if site.get('platform')=='cafe24' and 'join.html' in (d.current_url or '').lower():
+            _miss=re.search(r'(주소|우편|전화|휴대|이메일|이름|필수|입력)[^.。]{0,20}(입력|확인|선택)',_al) or ('필수' in _al)
+            if _miss: return False,f'cafe24 가입 필수항목 미입력(제출 안 넘어감): {_al[:80]}'
+    except Exception: pass
     add_log(f'[자동가입] {_snm} 제출 완료 — 가입 결과 확인 중{" (이메일 인증 필요할 수 있음)" if need_email_verify else ""}')
     # 5.5) 대표님 전략: 먼저 '인증 없이 바로 가입됐는지' 확인 → 됐으면 인증 스킵(꿀사이트).
     #      제출 직후 이미 로그인 상태(로그아웃/마이페이지 노출)면 이메일 인증 불필요 → 바로 성공 처리.
@@ -6627,13 +6810,15 @@ def auto_signup(site, submit=True):
         if _logged_in(): return _mark_success('가입 직후 세션 로그인됨')
     except Exception: pass
 
-    # ③ 로그인 재시도 — 로그인 URL 후보를 넓게 시도
-    for lurl in (f'{base}/bbs/login.php', f'{base}/login.php', f'{base}/member/login.php', f'{base}/bbs/login_check.php'):
+    # ③ 로그인 재시도 — 로그인 URL 후보를 넓게 시도(★cafe24는 /member/login.html 먼저 — 그누보드 URL은 404 '다시 확인'만 남)
+    _login_urls=([f'{base}/member/login.html'] if site.get('platform')=='cafe24' else []) + \
+                [f'{base}/bbs/login.php', f'{base}/login.php', f'{base}/member/login.php', f'{base}/bbs/login_check.php']
+    for lurl in _login_urls:
         try:
             d.get(lurl); time.sleep(1.5)
             filled_login=False
-            for s2 in (("input[name='mb_id'],input[name='user_id'],input[name='login_id'],#login_id",mid),
-                       ("input[name='mb_password'],input[name='user_pw'],input[name='passwd'],input[type='password']",pw)):
+            for s2 in (("input[name='member_id'],input[name='mb_id'],input[name='user_id'],input[name='login_id'],#login_id",mid),
+                       ("input[name='member_passwd'],input[name='mb_password'],input[name='user_pw'],input[name='passwd'],input[type='password']",pw)):
                 for el in _safe_find(d,s2[0]):
                     try:
                         if el.is_displayed(): el.clear(); el.send_keys(s2[1]); filled_login=True; break
@@ -9154,9 +9339,11 @@ def _signup_credentials(site, rules=None):
     profile.update(site.get('signup_rules') or {}); profile.update(rules or {}); rules=profile
     min_id=max(3,min(20,int(rules.get('id_min',3) or 3)))
     max_id=max(min_id,min(30,int(rules.get('id_max',20) or 20)))
-    prefix=re.sub(r'[^a-z0-9_]','',str(rules.get('id_prefix') or 'twseo').lower()) or 'twseo'
+    # ★아이디는 영문소문자+숫자만(2026-09-12 대표님 지적: cafe24 아이디 규칙 '영문소문자/숫자'에 언더바가 규칙위반→가입실패).
+    #   언더바 제거하고 영숫자만 사용. cafe24든 그누보드든 영숫자 아이디는 항상 허용되므로 안전.
+    prefix=re.sub(r'[^a-z0-9]','',str(rules.get('id_prefix') or 'twseo').lower()) or 'twseo'
     suffix=datetime.now().strftime('%m%d')+secrets.token_hex(2)
-    mid=(prefix+'_'+suffix)[:max_id]
+    mid=(prefix+suffix)[:max_id]
     if len(mid)<min_id: mid=(mid+secrets.token_hex(8))[:min_id]
     plen=max(8,min(64,int(rules.get('password_min',10) or 10)))
     special=str(rules.get('password_specials') or '!@#$%')
