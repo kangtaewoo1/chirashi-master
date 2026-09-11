@@ -78,7 +78,17 @@ def save_json(p, data):
         try:
             with open(tmp,'w',encoding='utf-8') as f:
                 json.dump(data,f,ensure_ascii=False,indent=2); f.flush(); os.fsync(f.fileno())
-            os.replace(tmp,p)
+            # ★Windows [WinError 5] 액세스 거부(노드 2026-09-11): 같은 폴더의 다른 프로세스(pc_discovery↔pc_node,
+            #   또는 워커 스레드의 load_json)가 그 순간 파일을 열고 있으면 os.replace가 PermissionError로 죽고,
+            #   그 예외가 발행 흐름까지 올라와 '처리 예외'로 후보를 날렸음. 잠깐 재시도 후 최후엔 직접 덮어쓰기.
+            _last=None
+            for _i in range(25):
+                try: os.replace(tmp,p); _last=None; break
+                except PermissionError as _e:
+                    _last=_e; time.sleep(0.04+0.02*_i)
+            if _last is not None:
+                with open(p,'w',encoding='utf-8') as f:
+                    json.dump(data,f,ensure_ascii=False,indent=2)
         finally:
             try:
                 if tmp.exists(): tmp.unlink()
@@ -536,6 +546,11 @@ def _signup_form_measure(site):
         url=cand  # 마지막 시도 URL 보존(폼 못 찾아도 Selenium 폴백에서 씀)
     p=FormParser(); p.feed(html)
     forms=signup_forms(p)
+    # ★cafe24 실측(2026-09-11 tokyocrafts·honeytem 재현): join.html은 requests에도 Turnstile 챌린지 페이지로 오고,
+    #   agreement.html의 약관 폼(action에 join 포함, 비밀번호 칸 없음)이 '가입폼'으로 오인돼 아래 Selenium 분기(챌린지
+    #   해결→약관→진짜 폼)를 건너뛰었음 → '가입 폼(비밀번호 입력칸)에 도달 실패'. 비번 칸 없는 폼은 못 찾은 것으로 본다.
+    if platform=='cafe24' and forms and not any((x.get('type') or '').lower()=='password' for f in forms for x in f['fields']):
+        forms=[]
     # 정적 요청에서 상단 로그인폼만 보이는 사이트는 Selenium으로 약관 다음 화면까지 재측정한다.
     if not forms:
         try:
@@ -4959,10 +4974,16 @@ def is_assisted_postable(site):
 def is_publishable(site):
     return is_autopostable(site)
 
+def _cafe24_node_only(site):
+    """Cafe24 사이트는 PC 노드가 살아 있으면 노드(집 IP 로컬크롬)가 발행 — 서버(DC IP)는 Turnstile/CF에 막혀
+       실패만 쌓고 사이트를 잠가버렸음(hbbiomall 2026-09-11). 서버 큐에서는 제외, 노드 claim-sites가 가져간다."""
+    try: return site.get('platform')=='cafe24' and _pc_node_alive()
+    except Exception: return False
+
 def enqueue(sites,title,content,meta=None):
     meta=meta or {}
-    allowed=[s for s in sites if is_publishable(s)]
-    blocked=[s for s in sites if not is_publishable(s)]
+    allowed=[s for s in sites if is_publishable(s) and not _cafe24_node_only(s)]
+    blocked=[s for s in sites if not (is_publishable(s) and not _cafe24_node_only(s))]
     now=datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     for s in allowed:
         jid=secrets.token_hex(8)
@@ -4974,6 +4995,7 @@ def enqueue(sites,title,content,meta=None):
         job={'job_id':jid,'hist_id':jid,'site':s,'title':title,'content':content}
         post_queue.put(job); _persist_add(job)
     for s in blocked:
+        if _cafe24_node_only(s): continue   # Cafe24는 노드가 발행 — 서버 스킵은 정상이라 로그 안 남김
         _why=('미허용 도메인' if not is_permitted(s) else '제외')
         add_log(f'[차단:{_why}] 발행 스킵: {s.get("name") or (s.get("site_url","") or "")[:30]}')
     with STATS_LOCK:
@@ -4984,8 +5006,8 @@ def enqueue_generated(sites, keywords, cfg, meta=None):
     """허용 사이트마다 '각각 다른' 유니크 제목·본문을 새로 생성해 큐 등록.
        → 같은 키워드라도 사이트마다 글이 달라져 중복 발행을 방지."""
     meta=meta or {}
-    allowed=[s for s in sites if is_publishable(s)]
-    blocked=[s for s in sites if not is_publishable(s)]
+    allowed=[s for s in sites if is_publishable(s) and not _cafe24_node_only(s)]
+    blocked=[s for s in sites if not (is_publishable(s) and not _cafe24_node_only(s))]
     now=datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     for s in allowed:
         html,title=generate_article(keywords,cfg)   # 사이트마다 새로 생성(유니크)
@@ -5000,6 +5022,7 @@ def enqueue_generated(sites, keywords, cfg, meta=None):
         job={'job_id':jid,'hist_id':jid,'site':s,'title':title,'content':html}
         post_queue.put(job); _persist_add(job)
     for s in blocked:
+        if _cafe24_node_only(s): continue   # Cafe24는 노드가 발행 — 서버 스킵은 정상이라 로그 안 남김
         _why=('미허용 도메인' if not is_permitted(s) else '제외')
         add_log(f'[차단:{_why}] 발행 스킵: {s.get("name") or (s.get("site_url","") or "")[:30]}')
     with STATS_LOCK:
@@ -6195,11 +6218,71 @@ def tempmail_wait_verify_link(token, timeout=120):
         time.sleep(4)
     return None
 
+def _cafe24_signup_gate(d, site, cfg, join_url, max_sec=75):
+    """cafe24 가입 진입 관문: join.html → veritas-hub Turnstile 챌린지(2captcha로 해결) / agreement.html 약관(전부 동의→다음)
+       을 비밀번호 칸이 보일 때까지 반복 처리. ★auto_signup에서 측정 프로필이 캐시(30분)면 이 스레드의 크롬은 챌린지를
+       아직 안 넘어 join.html이 다시 챌린지로 튕김(2026-09-11 재현) → 여기서 처리. 반환: 비번 칸 도달 여부."""
+    from selenium.webdriver.common.by import By
+    t0=time.time(); solved=0
+    while time.time()-t0<max_sec:
+        try: dismiss_alerts(d)
+        except Exception: pass
+        try: cu=(d.current_url or '').lower()
+        except Exception: cu=''
+        try:
+            if d.find_elements(By.CSS_SELECTOR,"input[type='password']"): return True
+        except Exception: pass
+        try: ps=(d.page_source or '')[:20000].lower()
+        except Exception: ps=''
+        if 'veritas-hub' in cu or 'challenge' in cu or 'cf-turnstile' in ps:
+            if solved>=2: break   # 두 번 풀어도 계속 챌린지면 포기(요청 차단 상태)
+            _ok,_m,_t,_i=solve_captcha_with_2captcha(d,site,'turnstile',cfg); solved+=1
+            add_log(f'[가입 Turnstile] {site.get("name") or site.get("site_url","")} — {_m}')
+            for _ in range(15):
+                try: c2=(d.current_url or '').lower()
+                except Exception: c2=''
+                if 'veritas-hub' not in c2 and 'challenge' not in c2: break
+                time.sleep(1)
+            try:
+                c3=(d.current_url or '').lower()
+                if 'veritas-hub' in c3 or 'challenge' in c3: d.get(join_url); time.sleep(2)
+                else: time.sleep(1.5)
+            except Exception: pass
+            continue
+        if 'agreement' in cu or '/agree' in cu:
+            for cb in d.find_elements(By.CSS_SELECTOR,"input[type='checkbox']"):
+                try:
+                    nm=((cb.get_attribute('name') or '')+' '+(cb.get_attribute('id') or '')).lower()
+                    if ('agree' in nm or 'all' in nm) and not cb.is_selected():
+                        try: cb.click()
+                        except Exception: d.execute_script('arguments[0].checked=true;arguments[0].dispatchEvent(new Event("change",{bubbles:true}));',cb)
+                except Exception: continue
+            clicked=False
+            for sel in ("button[type='submit']","input[type='submit']","a.btnSubmit","a.btn_submit","button.btnSubmit","a[href*='join']","button","a"):
+                for el in d.find_elements(By.CSS_SELECTOR,sel):
+                    try:
+                        if not el.is_displayed(): continue
+                        tx=((el.text or '')+' '+(el.get_attribute('value') or '')+' '+(el.get_attribute('alt') or '')).strip()
+                        if sel in ("button[type='submit']","input[type='submit']") or re.search(r'(다음|동의하고|동의|회원가입|가입하기|확인|next|agree)',tx,re.I):
+                            d.execute_script('arguments[0].click()',el); clicked=True; break
+                    except Exception: continue
+                if clicked: break
+            time.sleep(2.5)
+            if not clicked:
+                try: d.get(join_url); time.sleep(2)
+                except Exception: pass
+            continue
+        time.sleep(0.7)
+    try: return bool(d.find_elements(By.CSS_SELECTOR,"input[type='password']"))
+    except Exception: return False
+
 def auto_signup_guarded(site, submit=True, timeout=100):
     """auto_signup을 타임아웃 보호 하에 실행한다. 작업 스레드가 자기 드라이버로 가입을 수행하고,
        timeout을 넘기면 메인이 그 드라이버를 강제 quit해서 hang된 selenium 호출을 예외로 끊는다.
        → 한 사이트가 무한 hang해 전환루프가 영영 완료 안 되던 문제 해결(김정은산부인과 케이스)."""
     import threading as _th
+    # ★cafe24는 측정(Turnstile 해결 30~60초)+약관+폼입력+캡차가 100초를 넘겨 '자동가입 타임아웃(100초)'로 죽었음(gmmusic 2026-09-11).
+    if (site.get('platform')=='cafe24') and timeout<220: timeout=220
     box={'done':False,'ret':(False,'타임아웃'),'wtid':None}
     def _work():
         box['wtid']=_th.current_thread().name
@@ -6275,6 +6358,13 @@ def auto_signup(site, submit=True):
         d.set_page_load_timeout(25); d.get(signup_url); time.sleep(2); dismiss_alerts(d)
     except Exception:
         pass
+    if site.get('platform')=='cafe24':
+        try:
+            _ju=_signup_origin(site)+'/member/join.html'
+            if not _cafe24_signup_gate(d,site,cfg,_ju):
+                add_log(f'[자동가입] {_snm} — cafe24 챌린지/약관 관문 통과 실패(비번 칸 미도달)')
+        except Exception as _e:
+            add_log(f'[자동가입] {_snm} — cafe24 관문 오류 {str(_e)[:60]}')
     # 약관 동의 체크(있으면 전부 체크) 후 '동의' 제출 버튼으로 실제 폼 진입
     for cb in _safe_find(d,"input[type='checkbox']"):
         try:
@@ -8093,7 +8183,8 @@ def api_pipeline_claim_sites():
     d=request.get_json(silent=True) or {}
     node_id=str(d.get('node_id') or '').strip() or 'pc'
     n=max(1,min(5,int(d.get('n',2) or 2)))
-    ttl=max(300,min(3600,int(load_config().get('pc_site_claim_ttl',1200) or 1200)))
+    _cfg=load_config()
+    ttl=max(300,min(3600,int(_cfg.get('pc_site_claim_ttl',1200) or 1200)))
     now=time.time(); picked=[]
     with POST_LOCK:
         sites=load_sites()
@@ -8106,6 +8197,11 @@ def api_pipeline_claim_sites():
         def _need_pub(s):
             if str(s.get('verified_post_url') or '')[:4]!='http': return True   # 미검증
             if s.get('auto_dropped_at') and not s.get('permission'): return True  # 검증됐으나 실패로 잠김 → 재발행
+            # ★정기 발행도 노드가(2026-09-11): 검증·허용된 Cafe24는 서버(CF 차단 IP) 대신 노드가 계속 발행.
+            #   서버 큐는 _cafe24_node_only로 제외됨. 사이트별 1일 한도·최소 간격은 서버와 같은 규칙.
+            try:
+                if is_autopostable(s) and under_daily_limit(s,_cfg) and under_min_interval(s)[0]: return True
+            except Exception: pass
             return False
         elig=[s for s in sites
               if (s.get('platform')=='cafe24')
@@ -8139,14 +8235,25 @@ def api_pipeline_report_site():
         if not sid: continue
         ok=bool(r.get('ok')); url=str(r.get('result_url') or '')
         try:
+            _site=next((s for s in load_sites() if str(s.get('id') or '')==sid),None)
+            _nm=((_site or {}).get('name') or (_site or {}).get('site_url') or sid[:8])
             if ok and url.startswith(('http://','https://')):
                 set_site_flag(sid,write_test_status='passed',verified_post_url=url,verified_at=now,
                               registration_source='verified_test',pc_claim_by='',pc_claim_expire=0)
                 passed+=1
-                add_log(f'[Cafe24 발행성공] {sid[:8]} — PC로컬 검증 통과 → {url}'.rstrip())
+                # ★정기 발행 회계(2026-09-11): 노드 발행도 서버 발행과 똑같이 이력(결과탭)·오늘 카운트·간격에 반영.
+                if _site:
+                    _t=datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    history_add({'id':secrets.token_hex(8),'time':_t,'updated':_t,'site_id':sid,
+                                 'site_name':_nm,'site_url':_site.get('site_url',''),'bo_table':_site.get('bo_table',''),
+                                 'title':str(r.get('title') or '')[:120],'region':str(r.get('region') or ''),'service':str(r.get('service') or ''),
+                                 'status':'done','result_url':url,'message':url,'attempts':0,'node':node_id,'alive':'yes'})
+                    finalize_post(_site,True)
+                add_log(f'[Cafe24 발행성공] {str(_nm)[:24]} — PC로컬({node_id}) → {url}'.rstrip())
             else:
                 set_site_flag(sid,write_test_status='failed',pc_claim_by='',pc_claim_expire=0)
-                add_log(f'[Cafe24 발행실패] {sid[:8]} — {str(r.get("msg") or "")[:80]}')
+                if _site: finalize_post(_site,False,str(r.get('msg') or '')[:120])
+                add_log(f'[Cafe24 발행실패] {str(_nm)[:24]} — {str(r.get("msg") or "")[:80]}')
             applied+=1
         except Exception as e:
             add_log(f'[PC노드 사이트회신오류] {str(e)[:60]}')
@@ -9155,9 +9262,14 @@ def api_cfg_clear_key():
        (대표님 2026-09-11 OpenAI 키 revoke 후 '서버에 남은 키도 지워줘'). 값은 절대 응답에 안 실음."""
     d=request.get_json(silent=True) or {}
     k=str(d.get('key') or '').strip()
-    if k not in ('openai_key','openai_admin_key','nvidia_api_key','openrouter_api_key'):
+    # Bright Data 3종(SBR endpoint·Unlocker 키·프록시 비번)도 여기서 비움 — 계정정지된 뒤에도 서버 config에 남아
+    #   서버가 검증된 Cafe24 사이트 발행 때마다 죽은 SBR로 접속('Wrong customer name')하던 문제(2026-09-11). 비우면 해당 기능 OFF.
+    _FLAG={'sbr_endpoint':'sbr_enabled','unlocker_api_key':'unlocker_enabled','proxy_pass':'proxy_enabled'}
+    if k not in ('openai_key','openai_admin_key','nvidia_api_key','openrouter_api_key','sbr_endpoint','unlocker_api_key','proxy_pass'):
         return jsonify({'ok':False,'error':'허용되지 않은 키'}),400
-    cfg=load_config(); was=bool((cfg.get(k) or '').strip()); cfg[k]=''; save_config(cfg)
+    cfg=load_config(); was=bool((cfg.get(k) or '').strip()); cfg[k]=''
+    if k in _FLAG: cfg[_FLAG[k]]=False
+    save_config(cfg)
     add_log(f'[설정] {k} 서버에서 삭제(비움)')
     return jsonify({'ok':True,'key':k,'was_set':was})
 

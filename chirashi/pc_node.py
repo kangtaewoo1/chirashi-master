@@ -169,6 +169,7 @@ def _process_site(s, cfg):
         pool = app.collect_all_keywords()
         kw = app.pick_keywords(pool, cfg) if pool else {"지역": "인천", "서비스": "노래방", "브랜드": cfg.get("brand", "") or "테스트"}
         html, title = app.generate_article(kw, cfg, unique=True)
+        res.update({"title": title, "region": kw.get("지역", ""), "service": kw.get("서비스", "")})   # 서버 이력(결과탭)용
         ok, msg = app.do_post(site, title, html, skip_login=False)   # 저장 계정으로 로그인 발행
         if ok and str(msg).startswith(("http://", "https://")):
             res.update({"ok": True, "result_url": msg}); log(f"[Cafe24 발행성공] {name} → {msg}")
