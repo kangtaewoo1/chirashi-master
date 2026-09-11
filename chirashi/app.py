@@ -7706,7 +7706,7 @@ def chk():
     #  /api/test/* = 발행 테스트 트리거(등록 사이트에 실제 글1건 발행해 검증).
     _p=request.path
     if _p=='/api/version': return  # 배포 SHA 확인 — 공개(민감정보 없음)
-    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/sites/unlock-cafe24','/api/openai/usage','/api/config/clear-key','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/report-site','/api/unlocker/test','/api/sbr/test') or _p.startswith('/api/test/'):
+    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/sites/unlock-cafe24','/api/sites/purge-fake-cafe24','/api/openai/usage','/api/config/clear-key','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/report-site','/api/unlocker/test','/api/sbr/test') or _p.startswith('/api/test/'):
         tok=(request.args.get('token') or '').strip()
         cfgtok=(load_config().get('log_token') or '').strip()
         if cfgtok and tok==cfgtok:
@@ -8071,6 +8071,49 @@ def api_sites_reject():
     add_rejected_domains([dom],reason)
     add_log(f'[수동 제외] {dom} — {reason} (사이트 {len(hit)}·후보 {ch})','정리')
     return jsonify({'ok':True,'domain':dom,'sites':hit,'candidates':ch})
+
+@app.route('/api/sites/purge-fake-cafe24',methods=['POST'])
+def api_purge_fake_cafe24():
+    """★가짜 cafe24 발행 기록 청소(대표님 2026-09-12 '직접입력 제목없음 이건 뭐냐'): 옛 코드가 목록 첫 글(남의 글)을
+       우리 글로 오인해 남긴 이력·사이트 검증을 지운다. 판정: cafe24 도메인의 done 이력 중 여러 사이트가 '같은
+       result_url'을 공유(=목록 첫 글 재보고)하거나 제목이 빈 것. 사이트는 verified_post_url 초기화+재검증 대기.
+       body: {domain?} — 없으면 전 cafe24. 반환: 지운 이력·초기화 사이트 수."""
+    d=request.get_json(silent=True) or {}
+    raw=str(d.get('domain') or '').strip()
+    dom=(_domain_of(raw) if raw.startswith('http') else raw).lower().replace('www.','') if raw else ''
+    hist=load_json(HISTORY_FILE,[])
+    def _is_cafe24_row(x):
+        u=(x.get('site_url') or '')
+        if dom: return _domain_of(u).replace('www.','')==dom
+        return ('cafe24' in u) or ('/article/' in (x.get('result_url') or '') and 'board.php' not in (x.get('result_url') or ''))
+    cafe=[x for x in hist if _is_cafe24_row(x)]
+    # 같은 result_url을 2건 이상이 공유 = 남의 글(목록 첫 글) 재보고 → 가짜
+    from collections import Counter
+    rc=Counter((x.get('result_url') or '') for x in cafe if x.get('result_url'))
+    shared={u for u,c in rc.items() if c>=2 and u}
+    def _fake(x):
+        ru=x.get('result_url') or ''
+        if ru in shared: return True
+        if not (x.get('title') or '').strip() and 'takago' in (x.get('site_url') or ''): return True
+        return False
+    removed=[x for x in hist if _is_cafe24_row(x) and _fake(x)]
+    kept=[x for x in hist if x not in removed]
+    if removed: save_json(HISTORY_FILE,kept)
+    fake_urls={x.get('result_url') for x in removed if x.get('result_url')}
+    # 사이트: 가짜 URL이 verified_post_url이면 초기화(재검증 대기) — 실제로는 발행 안 됐으므로
+    reset=[]
+    with POST_LOCK:
+        sites=load_sites()
+        for s in sites:
+            if s.get('platform')!='cafe24': continue
+            if dom and _domain_of(s.get('site_url','')).replace('www.','')!=dom: continue
+            if str(s.get('verified_post_url') or '') in fake_urls:
+                s['verified_post_url']=''; s['write_test_status']='pending'; s['status']='idle'
+                s['fail_streak']=0; s.pop('auto_dropped_at',None); s.pop('auto_drop_reason',None)
+                reset.append((s.get('name') or s.get('site_url') or '')[:34])
+        if reset: save_sites(sites)
+    add_log(f'[가짜 cafe24 청소] 이력 {len(removed)}건 삭제 · 사이트 {len(reset)}곳 재검증 대기 — {dom or "전체"}','정리')
+    return jsonify({'ok':True,'removed':len(removed),'sites_reset':len(reset),'sites':reset})
 
 def _cafe24_result_is_new(prev_url, new_url):
     """cafe24 결과 URL이 '새 글'인지 글번호로 판정. /article/<board>/<bo>/<N>/ 의 N이 이전 결과(prev)보다 커야 새 글.
