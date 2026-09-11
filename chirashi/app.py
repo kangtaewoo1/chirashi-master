@@ -1455,6 +1455,8 @@ def generate_post_gpt(keywords, cfg, workroom_id=None):
     if _prov in ('nvidia','openrouter') and resp.status_code==429:
         time.sleep(3); resp=_rq.post(_url,headers=_hdr,json=_body,timeout=_to)   # 분당 한도 — 3초 뒤 1회 재시도
         if resp.status_code==429: raise RuntimeError(f'{_prov.upper()} 분당 한도(429) — 잠시 후 재개')
+    if _prov=='openrouter' and resp.status_code==402:   # OpenRouter는 크레딧 바닥을 402로 줌(OpenAI의 429/insufficient_quota와 다름)
+        raise RuntimeError('OPENROUTER 잔액 소진(402) — openrouter.ai/settings/credits 충전 필요')
     # ★잔액 소진 구분(대표님 2026-09-11 '이거 맞아?' — 잔액 -$1.44인데 로그는 '레이트리밋'): OpenAI는 크레딧 바닥도
     #   429로 주지만 body error.type이 insufficient_quota. 이를 구분 못해 5분마다 헛요청+오해 로그가 찍혔음.
     if resp.status_code==429:
@@ -1518,7 +1520,8 @@ def _gen_once(keywords, cfg, workroom_id=None):
             _first=(time.time()>=_GPT_SKIP_UNTIL[0])
             if '잔액 소진' in _msg or 'insufficient_quota' in _msg:
                 _GPT_SKIP_UNTIL[0]=time.time()+1800   # 30분 스킵 — 충전 전엔 재시도 무의미(헛요청·오해 로그 방지)
-                if _first: add_log('[GPT 잔액소진→30분간 템플릿] OpenAI 크레딧 부족 — platform.openai.com에서 충전해야 GPT 글 재개(그동안 템플릿)')
+                _where='openrouter.ai/settings/credits' if _pv=='openrouter' else 'platform.openai.com'
+                if _first: add_log(f'[{_pv.upper()} 잔액소진→30분간 템플릿] 크레딧 부족 — {_where}에서 충전해야 AI 글 재개(그동안 템플릿). 설정 탭에서 엔진/키를 바꿔 저장하면 즉시 재시도')
             elif '분당 한도(429)' in _msg:
                 _GPT_SKIP_UNTIL[0]=time.time()+60    # 분당 한도는 금방 풀림 → 60초만 템플릿
                 if _first: add_log(f'[{_pv.upper()} 429→60초 템플릿] 분당 요청 한도 — 잠시 후 자동 재개')
@@ -9093,6 +9096,8 @@ def api_cfg():
     if request.method=='POST':
         d=request.get_json(silent=True) or {}; cfg=load_config()
         old_search=(cfg.get('discover_keywords',''),cfg.get('discover_direct_queries',''))
+        _LLM_KEYS=('llm_provider','openai_key','nvidia_api_key','openrouter_api_key','model','nvidia_model','openrouter_model','use_gpt')
+        old_llm=tuple(cfg.get(k) for k in _LLM_KEYS)
         for k in ['brand','phone','phones','openai_key','openai_admin_key','llm_provider','nvidia_api_key','nvidia_model','openrouter_api_key','openrouter_model','openai_monthly_budget_usd',
                   'openai_input_price_per_million','openai_cached_input_price_per_million','openai_output_price_per_million',
                   'model','workers','post_delay','daily_limit',
@@ -9120,6 +9125,11 @@ def api_cfg():
         if (cfg.get('brave_api_key') or '').strip() and (cfg.get('twocaptcha_api_key') or '').strip() and cfg.get('twocaptcha_enabled'):
             cfg['auto_pipeline_enabled']=True
         save_config(cfg)
+        # 엔진/키를 바꿔 저장하면 잔액소진·429 차단기(_GPT_SKIP_UNTIL)를 즉시 해제 — 안 그러면 OpenAI 잔액소진 30분 차단이
+        # 메모리에 남아 OpenRouter로 바꿔도 만료까지 템플릿만 나감(대표님 2026-09-11 전환 직후 원장 0건 원인).
+        if tuple(cfg.get(k) for k in _LLM_KEYS)!=old_llm and _GPT_SKIP_UNTIL[0]>time.time():
+            _GPT_SKIP_UNTIL[0]=0.0
+            add_log(f"[AI 엔진 변경] {(cfg.get('llm_provider') or 'openai').upper()}로 전환 — 이전 차단기 해제, 다음 발행부터 즉시 사용")
         # 검색 조건을 바꾸면 다음 검색부터 새 조건의 첫 줄이 즉시 실행되도록 커서를 초기화한다.
         new_search=(cfg.get('discover_keywords',''),cfg.get('discover_direct_queries',''))
         if new_search!=old_search:
@@ -10076,7 +10086,7 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 <div style="margin-bottom:6px"><small style="color:var(--d)">포스트 간 지연 (초)</small><input type="number" id="cDelay" value="{{cfg.post_delay}}" min="0"></div>
 <small style="color:var(--d)">사이트당 1일 발행 한도 (0=무제한)</small><input type="number" id="cDaily" value="{{cfg.daily_limit}}" min="0"></div>
 <div class="card"><h3>GPT 본문 생성</h3>
-<label style="display:flex;align-items:center;gap:6px;color:var(--g);font-size:12px;margin-bottom:6px"><input type="checkbox" id="cUseGpt" style="width:auto">GPT로 본문 생성(키 필요)</label>
+<label style="display:flex;align-items:center;gap:6px;color:var(--g);font-size:12px;margin-bottom:6px"><input type="checkbox" id="cUseGpt" style="width:auto">AI로 본문 생성 — 아래 선택한 엔진 사용(끄면 템플릿만)</label>
 <div style="font-size:10px;color:var(--d);margin-bottom:6px">키워드1을 메인 주제로 인식해 1,800~2,800자 장문을 작성하고, 키워드2·3은 같은 지역의 보조 키워드로만 사용합니다.</div>
 <div style="margin-bottom:6px"><small style="color:var(--d)">OpenAI API 키</small><input type="password" id="cOpenai" placeholder="변경시만 입력 (sk-...)"></div>
 <div style="margin-bottom:6px"><small style="color:var(--d)">모델</small><input id="cModel" value="{{cfg.model}}" placeholder="gpt-4o-mini"></div>
