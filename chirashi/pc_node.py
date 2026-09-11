@@ -73,6 +73,24 @@ except Exception as e:
     sys.exit(1)
 
 
+# ★서버가 내려주는 글 생성 LLM 설정(대표님 2026-09-11 '비용 절감'): 서버 설정탭(제공자·NVIDIA 키·모델)이
+#   노드 로컬 config보다 우선. claim 응답의 llm 블록을 보관해 두고 발행 직전 cfg에 덮어쓴다.
+#   (노드가 로컬 config만 보면 서버에서 NVIDIA를 켜도 노드는 옛 OpenAI 키로 가던 빈틈.)
+_SERVER_LLM = {}
+
+def _apply_llm(cfg):
+    """서버 LLM 설정을 cfg에 반영. 서버가 안 주면(옛 서버) 로컬 값 유지."""
+    try:
+        s = _SERVER_LLM
+        if s.get("provider"): cfg["llm_provider"] = s["provider"]
+        if s.get("nvidia_api_key"): cfg["nvidia_api_key"] = s["nvidia_api_key"]
+        if s.get("nvidia_model"): cfg["nvidia_model"] = s["nvidia_model"]
+        if s.get("openrouter_api_key"): cfg["openrouter_api_key"] = s["openrouter_api_key"]
+        if s.get("openrouter_model"): cfg["openrouter_model"] = s["openrouter_model"]
+    except Exception:
+        pass
+    return cfg
+
 def _claim(n):
     """서버에서 후보 n개를 claim(잠금)해 받아온다. 반환: 후보 리스트(빈 리스트면 대기)."""
     try:
@@ -81,6 +99,7 @@ def _claim(n):
         if r.status_code != 200:
             log(f"claim 실패 HTTP {r.status_code}"); return []
         d = r.json()
+        if isinstance(d.get("llm"), dict): _SERVER_LLM.update(d["llm"])   # 서버 LLM 설정 보관
         return d.get("candidates") or []
     except Exception as e:
         log(f"claim 오류: {e}"); return []
@@ -114,7 +133,9 @@ def _claim_sites(n):
                           json={"node_id": NODE_ID, "n": n}, headers=UA, timeout=30, verify=False)
         if r.status_code != 200:
             return []
-        return (r.json() or {}).get("sites") or []
+        d = r.json() or {}
+        if isinstance(d.get("llm"), dict): _SERVER_LLM.update(d["llm"])   # 서버 LLM 설정 보관
+        return d.get("sites") or []
     except Exception:
         return []
 
@@ -136,6 +157,7 @@ def _report_sites(results):
 def _process_site(s, cfg):
     """등록 Cafe24 사이트 1개를 로컬크롬으로 로그인·발행(app.py cafe24 엔진 경유). 반환: report용 dict.
        ★비번은 site dict 안에서만 쓰고 로그엔 남기지 않는다."""
+    _apply_llm(cfg)   # 서버 설정탭의 LLM(제공자·키·모델)을 로컬 config보다 우선 적용
     sid = s.get("id"); base = str(s.get("site_url") or "").rstrip("/")
     name = s.get("name") or base
     site = {"id": sid or "pcsite", "site_url": base, "platform": "cafe24",
@@ -163,6 +185,7 @@ def _process_site(s, cfg):
 def _process_one(cand, cfg, pool):
     """후보 1개를 PC 크롬으로 가입·발행테스트(app.py 엔진). auto_pipeline_once의 _proc 로직과 동일.
        반환: report용 result dict."""
+    _apply_llm(cfg)   # 서버 설정탭의 LLM(제공자·키·모델)을 로컬 config보다 우선 적용
     cid = cand.get("id")
     name = cand.get("board_name") or cand.get("domain") or (cand.get("url", "") or "")[:30]
     # 발행 엔진이 기대하는 site dict를 후보로 구성(_proc와 동일)

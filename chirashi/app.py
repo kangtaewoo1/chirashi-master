@@ -137,7 +137,9 @@ def _record_openai_usage(model, usage, cfg):
     pout=float(cfg.get('openai_output_price_per_million') or 0.60)
     pcache=float(cfg.get('openai_cached_input_price_per_million') or 0.075)
     regular=max(0,inp-cached)
-    estimated=(regular*pin+cached*pcache+out*pout)/1_000_000
+    # OpenRouter는 응답 usage.cost(USD 실비용)를 주므로 있으면 그걸 우선(추정 아님).
+    _uc=(usage or {}).get('cost')
+    estimated=float(_uc) if isinstance(_uc,(int,float)) else (regular*pin+cached*pcache+out*pout)/1_000_000
     rec={'time':datetime.now().astimezone().isoformat(timespec='seconds'),'model':model,
          'input_tokens':inp,'cached_input_tokens':cached,'output_tokens':out,
          'requests':1,'estimated_cost_usd':round(estimated,8)}
@@ -681,6 +683,9 @@ def learn_signup_profile(site,force=False):
 def load_config():
     d={'brand':'인천홍마니','phone':'01082755736','phones':'','openai_key':'','model':'gpt-4o-mini',
        'openai_admin_key':'','openai_monthly_budget_usd':20.0,
+       # ★글 생성 엔진 제공자(대표님 2026-09-11 '비용 아끼고 싶다'): openai(유료) / nvidia(build.nvidia.com 무료 엔드포인트, OpenAI 호환)
+       'llm_provider':'openai','nvidia_api_key':'','nvidia_model':'nvidia/nemotron-3-ultra-550b-a55b',
+       'openrouter_api_key':'','openrouter_model':'deepseek/deepseek-v4-flash-0731',   # openrouter.ai (저가·OpenAI 호환·실비용 응답)
        'openai_input_price_per_million':0.15,'openai_cached_input_price_per_million':0.075,
        'openai_output_price_per_million':0.60,
        'workers':4,'password':'admin1234','post_delay':30,'daily_limit':0,
@@ -1386,8 +1391,17 @@ def generate_post_gpt(keywords, cfg, workroom_id=None):
     r=(keywords.get('지역') or '서울').strip(); s=(keywords.get('서비스') or '셔츠룸').strip()
     b=(keywords.get('브랜드') or cfg.get('brand') or '인천홍마니').strip()
     _rawph=pick_phone(cfg); p=format_phone(_rawph)
-    key=cfg.get('openai_key',''); model=cfg.get('model') or 'gpt-4o-mini'
-    if not key: raise RuntimeError('openai_key 없음')
+    # ★제공자 분기(대표님 2026-09-11): nvidia면 build.nvidia.com 무료 엔드포인트(OpenAI 호환 형식). 비용 $0.
+    _prov=(cfg.get('llm_provider') or 'openai').strip().lower()
+    if _prov=='nvidia':
+        key=(cfg.get('nvidia_api_key') or '').strip(); model=(cfg.get('nvidia_model') or 'nvidia/nemotron-3-ultra-550b-a55b').strip()
+        if not key: raise RuntimeError('nvidia_api_key 없음 — 설정 탭에 NVIDIA 키(nvapi-…) 입력')
+    elif _prov=='openrouter':
+        key=(cfg.get('openrouter_api_key') or '').strip(); model=(cfg.get('openrouter_model') or 'deepseek/deepseek-v4-flash-0731').strip()
+        if not key: raise RuntimeError('openrouter_api_key 없음 — 설정 탭에 OpenRouter 키(sk-or-…) 입력')
+    else:
+        key=cfg.get('openai_key',''); model=cfg.get('model') or 'gpt-4o-mini'
+        if not key: raise RuntimeError('openai_key 없음')
     imgs=pick_images(1,workroom_id=workroom_id)           # 이미지 1개(작업실에 없으면 [] → 이미지 없이)
     c1=c2=random.choice(COLORS)                           # 강조색 하나로 통일(디자인 틀과 동일 색)
     sys_p=("너는 한국어 정보형 랜딩페이지와 지역 안내 글을 작성하는 전문 카피라이터다. "
@@ -1422,11 +1436,25 @@ def generate_post_gpt(keywords, cfg, workroom_id=None):
            f"8. 전화번호나 문의 CTA 박스는 본문에 넣지 않는다(문서 맨 끝에 시스템이 따로 붙인다). "
            f"전화번호 {p}도 본문에 쓰지 않는다.\n"
            f"9. 실제로 주어지지 않은 주소·가격·운영시간·후기·보장 표현은 단정하지 않는다. 매번 문장과 항목 순서를 다르게 한다.")
-    resp=_rq.post("https://api.openai.com/v1/chat/completions",
-        headers={"Authorization":f"Bearer {key}","Content-Type":"application/json"},
-        json={"model":model,"temperature":0.85,"max_tokens":3800,
-              "messages":[{"role":"system","content":sys_p},{"role":"user","content":usr_p}]},
-        timeout=60)
+    _url="https://api.openai.com/v1/chat/completions"; _to=60
+    _hdr={"Authorization":f"Bearer {key}","Content-Type":"application/json","Accept":"application/json"}
+    _body={"model":model,"temperature":0.85,"max_tokens":3800,
+           "messages":[{"role":"system","content":sys_p},{"role":"user","content":usr_p}]}
+    if _prov=='nvidia':
+        _url="https://integrate.api.nvidia.com/v1/chat/completions"; _to=200; _body['max_tokens']=4500   # Ultra 실측 73~136초·output 3800 상한 도달 → 여유
+        _ml=model.lower()   # 사고(thinking) 끔 — 우리는 HTML 본문만 필요, 응답 속도·토큰 절약
+        if 'deepseek' in _ml: _body['chat_template_kwargs']={'thinking':False}
+        elif 'nemotron' in _ml: _body['chat_template_kwargs']={'enable_thinking':False}
+        elif 'kimi' in _ml: _body['reasoning_effort']='low'
+    elif _prov=='openrouter':
+        _url="https://openrouter.ai/api/v1/chat/completions"; _to=120; _body['max_tokens']=4500
+        _hdr['HTTP-Referer']='https://google.twseo.kr'; _hdr['X-Title']='chirashi'   # 선택 헤더(순위표용)
+        _body['reasoning']={'enabled':False}          # 사고 토큰 끔(HTML 본문만 필요)
+        _body['usage']={'include':True}               # 응답 usage에 실제 비용(cost) 포함 → 원장에 실비용 기록
+    resp=_rq.post(_url,headers=_hdr,json=_body,timeout=_to)
+    if _prov in ('nvidia','openrouter') and resp.status_code==429:
+        time.sleep(3); resp=_rq.post(_url,headers=_hdr,json=_body,timeout=_to)   # 분당 한도 — 3초 뒤 1회 재시도
+        if resp.status_code==429: raise RuntimeError(f'{_prov.upper()} 분당 한도(429) — 잠시 후 재개')
     # ★잔액 소진 구분(대표님 2026-09-11 '이거 맞아?' — 잔액 -$1.44인데 로그는 '레이트리밋'): OpenAI는 크레딧 바닥도
     #   429로 주지만 body error.type이 insufficient_quota. 이를 구분 못해 5분마다 헛요청+오해 로그가 찍혔음.
     if resp.status_code==429:
@@ -1436,7 +1464,9 @@ def generate_post_gpt(keywords, cfg, workroom_id=None):
             raise RuntimeError('OpenAI 잔액 소진(insufficient_quota) — platform.openai.com 크레딧 충전 필요')
     resp.raise_for_status()
     payload=resp.json()
-    _record_openai_usage(model,payload.get('usage') or {},cfg)
+    _usage=dict(payload.get('usage') or {})
+    if _prov=='nvidia': _usage['cost']=0.0   # 무료 → 원장 실비용 0 (가격 0을 넘기면 `or 0.15` 기본값에 먹혀 $0.0024로 찍히던 버그 수정)
+    _record_openai_usage(model,_usage,cfg)
     body=payload['choices'][0]['message']['content'].strip()
     if body.startswith('```'): body=re.sub(r'^```[a-zA-Z]*\n?|```$','',body).strip()
     title,_=build_title(r,s,b,cfg,_rawph)
@@ -1476,7 +1506,10 @@ _GPT_SKIP_UNTIL=[0.0]   # time.time()까지 GPT 스킵(429 서킷브레이커)
 def _gen_once(keywords, cfg, workroom_id=None):
     # GPT 429(레이트리밋) 서킷브레이커: 429가 나면 5분간 GPT를 건너뛰고 템플릿 직행.
     #  (매 발행마다 GPT 호출→429 대기→폴백 반복이 발행을 느리게 해 타임아웃 유발 — 대표님 지적)
-    if cfg.get('use_gpt') and cfg.get('openai_key') and time.time() >= _GPT_SKIP_UNTIL[0]:
+    # 제공자별 키 존재 여부로 게이트(nvidia면 nvidia_api_key). 예전엔 openai_key만 봐서 NVIDIA 전용 설정이 조용히 템플릿으로 빠졌음.
+    _pv=(cfg.get('llm_provider') or 'openai').strip().lower()
+    _llm_key=(cfg.get('nvidia_api_key') if _pv=='nvidia' else (cfg.get('openrouter_api_key') if _pv=='openrouter' else cfg.get('openai_key')))
+    if cfg.get('use_gpt') and _llm_key and time.time() >= _GPT_SKIP_UNTIL[0]:
         try:
             return generate_post_gpt(keywords,cfg,workroom_id=workroom_id)
         except Exception as e:
@@ -1486,6 +1519,9 @@ def _gen_once(keywords, cfg, workroom_id=None):
             if '잔액 소진' in _msg or 'insufficient_quota' in _msg:
                 _GPT_SKIP_UNTIL[0]=time.time()+1800   # 30분 스킵 — 충전 전엔 재시도 무의미(헛요청·오해 로그 방지)
                 if _first: add_log('[GPT 잔액소진→30분간 템플릿] OpenAI 크레딧 부족 — platform.openai.com에서 충전해야 GPT 글 재개(그동안 템플릿)')
+            elif '분당 한도(429)' in _msg:
+                _GPT_SKIP_UNTIL[0]=time.time()+60    # 분당 한도는 금방 풀림 → 60초만 템플릿
+                if _first: add_log(f'[{_pv.upper()} 429→60초 템플릿] 분당 요청 한도 — 잠시 후 자동 재개')
             elif '429' in _msg or 'Too Many' in _msg or 'rate limit' in _msg.lower():
                 _GPT_SKIP_UNTIL[0]=time.time()+300   # 5분간 GPT 스킵
                 if _first: add_log('[GPT 429→5분간 템플릿 사용] OpenAI 레이트리밋 — 발행 속도 유지 위해 잠시 GPT 끔')
@@ -6521,6 +6557,17 @@ def _pc_node_alive(within=600):
     except Exception:
         return False
 
+def _llm_for_nodes():
+    """PC 노드가 글 생성에 쓸 LLM 설정(대표님 2026-09-11 '비용 절감'): 서버 설정탭이 3대의 단일 기준.
+       노드는 로컬 config를 쓰므로 서버에서 NVIDIA를 켜도 노드는 옛 OpenAI 키로 가던 빈틈을 메움.
+       Brave 키를 발굴노드에 내려주는 것과 같은 패턴(토큰 인증 응답에만 실림)."""
+    c=load_config()
+    return {'provider':(c.get('llm_provider') or 'openai').strip().lower(),
+            'nvidia_api_key':(c.get('nvidia_api_key') or '').strip(),
+            'nvidia_model':(c.get('nvidia_model') or '').strip(),
+            'openrouter_api_key':(c.get('openrouter_api_key') or '').strip(),
+            'openrouter_model':(c.get('openrouter_model') or '').strip()}
+
 def _has_write_path(c):
     """게시판형(글쓰기 가능성) 후보인지 — auto_pipeline_once와 /api/pipeline/claim 공통 판정(DRY)."""
     if c.get('write_form'): return True
@@ -7929,7 +7976,7 @@ def api_pipeline_claim():
         if picked: save_cands(cands)
     if picked: add_log(f'[PC노드] {node_id} 후보 {len(picked)}곳 claim(가입·발행 위임)','파이프라인')
     _node_beat(node_id, action=(f'후보 {len(picked)}곳 발행 시작' if picked else '대기(후보 없음)'))
-    return jsonify({'ok':True,'candidates':picked,'ttl':ttl})
+    return jsonify({'ok':True,'candidates':picked,'ttl':ttl,'llm':_llm_for_nodes()})
 
 @app.route('/api/pipeline/report',methods=['POST'])
 def api_pipeline_report():
@@ -8015,7 +8062,7 @@ def api_pipeline_claim_sites():
         if picked: save_sites(sites)
     if picked: add_log(f'[PC노드] {node_id} 등록Cafe24 {len(picked)}곳 위임(로컬크롬 로그인발행)','파이프라인')
     if picked: _node_beat(node_id, action=f'Cafe24 {len(picked)}곳 발행 시작')
-    return jsonify({'ok':True,'sites':picked,'ttl':ttl})
+    return jsonify({'ok':True,'sites':picked,'ttl':ttl,'llm':_llm_for_nodes()})
 
 @app.route('/api/pipeline/report-site',methods=['POST'])
 def api_pipeline_report_site():
@@ -9046,7 +9093,7 @@ def api_cfg():
     if request.method=='POST':
         d=request.get_json(silent=True) or {}; cfg=load_config()
         old_search=(cfg.get('discover_keywords',''),cfg.get('discover_direct_queries',''))
-        for k in ['brand','phone','phones','openai_key','openai_admin_key','openai_monthly_budget_usd',
+        for k in ['brand','phone','phones','openai_key','openai_admin_key','llm_provider','nvidia_api_key','nvidia_model','openrouter_api_key','openrouter_model','openai_monthly_budget_usd',
                   'openai_input_price_per_million','openai_cached_input_price_per_million','openai_output_price_per_million',
                   'model','workers','post_delay','daily_limit',
                   'use_gpt','telegram_token','telegram_chat_id','notify_done','notify_fail','update_token',
@@ -9063,7 +9110,7 @@ def api_cfg():
                   'unlocker_enabled','unlocker_api_key','unlocker_zone',
                   'sbr_enabled','sbr_endpoint','sbr_country','signup_fixed_id','signup_fixed_pw']:
             if k in d:
-                if k in ('openai_key','openai_admin_key','telegram_token','google_api_key','brave_api_key','guest_post_password','twocaptcha_api_key','imap_password','proxy_pass','unlocker_api_key','sbr_endpoint','signup_fixed_pw') and d[k]=='***설정됨***': continue  # 마스크 값은 무시(기존 유지)
+                if k in ('openai_key','openai_admin_key','nvidia_api_key','openrouter_api_key','telegram_token','google_api_key','brave_api_key','guest_post_password','twocaptcha_api_key','imap_password','proxy_pass','unlocker_api_key','sbr_endpoint','signup_fixed_pw') and d[k]=='***설정됨***': continue  # 마스크 값은 무시(기존 유지)
                 cfg[k]=d[k]
         if d.get('password'): cfg['password']=generate_password_hash(d['password'])  # 해시 저장
         # 완전 자동화: 필수 키(Brave 발굴 + 2captcha)가 채워지면 발굴·파이프라인을 자동 ON.
@@ -9081,6 +9128,8 @@ def api_cfg():
     c=dict(load_config())
     if c.get('openai_key'): c['openai_key']='***설정됨***'   # 키 노출 방지
     if c.get('openai_admin_key'): c['openai_admin_key']='***설정됨***'
+    if c.get('nvidia_api_key'): c['nvidia_api_key']='***설정됨***'
+    if c.get('openrouter_api_key'): c['openrouter_api_key']='***설정됨***'
     if c.get('telegram_token'): c['telegram_token']='***설정됨***'
     if c.get('google_api_key'): c['google_api_key']='***설정됨***'
     if c.get('brave_api_key'): c['brave_api_key']='***설정됨***'
@@ -10031,6 +10080,13 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 <div style="font-size:10px;color:var(--d);margin-bottom:6px">키워드1을 메인 주제로 인식해 1,800~2,800자 장문을 작성하고, 키워드2·3은 같은 지역의 보조 키워드로만 사용합니다.</div>
 <div style="margin-bottom:6px"><small style="color:var(--d)">OpenAI API 키</small><input type="password" id="cOpenai" placeholder="변경시만 입력 (sk-...)"></div>
 <div style="margin-bottom:6px"><small style="color:var(--d)">모델</small><input id="cModel" value="{{cfg.model}}" placeholder="gpt-4o-mini"></div>
+<div style="margin:8px 0 6px;padding:8px;border:1px solid var(--bd);border-radius:6px"><small style="color:var(--g);font-weight:700">🆓 글 생성 엔진 선택 (비용 절감)</small>
+<div style="margin-top:5px"><small style="color:var(--d)">제공자</small><select id="cLlmProvider"><option value="openai">OpenAI (유료 · 위 키·모델 사용)</option><option value="nvidia">NVIDIA 무료 엔드포인트 (build.nvidia.com)</option><option value="openrouter">OpenRouter (저가 · openrouter.ai)</option></select></div>
+<div style="margin-top:5px"><small style="color:var(--d)">NVIDIA API 키</small><input type="password" id="cNvidiaKey" placeholder="변경시만 입력 (nvapi-...)"></div>
+<div style="margin-top:5px"><small style="color:var(--d)">NVIDIA 모델</small><input id="cNvidiaModel" placeholder="nvidia/nemotron-3-ultra-550b-a55b"></div>
+<div style="margin-top:5px"><small style="color:var(--d)">OpenRouter API 키</small><input type="password" id="cOpenrouterKey" placeholder="변경시만 입력 (sk-or-v1-...)"></div>
+<div style="margin-top:5px"><small style="color:var(--d)">OpenRouter 모델</small><input id="cOpenrouterModel" placeholder="deepseek/deepseek-v4-flash-0731"></div>
+<small style="color:var(--d)">무료 등급은 분당 요청 한도가 있어 한도에 걸리면 60초간 템플릿으로 자동 전환 후 재개</small></div>
 <details style="margin-top:8px;border-top:1px solid var(--bd);padding-top:8px"><summary style="cursor:pointer;color:var(--p);font-size:11px;font-weight:700">사용량·비용 상세 설정</summary>
 <div style="margin-top:7px"><small style="color:var(--d)">조직 관리자 키 (선택 · 실제 Costs API 조회용)</small><input type="password" id="cOpenaiAdmin" placeholder="관리자 키 없으면 로컬 예상비용 사용"></div>
 <div class="row" style="margin-top:6px"><div style="flex:1"><small style="color:var(--d)">월 예산 USD</small><input type="number" id="cOpenaiBudget" min="0" step="0.01" value="20"></div>
@@ -10487,7 +10543,7 @@ function previewPost(){const c=$('gContent').value.trim();if(!c){toast('먼저 �
 function closePreview(){$('pvOverlay').style.display='none';$('pvFrame').srcdoc=''}
 async function delSite(id){if(!confirm('삭제?'))return;await api('/sites','DELETE',{id});renderSites()}
 async function testSite(id){toast('Selenium 테스트 중...');const r=await api('/test/'+id,'POST');if(r&&r.ok)toast('✅ 테스트 성공!'+(r.platform?' ['+(r.platform==='cafe24'?'Cafe24':'그누보드')+']':'')+' '+(r.message||''));else toast('실패: '+(r?.error||r?.message||''),'er')}
-async function saveCfg(){const d={brand:$('cBrand').value.trim(),phone:$('cPhone').value.trim(),phones:$('cPhones').value,video_url:$('cVideoUrl').value.trim(),landing_url:$('cLandingUrl').value.trim(),post_email:$('cPostEmail').value.trim(),workers:parseInt($('cWorkers').value)||2,post_delay:parseInt($('cDelay').value)||0,daily_limit:parseInt($('cDaily').value)||0,use_gpt:$('cUseGpt').checked,model:$('cModel').value.trim()||'gpt-4o-mini',openai_monthly_budget_usd:parseFloat($('cOpenaiBudget').value)||0,openai_input_price_per_million:parseFloat($('cOpenaiInPrice').value)||0,openai_output_price_per_million:parseFloat($('cOpenaiOutPrice').value)||0,telegram_chat_id:$('cTgChat').value.trim(),notify_done:$('cNotifyDone').checked,notify_fail:$('cNotifyFail').checked,backup_time:$('cBackupTime').value.trim(),telegram_control:$('cTgControl').checked,verify_enabled:$('cVerify').checked,mix_keywords:$('cMixKw').checked,block_unpaid:$('cBlockUnpaid').checked,search_provider:'brave',discover_enabled:$('cDiscoOn').checked,discover_daily_target:parseInt($('cDTarget').value)||100,discover_query_limit:parseInt($('cDQuery').value)||100,discover_keywords:'',discover_direct_queries:$('cDDirect').value,excluded_domains:($('cExcludedDomains')?$('cExcludedDomains').value:''),imap_email:($('cImapEmail')?$('cImapEmail').value.trim():''),imap_password:($('cImapPass')&&$('cImapPass').value?$('cImapPass').value:'***설정됨***'),imap_host:($('cImapHost')&&$('cImapHost').value.trim()?$('cImapHost').value.trim():'imap.gmail.com'),twocaptcha_enabled:$('cTwocaptchaEn').checked,brave_price_per_query_usd:parseFloat($('cBravePrice').value)||0,twocaptcha_price_recaptcha_usd:parseFloat($('cCapRePrice').value)||0,twocaptcha_price_image_usd:parseFloat($('cCapImgPrice').value)||0,openai_cached_input_price_per_million:parseFloat($('cOpenaiCachedPrice')?.value)||undefined};
+async function saveCfg(){const d={brand:$('cBrand').value.trim(),phone:$('cPhone').value.trim(),phones:$('cPhones').value,video_url:$('cVideoUrl').value.trim(),landing_url:$('cLandingUrl').value.trim(),post_email:$('cPostEmail').value.trim(),workers:parseInt($('cWorkers').value)||2,post_delay:parseInt($('cDelay').value)||0,daily_limit:parseInt($('cDaily').value)||0,use_gpt:$('cUseGpt').checked,model:$('cModel').value.trim()||'gpt-4o-mini',llm_provider:($('cLlmProvider')?$('cLlmProvider').value:'openai'),nvidia_model:($('cNvidiaModel')?$('cNvidiaModel').value.trim():''),openrouter_model:($('cOpenrouterModel')?$('cOpenrouterModel').value.trim():''),openai_monthly_budget_usd:parseFloat($('cOpenaiBudget').value)||0,openai_input_price_per_million:parseFloat($('cOpenaiInPrice').value)||0,openai_output_price_per_million:parseFloat($('cOpenaiOutPrice').value)||0,telegram_chat_id:$('cTgChat').value.trim(),notify_done:$('cNotifyDone').checked,notify_fail:$('cNotifyFail').checked,backup_time:$('cBackupTime').value.trim(),telegram_control:$('cTgControl').checked,verify_enabled:$('cVerify').checked,mix_keywords:$('cMixKw').checked,block_unpaid:$('cBlockUnpaid').checked,search_provider:'brave',discover_enabled:$('cDiscoOn').checked,discover_daily_target:parseInt($('cDTarget').value)||100,discover_query_limit:parseInt($('cDQuery').value)||100,discover_keywords:'',discover_direct_queries:$('cDDirect').value,excluded_domains:($('cExcludedDomains')?$('cExcludedDomains').value:''),imap_email:($('cImapEmail')?$('cImapEmail').value.trim():''),imap_password:($('cImapPass')&&$('cImapPass').value?$('cImapPass').value:'***설정됨***'),imap_host:($('cImapHost')&&$('cImapHost').value.trim()?$('cImapHost').value.trim():'imap.gmail.com'),twocaptcha_enabled:$('cTwocaptchaEn').checked,brave_price_per_query_usd:parseFloat($('cBravePrice').value)||0,twocaptcha_price_recaptcha_usd:parseFloat($('cCapRePrice').value)||0,twocaptcha_price_image_usd:parseFloat($('cCapImgPrice').value)||0,openai_cached_input_price_per_million:parseFloat($('cOpenaiCachedPrice')?.value)||undefined};
 if(d.openai_cached_input_price_per_million===undefined)delete d.openai_cached_input_price_per_million;
 const bk=$('cBraveKey').value.trim();if(bk)d.brave_api_key=bk;
 // 프록시(Bright Data): 비번은 입력했을 때만 전송(빈칸이면 마스크값으로 기존 유지).
@@ -10502,13 +10558,13 @@ const sep=$('cSbrEp').value.trim();d.sbr_endpoint=(sep?sep:'***설정됨***');
 // 자동가입 고정계정
 d.signup_fixed_id=$('cSignupId').value.trim();
 const spw=$('cSignupPw').value.trim();d.signup_fixed_pw=(spw?spw:'***설정됨***');
-const pw=$('cPw').value.trim();if(pw)d.password=pw;const gp=$('cGuestPw').value.trim();if(gp)d.guest_post_password=gp;const ok=$('cOpenai').value.trim();if(ok)d.openai_key=ok;const oa=$('cOpenaiAdmin').value.trim();if(oa)d.openai_admin_key=oa;const tg=$('cTgTok').value.trim();if(tg)d.telegram_token=tg;const tc=$('cTwocaptchaKey').value.trim();if(tc)d.twocaptcha_api_key=tc;const r=await api('/config','POST',d);if(r&&r.ok){toast('저장 완료');$('cPw').value='';$('cGuestPw').value='';$('cOpenai').value='';$('cOpenaiAdmin').value='';$('cTgTok').value='';$('cTwocaptchaKey').value='';$('cProxyPass').value='';$('cUnlockerKey').value='';$('cSbrEp').value='';$('cSignupPw').value='';loadOpenAIUsage()}}
+const pw=$('cPw').value.trim();if(pw)d.password=pw;const gp=$('cGuestPw').value.trim();if(gp)d.guest_post_password=gp;const ok=$('cOpenai').value.trim();if(ok)d.openai_key=ok;const oa=$('cOpenaiAdmin').value.trim();if(oa)d.openai_admin_key=oa;const nk=($('cNvidiaKey')?$('cNvidiaKey').value.trim():'');if(nk)d.nvidia_api_key=nk;const ork=($('cOpenrouterKey')?$('cOpenrouterKey').value.trim():'');if(ork)d.openrouter_api_key=ork;const tg=$('cTgTok').value.trim();if(tg)d.telegram_token=tg;const tc=$('cTwocaptchaKey').value.trim();if(tc)d.twocaptcha_api_key=tc;const r=await api('/config','POST',d);if(r&&r.ok){toast('저장 완료');$('cPw').value='';$('cGuestPw').value='';$('cOpenai').value='';$('cOpenaiAdmin').value='';if($('cNvidiaKey'))$('cNvidiaKey').value='';if($('cOpenrouterKey'))$('cOpenrouterKey').value='';$('cTgTok').value='';$('cTwocaptchaKey').value='';$('cProxyPass').value='';$('cUnlockerKey').value='';$('cSbrEp').value='';$('cSignupPw').value='';loadOpenAIUsage()}}
 async function loadCfgUI(){const c=await api('/config','GET');if(!c)return;$('cVideoUrl').value=c.video_url||'';$('cLandingUrl').value=c.landing_url||'';$('cPostEmail').value=c.post_email||'';$('cGuestPw').placeholder=(c.guest_post_password==='***설정됨***')?'설정됨 · 변경시에만 입력':'변경시에만 입력';$('cUseGpt').checked=!!c.use_gpt;$('cNotifyDone').checked=!!c.notify_done;$('cNotifyFail').checked=!!c.notify_fail;$('cTgControl').checked=!!c.telegram_control;$('cVerify').checked=(c.verify_enabled!==false);$('cMixKw').checked=(c.mix_keywords!==false);$('cBlockUnpaid').checked=(c.block_unpaid!==false);$('cDiscoOn').checked=!!c.discover_enabled;if(c.discover_daily_target)$('cDTarget').value=c.discover_daily_target;if(c.discover_query_limit)$('cDQuery').value=c.discover_query_limit;if(typeof c.discover_direct_queries==='string')$('cDDirect').value=c.discover_direct_queries;if($('cExcludedDomains')&&typeof c.excluded_domains==='string')$('cExcludedDomains').value=c.excluded_domains;if($('cImapEmail'))$('cImapEmail').value=c.imap_email||'';if($('cImapHost'))$('cImapHost').value=c.imap_host||'imap.gmail.com';if($('cImapPass'))$('cImapPass').placeholder=(c.imap_password==='***설정됨***')?'설정됨 · 변경시만 입력':'앱 비밀번호 16자리 (변경시만)';$('cBraveKey').placeholder=(c.brave_api_key==='***설정됨***')?'설정됨 · 변경시에만 입력':'Brave API 키 입력';
 if($('cProxyEn')){$('cProxyEn').checked=!!c.proxy_enabled;$('cProxyHost').value=c.proxy_host||'';$('cProxyPort').value=c.proxy_port||'';$('cProxyUser').value=c.proxy_user||'';$('cProxyCfOnly').checked=(c.proxy_only_for_cf!==false);$('cProxyPass').placeholder=(c.proxy_pass==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';}
 if($('cUnlockerEn')){$('cUnlockerEn').checked=!!c.unlocker_enabled;$('cUnlockerZone').value=c.unlocker_zone||'web_unlocker1';$('cUnlockerKey').placeholder=(c.unlocker_api_key==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';}
 if($('cSbrEn')){$('cSbrEn').checked=!!c.sbr_enabled;$('cSbrEp').placeholder=(c.sbr_endpoint==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';}
 if($('cSignupId')){$('cSignupId').value=c.signup_fixed_id||'';$('cSignupPw').placeholder=(c.signup_fixed_pw==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';}
-if(c.backup_time)$('cBackupTime').value=c.backup_time;if(c.model)$('cModel').value=c.model;if(c.telegram_chat_id)$('cTgChat').value=c.telegram_chat_id;if(typeof c.phones==='string')$('cPhones').value=c.phones;$('cOpenai').placeholder=(c.openai_key==='***설정됨***')?'설정됨 · 변경시만 입력':'sk-... (변경시만)';$('cOpenaiAdmin').placeholder=(c.openai_admin_key==='***설정됨***')?'관리자 키 설정됨 · 변경시만 입력':'관리자 키 없으면 로컬 예상비용 사용';$('cOpenaiBudget').value=c.openai_monthly_budget_usd==null?20:c.openai_monthly_budget_usd;$('cOpenaiInPrice').value=c.openai_input_price_per_million==null?0.15:c.openai_input_price_per_million;$('cOpenaiOutPrice').value=c.openai_output_price_per_million==null?0.60:c.openai_output_price_per_million;$('cTgTok').placeholder=(c.telegram_token==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';$('cTwocaptchaEn').checked=!!c.twocaptcha_enabled;$('cTwocaptchaKey').placeholder=(c.twocaptcha_api_key==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';if(c.brave_price_per_query_usd!=null)$('cBravePrice').value=c.brave_price_per_query_usd;if(c.twocaptcha_price_recaptcha_usd!=null)$('cCapRePrice').value=c.twocaptcha_price_recaptcha_usd;if(c.twocaptcha_price_image_usd!=null)$('cCapImgPrice').value=c.twocaptcha_price_image_usd;loadOpenAIUsage();api('/rejected-domains','GET').then(r=>{if(r&&r.ok&&$('rejCount'))$('rejCount').textContent=r.count})}
+if(c.backup_time)$('cBackupTime').value=c.backup_time;if(c.model)$('cModel').value=c.model;if($('cLlmProvider'))$('cLlmProvider').value=c.llm_provider||'openai';if($('cNvidiaModel'))$('cNvidiaModel').value=c.nvidia_model||'';if($('cNvidiaKey'))$('cNvidiaKey').placeholder=(c.nvidia_api_key==='***설정됨***')?'설정됨 · 변경시만 입력':'nvapi-... (변경시만)';if($('cOpenrouterModel'))$('cOpenrouterModel').value=c.openrouter_model||'';if($('cOpenrouterKey'))$('cOpenrouterKey').placeholder=(c.openrouter_api_key==='***설정됨***')?'설정됨 · 변경시만 입력':'sk-or-v1-... (변경시만)';if(c.telegram_chat_id)$('cTgChat').value=c.telegram_chat_id;if(typeof c.phones==='string')$('cPhones').value=c.phones;$('cOpenai').placeholder=(c.openai_key==='***설정됨***')?'설정됨 · 변경시만 입력':'sk-... (변경시만)';$('cOpenaiAdmin').placeholder=(c.openai_admin_key==='***설정됨***')?'관리자 키 설정됨 · 변경시만 입력':'관리자 키 없으면 로컬 예상비용 사용';$('cOpenaiBudget').value=c.openai_monthly_budget_usd==null?20:c.openai_monthly_budget_usd;$('cOpenaiInPrice').value=c.openai_input_price_per_million==null?0.15:c.openai_input_price_per_million;$('cOpenaiOutPrice').value=c.openai_output_price_per_million==null?0.60:c.openai_output_price_per_million;$('cTgTok').placeholder=(c.telegram_token==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';$('cTwocaptchaEn').checked=!!c.twocaptcha_enabled;$('cTwocaptchaKey').placeholder=(c.twocaptcha_api_key==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';if(c.brave_price_per_query_usd!=null)$('cBravePrice').value=c.brave_price_per_query_usd;if(c.twocaptcha_price_recaptcha_usd!=null)$('cCapRePrice').value=c.twocaptcha_price_recaptcha_usd;if(c.twocaptcha_price_image_usd!=null)$('cCapImgPrice').value=c.twocaptcha_price_image_usd;loadOpenAIUsage();api('/rejected-domains','GET').then(r=>{if(r&&r.ok&&$('rejCount'))$('rejCount').textContent=r.count})}
 async function showRejected(){const box=$('rejList');if(!box)return;if(box.style.display!=='none'){box.style.display='none';return}box.style.display='block';box.innerHTML='불러오는 중…';const r=await api('/rejected-domains','GET');if(!r||!r.ok){box.innerHTML='조회 실패';return}if($('rejCount'))$('rejCount').textContent=r.count;const logmap={};(r.log||[]).forEach(x=>{if(!logmap[x.domain])logmap[x.domain]=x.reason||''});box.innerHTML='<div style="color:var(--r);margin-bottom:6px">총 '+r.count+'개 · 발굴 자동 제외됨 (재활성화하려면 옆 ↺ 클릭)</div>'+(r.domains||[]).map(d=>'<div style="display:flex;justify-content:space-between;gap:8px;padding:2px 0;border-bottom:1px solid #17202e"><span><b style="color:var(--t)">'+esc(d)+'</b> <span style="color:var(--d)">'+esc((logmap[d]||'').slice(0,30))+'</span></span><span style="cursor:pointer;color:var(--g)" title="재활성화(제외 해제)" onclick="unrejectDomain(\''+esc(d)+'\')">↺</span></div>').join('')}
 async function unrejectDomain(dom){if(!confirm(dom+' 을(를) 자동 탈락에서 해제할까요? (다시 발굴 대상이 됩니다)'))return;const r=await api('/rejected-domains','POST',{remove:dom});if(r&&r.ok){toast('해제됨 · '+dom,'ok');showRejected();showRejected()}else toast('실패','er')}
 async function loadOpenAIUsage(){
