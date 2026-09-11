@@ -7587,7 +7587,7 @@ def chk():
     #  /api/test/* = 발행 테스트 트리거(등록 사이트에 실제 글1건 발행해 검증).
     _p=request.path
     if _p=='/api/version': return  # 배포 SHA 확인 — 공개(민감정보 없음)
-    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/openai/usage','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/report-site','/api/unlocker/test','/api/sbr/test') or _p.startswith('/api/test/'):
+    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/openai/usage','/api/config/clear-key','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/report-site','/api/unlocker/test','/api/sbr/test') or _p.startswith('/api/test/'):
         tok=(request.args.get('token') or '').strip()
         cfgtok=(load_config().get('log_token') or '').strip()
         if cfgtok and tok==cfgtok:
@@ -9101,6 +9101,18 @@ def api_history_export():
         return Response(data,mimetype='text/csv',
                         headers={'Content-Disposition':'attachment; filename=chirashi_history.csv'})
 
+@app.route('/api/config/clear-key',methods=['POST'])
+def api_cfg_clear_key():
+    """LLM 키를 서버에서 비움. 설정 UI는 '빈 칸=기존 유지'라 키를 지울 방법이 없었음
+       (대표님 2026-09-11 OpenAI 키 revoke 후 '서버에 남은 키도 지워줘'). 값은 절대 응답에 안 실음."""
+    d=request.get_json(silent=True) or {}
+    k=str(d.get('key') or '').strip()
+    if k not in ('openai_key','openai_admin_key','nvidia_api_key','openrouter_api_key'):
+        return jsonify({'ok':False,'error':'허용되지 않은 키'}),400
+    cfg=load_config(); was=bool((cfg.get(k) or '').strip()); cfg[k]=''; save_config(cfg)
+    add_log(f'[설정] {k} 서버에서 삭제(비움)')
+    return jsonify({'ok':True,'key':k,'was_set':was})
+
 @app.route('/api/config',methods=['GET','POST'])
 def api_cfg():
     if request.method=='POST':
@@ -10098,18 +10110,18 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 <div class="card"><h3>GPT 본문 생성</h3>
 <label style="display:flex;align-items:center;gap:6px;color:var(--g);font-size:12px;margin-bottom:6px"><input type="checkbox" id="cUseGpt" style="width:auto">AI로 본문 생성 — 아래 선택한 엔진 사용(끄면 템플릿만)</label>
 <div style="font-size:10px;color:var(--d);margin-bottom:6px">키워드1을 메인 주제로 인식해 1,800~2,800자 장문을 작성하고, 키워드2·3은 같은 지역의 보조 키워드로만 사용합니다.</div>
-<div style="margin-bottom:6px"><small style="color:var(--d)">OpenAI API 키</small><input type="password" id="cOpenai" placeholder="변경시만 입력 (sk-...)"></div>
+<div style="margin-bottom:6px"><small style="color:var(--d)">OpenAI API 키 <a href="#" onclick="clearKey('openai_key');return false" style="color:var(--r);margin-left:6px">🗑 서버에서 삭제</a></small><input type="password" id="cOpenai" placeholder="변경시만 입력 (sk-...)"></div>
 <div style="margin-bottom:6px"><small style="color:var(--d)">모델</small><input id="cModel" value="{{cfg.model}}" placeholder="gpt-4o-mini"></div>
 <div style="margin:8px 0 6px;padding:8px;border:1px solid var(--bd);border-radius:6px"><small style="color:var(--g);font-weight:700">🆓 글 생성 엔진 선택 (비용 절감)</small>
 <div style="margin-top:5px"><small style="color:var(--d)">제공자</small><select id="cLlmProvider"><option value="openai">OpenAI (유료 · 위 키·모델 사용)</option><option value="nvidia">NVIDIA 무료 엔드포인트 (build.nvidia.com)</option><option value="openrouter">OpenRouter (저가 · openrouter.ai)</option></select></div>
-<div style="margin-top:5px"><small style="color:var(--d)">NVIDIA API 키</small><input type="password" id="cNvidiaKey" placeholder="변경시만 입력 (nvapi-...)"></div>
+<div style="margin-top:5px"><small style="color:var(--d)">NVIDIA API 키 <a href="#" onclick="clearKey('nvidia_api_key');return false" style="color:var(--r);margin-left:6px">🗑 서버에서 삭제</a></small><input type="password" id="cNvidiaKey" placeholder="변경시만 입력 (nvapi-...)"></div>
 <div style="margin-top:5px"><small style="color:var(--d)">NVIDIA 모델</small><input id="cNvidiaModel" placeholder="nvidia/nemotron-3-ultra-550b-a55b"></div>
-<div style="margin-top:5px"><small style="color:var(--d)">OpenRouter API 키</small><input type="password" id="cOpenrouterKey" placeholder="변경시만 입력 (sk-or-v1-...)"></div>
+<div style="margin-top:5px"><small style="color:var(--d)">OpenRouter API 키 <a href="#" onclick="clearKey('openrouter_api_key');return false" style="color:var(--r);margin-left:6px">🗑 서버에서 삭제</a></small><input type="password" id="cOpenrouterKey" placeholder="변경시만 입력 (sk-or-v1-...)"></div>
 <div style="margin-top:5px"><small style="color:var(--d)">OpenRouter 모델</small><input id="cOpenrouterModel" placeholder="deepseek/deepseek-v4-flash-0731"></div>
 <div style="margin-top:6px"><button class="btn btn-g btn-xs" onclick="window.open('https://openrouter.ai','_blank')">OpenRouter 사이트 바로가기 ↗</button></div>
 <small style="color:var(--d)">무료 등급은 분당 요청 한도가 있어 한도에 걸리면 60초간 템플릿으로 자동 전환 후 재개</small></div>
 <details style="margin-top:8px;border-top:1px solid var(--bd);padding-top:8px"><summary style="cursor:pointer;color:var(--p);font-size:11px;font-weight:700">사용량·비용 상세 설정</summary>
-<div style="margin-top:7px"><small style="color:var(--d)">조직 관리자 키 (선택 · 실제 Costs API 조회용)</small><input type="password" id="cOpenaiAdmin" placeholder="관리자 키 없으면 로컬 예상비용 사용"></div>
+<div style="margin-top:7px"><small style="color:var(--d)">조직 관리자 키 (선택 · 실제 Costs API 조회용) <a href="#" onclick="clearKey('openai_admin_key');return false" style="color:var(--r);margin-left:6px">🗑 서버에서 삭제</a></small><input type="password" id="cOpenaiAdmin" placeholder="관리자 키 없으면 로컬 예상비용 사용"></div>
 <div class="row" style="margin-top:6px"><div style="flex:1"><small style="color:var(--d)">월 예산 USD</small><input type="number" id="cOpenaiBudget" min="0" step="0.01" value="20"></div>
 <div style="flex:1"><small style="color:var(--d)">입력 $/1M</small><input type="number" id="cOpenaiInPrice" min="0" step="0.001" value="0.15"></div>
 <div style="flex:1"><small style="color:var(--d)">출력 $/1M</small><input type="number" id="cOpenaiOutPrice" min="0" step="0.001" value="0.60"></div></div></details>
@@ -10587,6 +10599,7 @@ if($('cSbrEn')){$('cSbrEn').checked=!!c.sbr_enabled;$('cSbrEp').placeholder=(c.s
 if($('cSignupId')){$('cSignupId').value=c.signup_fixed_id||'';$('cSignupPw').placeholder=(c.signup_fixed_pw==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';}
 if(c.backup_time)$('cBackupTime').value=c.backup_time;if(c.model)$('cModel').value=c.model;if($('cLlmProvider'))$('cLlmProvider').value=c.llm_provider||'openai';if($('cNvidiaModel'))$('cNvidiaModel').value=c.nvidia_model||'';if($('cNvidiaKey'))$('cNvidiaKey').placeholder=(c.nvidia_api_key==='***설정됨***')?'설정됨 · 변경시만 입력':'nvapi-... (변경시만)';if($('cOpenrouterModel'))$('cOpenrouterModel').value=c.openrouter_model||'';if($('cOpenrouterKey'))$('cOpenrouterKey').placeholder=(c.openrouter_api_key==='***설정됨***')?'설정됨 · 변경시만 입력':'sk-or-v1-... (변경시만)';if(c.telegram_chat_id)$('cTgChat').value=c.telegram_chat_id;if(typeof c.phones==='string')$('cPhones').value=c.phones;$('cOpenai').placeholder=(c.openai_key==='***설정됨***')?'설정됨 · 변경시만 입력':'sk-... (변경시만)';$('cOpenaiAdmin').placeholder=(c.openai_admin_key==='***설정됨***')?'관리자 키 설정됨 · 변경시만 입력':'관리자 키 없으면 로컬 예상비용 사용';$('cOpenaiBudget').value=c.openai_monthly_budget_usd==null?20:c.openai_monthly_budget_usd;$('cOpenaiInPrice').value=c.openai_input_price_per_million==null?0.15:c.openai_input_price_per_million;$('cOpenaiOutPrice').value=c.openai_output_price_per_million==null?0.60:c.openai_output_price_per_million;$('cTgTok').placeholder=(c.telegram_token==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';$('cTwocaptchaEn').checked=!!c.twocaptcha_enabled;$('cTwocaptchaKey').placeholder=(c.twocaptcha_api_key==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';if(c.brave_price_per_query_usd!=null)$('cBravePrice').value=c.brave_price_per_query_usd;if(c.twocaptcha_price_recaptcha_usd!=null)$('cCapRePrice').value=c.twocaptcha_price_recaptcha_usd;if(c.twocaptcha_price_image_usd!=null)$('cCapImgPrice').value=c.twocaptcha_price_image_usd;loadOpenAIUsage();api('/rejected-domains','GET').then(r=>{if(r&&r.ok&&$('rejCount'))$('rejCount').textContent=r.count})}
 async function showRejected(){const box=$('rejList');if(!box)return;if(box.style.display!=='none'){box.style.display='none';return}box.style.display='block';box.innerHTML='불러오는 중…';const r=await api('/rejected-domains','GET');if(!r||!r.ok){box.innerHTML='조회 실패';return}if($('rejCount'))$('rejCount').textContent=r.count;const logmap={};(r.log||[]).forEach(x=>{if(!logmap[x.domain])logmap[x.domain]=x.reason||''});box.innerHTML='<div style="color:var(--r);margin-bottom:6px">총 '+r.count+'개 · 발굴 자동 제외됨 (재활성화하려면 옆 ↺ 클릭)</div>'+(r.domains||[]).map(d=>'<div style="display:flex;justify-content:space-between;gap:8px;padding:2px 0;border-bottom:1px solid #17202e"><span><b style="color:var(--t)">'+esc(d)+'</b> <span style="color:var(--d)">'+esc((logmap[d]||'').slice(0,30))+'</span></span><span style="cursor:pointer;color:var(--g)" title="재활성화(제외 해제)" onclick="unrejectDomain(\''+esc(d)+'\')">↺</span></div>').join('')}
+async function clearKey(k){if(!confirm(k+' 를 서버에서 지울까요? (그 엔진은 키를 다시 넣기 전까지 못 씁니다)'))return;const r=await api('/config/clear-key','POST',{key:k});if(r&&r.ok){toast((r.was_set?'삭제됨':'이미 비어 있음')+' · '+k,'ok');loadCfgUI()}else toast('실패','er')}
 async function unrejectDomain(dom){if(!confirm(dom+' 을(를) 자동 탈락에서 해제할까요? (다시 발굴 대상이 됩니다)'))return;const r=await api('/rejected-domains','POST',{remove:dom});if(r&&r.ok){toast('해제됨 · '+dom,'ok');showRejected();showRejected()}else toast('실패','er')}
 async function loadOpenAIUsage(){
   const r=await api('/openai/usage','GET');
