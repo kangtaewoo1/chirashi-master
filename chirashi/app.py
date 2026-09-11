@@ -6387,12 +6387,9 @@ def auto_signup(site, submit=True):
     mid,pw=_signup_credentials(site,profile.get('rules'))
     # 이메일 인증이 필요한 게시판이면 임시메일(mail.tm)로 실제 수신 가능한 주소를 쓴다.
     need_email_verify=bool(profile.get('email_verification_required'))
-    # ★cafe24 이메일 인증은 임시메일(mail.tm) 전환율 0 + 인증대기가 노드를 멎게 함(2026-09-12 실측: 07:19 이후 12분 hang).
-    #   IMAP(지메일) 미설정이면 cafe24 인증 사이트는 즉시 포기 → 노드가 무인증 사이트로 바로 넘어감(헛대기 제거).
-    if need_email_verify and site.get('platform')=='cafe24':
-        _imap_set=bool((cfg.get('imap_email') or '').strip() and (cfg.get('imap_password') or '').strip())
-        if not _imap_set:
-            return False,'이메일 인증 필요 cafe24 — IMAP(지메일) 미설정이라 자동가입 불가(임시메일 전환율 0, 헛대기 방지)'
+    # ★이메일 인증 임시메일로 시도(2026-09-12): 이전 '12분 hang'의 진짜 원인은 urllib.request 미임포트로 tempmail이
+    #   예외를 던진 것 — 고쳐서 mail.tm 정상 발급됨. 이제 IMAP 없어도 임시메일(mail.tm)로 인증링크를 받아 시도한다.
+    #   인증 대기는 60초 타임아웃 + 전체 auto_signup_guarded 220초로 이중 보호 → hang 없음. 안 오면 실패로 넘어감.
     tm_addr=tm_pw=tm_token=None
     if need_email_verify:
         tm_addr,tm_pw,tm_token=tempmail_create()
@@ -8228,8 +8225,7 @@ def api_revive_cafe24():
             if limit and revived>=limit: continue
             if c.get('platform')!='cafe24' or c.get('status')!='rejected': continue
             if c.get('illegal') or c.get('parked') or c.get('ad_banned'): continue
-            # 이메일 인증 필수 cafe24는 IMAP 미설정이면 복원해도 즉시 포기 → 헛도니 제외(2026-09-12)
-            if c.get('signup_email_verify') and not _imap_set: continue
+            # 이메일 인증 cafe24도 이제 임시메일(mail.tm)로 시도(2026-09-12 urllib버그 수정 후 tempmail 정상) → 제외 안 함
             rr=str(c.get('reject_reason') or '').lower()
             if any(k in rr for k in _skip_hit): continue          # 안 될 사유 제외
             if rr and not any(k in rr for k in _revive_hit): continue  # 되살릴 사유만(빈 사유는 스킵)
@@ -8405,23 +8401,29 @@ def api_pipeline_claim():
         for c in cands:
             if c.get('claimed_by') and float(c.get('claim_expire',0) or 0) <= now:
                 c['claimed_by']=''; c['claim_expire']=0
+        # ★이메일 인증(signup_email_verify)은 이제 임시메일(mail.tm)로 시도 가능(2026-09-12 urllib버그 수정)→ claim 허용.
+        #   휴대폰 본인인증(signup_phone_cert)만 자동 불가라 제외 유지.
+        #   ★수동 추가(source='manual')는 쿨다운(_cool) 면제 — 대표님이 넣자마자 즉시 처리.
         elig=[c for c in cands
               if c.get('screened') and c.get('status') in ('ready','approved')
               and not c.get('parked') and not c.get('illegal') and not c.get('ad_banned')
               and (c.get('domain') or '').lower() not in site_domains
               and c.get('reachable') and _has_write_path(c)
               and not _claim_active(c)
-              and not (c.get('signup_email_verify') or c.get('signup_phone_cert'))  # 인증벽은 자동가입 불가 → 제외
+              and not c.get('signup_phone_cert')   # 휴대폰 본인인증만 제외(이메일 인증은 임시메일로 시도)
               and not (c.get('platform')=='cafe24' and _ver<2)   # 옛 노드(ver<2)엔 cafe24 안 줌(위 주석)
-              and float(c.get('last_pipeline_at',0) or 0) < _cool]
+              and (c.get('source')=='manual' or float(c.get('last_pipeline_at',0) or 0) < _cool)]
         # 비회원(바로발행) 우선 → 그다음 로그인. (서버 파이프라인과 동일한 우선순위 감각)
         def _prio(c):
+            # ★수동 추가(source='manual') 최우선(2026-09-12 대표님 '내가 링크 주면 우선순위로 올려서'): 대표님이 직접 넣은
+            #   URL은 다른 무엇보다 먼저 claim해 노드가 즉시 처리. 스크린샷 '수동 URL은 최우선 처리'와 일치.
+            manual=1 if (c.get('source')=='manual') else 0
             is24=c.get('platform')=='cafe24'   # ★PC만 할 수 있는 cafe24를 최우선(서버는 이제 안 건드림)
             direct=c.get('write_form') and not c.get('login_required')
             # ★게시판 유형 우선순위(2026-09-12 대표님 '다른 카페24로'): 상품Q&A는 승인/상품연결/스팸필터로 글이 안 남는
             #   경우가 많아 뒤로 미루고, 자유게시판·후기·공지형(비회원 바로쓰기 잘 됨)을 먼저 태운다.
             board_ok=1 if (is24 and not _cafe24_is_qa_board(c.get('url'))) else 0
-            return (1 if is24 else 0, board_ok, 1 if direct else 0, 1 if not c.get('captcha') else 0, c.get('score',0))
+            return (manual, 1 if is24 else 0, board_ok, 1 if direct else 0, 1 if not c.get('captcha') else 0, c.get('score',0))
         elig.sort(key=_prio,reverse=True)
         for c in elig[:n]:
             c['claimed_by']=node_id; c['claim_expire']=now+ttl
