@@ -7915,7 +7915,7 @@ def chk():
     #  /api/test/* = 발행 테스트 트리거(등록 사이트에 실제 글1건 발행해 검증).
     _p=request.path
     if _p=='/api/version': return  # 배포 SHA 확인 — 공개(민감정보 없음)
-    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/sites/unlock-cafe24','/api/sites/purge-fake-cafe24','/api/candidates/rescreen-cafe24','/api/openai/usage','/api/config/clear-key','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/report-site','/api/unlocker/test','/api/sbr/test') or _p.startswith('/api/test/'):
+    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/sites/unlock-cafe24','/api/sites/purge-fake-cafe24','/api/candidates/rescreen-cafe24','/api/imap/test','/api/openai/usage','/api/config/clear-key','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/report-site','/api/unlocker/test','/api/sbr/test') or _p.startswith('/api/test/'):
         tok=(request.args.get('token') or '').strip()
         cfgtok=(load_config().get('log_token') or '').strip()
         if cfgtok and tok==cfgtok:
@@ -9679,6 +9679,30 @@ def api_cfg():
     if c.get('signup_fixed_pw'): c['signup_fixed_pw']='***설정됨***'   # 자동가입 고정비번 노출 방지
     c.pop('password',None)
     return jsonify(c)
+
+@app.route('/api/imap/test',methods=['GET','POST'])
+def api_imap_test():
+    """저장된 IMAP(지메일 앱비번)으로 실제 접속되는지 진단(토큰 접근). 비밀번호는 응답에 안 실음.
+       반환: {ok, email, host, connected, inbox_count, error?}. cafe24 이메일인증이 열리는지 확인 전 단계."""
+    cfg=load_config()
+    em=(cfg.get('imap_email') or '').strip(); pw=(cfg.get('imap_password') or '').strip()
+    host=(cfg.get('imap_host') or 'imap.gmail.com').strip()
+    if not em or not pw:
+        return jsonify({'ok':False,'error':'IMAP 미설정(설정 탭에 지메일+앱비번 입력 후 저장 필요)'})
+    import imaplib
+    try:
+        M=imaplib.IMAP4_SSL(host,timeout=20); M.login(em,pw); M.select('INBOX')
+        typ,data=M.search(None,'ALL'); cnt=len(data[0].split()) if (data and data[0]) else 0
+        try: M.logout()
+        except Exception: pass
+        return jsonify({'ok':True,'email':em,'host':host,'connected':True,'inbox_count':cnt,
+                        'note':'IMAP 접속 성공 — cafe24 이메일인증 자동처리 가능'})
+    except imaplib.IMAP4.error as e:
+        _m=str(e)
+        _hint=('앱 비밀번호가 틀렸거나(공백 포함?) 2단계인증 미설정 · 개인@gmail.com이어야 함' if 'AUTHENTICATIONFAILED' in _m.upper() or 'Invalid' in _m else '')
+        return jsonify({'ok':False,'connected':False,'error':f'로그인 실패: {_m[:120]}','hint':_hint})
+    except Exception as e:
+        return jsonify({'ok':False,'connected':False,'error':f'접속 오류: {str(e)[:120]}'})
 
 @app.route('/api/unlocker/test',methods=['GET','POST'])
 def api_unlocker_test():
