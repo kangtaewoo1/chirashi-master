@@ -197,11 +197,21 @@ def _local_openai_usage_summary(cfg):
         b['output_tokens']+=int(x.get('output_tokens',0) or 0); b['estimated_cost_usd']=round(b['estimated_cost_usd']+float(x.get('estimated_cost_usd',0) or 0),6)
     series=_time_series(rows,'estimated_cost_usd')
     # 현재 엔진/키 유무(값 아님) — 제공자 전환 후 "AI가 도는지" 관제실·토큰API에서 바로 확인용(2026-09-11 OpenRouter 전환 직후 원장 0건 진단)
-    _pv=(cfg.get('llm_provider') or 'openai').strip().lower()
+    _pv=(cfg.get('llm_provider') or 'openrouter').strip().lower()
     _pk=(cfg.get('nvidia_api_key') if _pv=='nvidia' else (cfg.get('openrouter_api_key') if _pv=='openrouter' else cfg.get('openai_key')))
-    _pm=(cfg.get('nvidia_model') if _pv=='nvidia' else (cfg.get('openrouter_model') if _pv=='openrouter' else cfg.get('model')))
+    # 모델명은 generate_post_gpt가 원장에 기록하는 것과 같은 기본값·strip을 적용해야 '현재 엔진' 집계가 어긋나지 않음(검토 지적)
+    _pm=(((cfg.get('nvidia_model') or 'nvidia/nemotron-3-ultra-550b-a55b') if _pv=='nvidia'
+          else ((cfg.get('openrouter_model') or 'deepseek/deepseek-v4-flash-0731') if _pv=='openrouter' else (cfg.get('model') or 'gpt-4o-mini')))).strip()
+    # ★현재 엔진(모델)만 따로 집계(대표님 2026-09-11 'OpenAI 화면에서 제거·실측으로'): OpenRouter는 응답 usage.cost 실비용,
+    #   NVIDIA는 무료($0)라 둘 다 '실측'. 과거 gpt-4o-mini 행은 토큰 추정치라 by_model 표에서만 '추정·종료'로 보임.
+    cur_rows=[x for x in rows if str(x.get('model') or '')==str(_pm or '')]
+    cm=agg([x for x in cur_rows if str(x.get('time','')).startswith(month)]); ct=agg([x for x in cur_rows if str(x.get('time','')).startswith(today)])
+    cur_series=_time_series(cur_rows,'estimated_cost_usd')
+    current={'model':_pm,'provider':_pv,'measured':_pv in ('openrouter','nvidia'),
+             'month':cm,'today':ct,'per_call_usd':round(cm['estimated_cost_usd']/cm['requests'],6) if cm['requests'] else 0.0,
+             'daily':cur_series['daily'],'hourly':cur_series['hourly']}
     return {'source':'local_estimate','month':m,'today':t,'monthly_budget_usd':budget,'by_model':bym,'model_setting':cfg.get('model'),
-            'llm_provider':_pv,'llm_model':_pm,'llm_key_set':bool((_pk or '').strip()),'use_gpt':bool(cfg.get('use_gpt')),
+            'llm_provider':_pv,'llm_model':_pm,'llm_key_set':bool((_pk or '').strip()),'use_gpt':bool(cfg.get('use_gpt')),'current':current,
             'remaining_budget_usd':round(max(0,budget-m['estimated_cost_usd']),6) if budget>0 else None,
             'per_call_usd':per_call,'daily':series['daily'],'hourly':series['hourly'],
             'unit_price':{'input_per_million':float(cfg.get('openai_input_price_per_million') or 0.15),
@@ -689,7 +699,7 @@ def load_config():
     d={'brand':'인천홍마니','phone':'01082755736','phones':'','openai_key':'','model':'gpt-4o-mini',
        'openai_admin_key':'','openai_monthly_budget_usd':20.0,
        # ★글 생성 엔진 제공자(대표님 2026-09-11 '비용 아끼고 싶다'): openai(유료) / nvidia(build.nvidia.com 무료 엔드포인트, OpenAI 호환)
-       'llm_provider':'openai','nvidia_api_key':'','nvidia_model':'nvidia/nemotron-3-ultra-550b-a55b',
+       'llm_provider':'openrouter','nvidia_api_key':'','nvidia_model':'nvidia/nemotron-3-ultra-550b-a55b',
        'openrouter_api_key':'','openrouter_model':'deepseek/deepseek-v4-flash-0731',   # openrouter.ai (저가·OpenAI 호환·실비용 응답)
        'openai_input_price_per_million':0.15,'openai_cached_input_price_per_million':0.075,
        'openai_output_price_per_million':0.60,
@@ -750,6 +760,8 @@ def load_config():
     if c is None or not isinstance(c,dict): save_json(CONFIG_FILE,d); return d.copy()
     for k,v in d.items():
         if k not in c: c[k]=v
+    # OpenAI 퇴출(2026-09-11): 구버전 config의 llm_provider='openai'/빈값은 openrouter로 정규화(설정 select에 openai 항목 없음 → 빈 표시·'' 저장 방지)
+    if (c.get('llm_provider') or '').strip().lower() not in ('openrouter','nvidia'): c['llm_provider']='openrouter'
     # 완전자동 재설계 1회 마이그레이션: 기존 config가 자동화를 꺼둔 상태여도 1회만 켠다.
     # (이후 대표님이 의도적으로 끄면 autofull_migrated=True라 다시 켜지 않는다)
     if not c.get('autofull_migrated'):
@@ -1397,7 +1409,7 @@ def generate_post_gpt(keywords, cfg, workroom_id=None):
     b=(keywords.get('브랜드') or cfg.get('brand') or '인천홍마니').strip()
     _rawph=pick_phone(cfg); p=format_phone(_rawph)
     # ★제공자 분기(대표님 2026-09-11): nvidia면 build.nvidia.com 무료 엔드포인트(OpenAI 호환 형식). 비용 $0.
-    _prov=(cfg.get('llm_provider') or 'openai').strip().lower()
+    _prov=(cfg.get('llm_provider') or 'openrouter').strip().lower()
     if _prov=='nvidia':
         key=(cfg.get('nvidia_api_key') or '').strip(); model=(cfg.get('nvidia_model') or 'nvidia/nemotron-3-ultra-550b-a55b').strip()
         if not key: raise RuntimeError('nvidia_api_key 없음 — 설정 탭에 NVIDIA 키(nvapi-…) 입력')
@@ -1515,7 +1527,7 @@ def _gen_once(keywords, cfg, workroom_id=None):
     # GPT 429(레이트리밋) 서킷브레이커: 429가 나면 5분간 GPT를 건너뛰고 템플릿 직행.
     #  (매 발행마다 GPT 호출→429 대기→폴백 반복이 발행을 느리게 해 타임아웃 유발 — 대표님 지적)
     # 제공자별 키 존재 여부로 게이트(nvidia면 nvidia_api_key). 예전엔 openai_key만 봐서 NVIDIA 전용 설정이 조용히 템플릿으로 빠졌음.
-    _pv=(cfg.get('llm_provider') or 'openai').strip().lower()
+    _pv=(cfg.get('llm_provider') or 'openrouter').strip().lower()
     _llm_key=(cfg.get('nvidia_api_key') if _pv=='nvidia' else (cfg.get('openrouter_api_key') if _pv=='openrouter' else cfg.get('openai_key')))
     if cfg.get('use_gpt') and _llm_key and time.time() >= _GPT_SKIP_UNTIL[0]:
         try:
@@ -6575,7 +6587,7 @@ def _llm_for_nodes():
        노드는 로컬 config를 쓰므로 서버에서 NVIDIA를 켜도 노드는 옛 OpenAI 키로 가던 빈틈을 메움.
        Brave 키를 발굴노드에 내려주는 것과 같은 패턴(토큰 인증 응답에만 실림)."""
     c=load_config()
-    return {'provider':(c.get('llm_provider') or 'openai').strip().lower(),
+    return {'provider':(c.get('llm_provider') or 'openrouter').strip().lower(),
             'nvidia_api_key':(c.get('nvidia_api_key') or '').strip(),
             'nvidia_model':(c.get('nvidia_model') or '').strip(),
             'openrouter_api_key':(c.get('openrouter_api_key') or '').strip(),
@@ -9139,6 +9151,7 @@ def api_cfg():
             if k in d:
                 if k in ('openai_key','openai_admin_key','nvidia_api_key','openrouter_api_key','telegram_token','google_api_key','brave_api_key','guest_post_password','twocaptcha_api_key','imap_password','proxy_pass','unlocker_api_key','sbr_endpoint','signup_fixed_pw') and d[k]=='***설정됨***': continue  # 마스크 값은 무시(기존 유지)
                 cfg[k]=d[k]
+        if (cfg.get('llm_provider') or '').strip().lower() not in ('openrouter','nvidia'): cfg['llm_provider']='openrouter'   # 빈 select·구버전 'openai' 값 방어(OpenAI 퇴출)
         if d.get('password'): cfg['password']=generate_password_hash(d['password'])  # 해시 저장
         # 완전 자동화: 필수 키(Brave 발굴 + 2captcha)가 채워지면 발굴·파이프라인을 자동 ON.
         # (키를 넣는 행위 = 자동 운영 동의로 간주. 원치 않으면 아래 토글을 수동 OFF 가능)
@@ -9151,7 +9164,7 @@ def api_cfg():
         # 메모리에 남아 OpenRouter로 바꿔도 만료까지 템플릿만 나감(대표님 2026-09-11 전환 직후 원장 0건 원인).
         if tuple(cfg.get(k) for k in _LLM_KEYS)!=old_llm and _GPT_SKIP_UNTIL[0]>time.time():
             _GPT_SKIP_UNTIL[0]=0.0
-            add_log(f"[AI 엔진 변경] {(cfg.get('llm_provider') or 'openai').upper()}로 전환 — 이전 차단기 해제, 다음 발행부터 즉시 사용")
+            add_log(f"[AI 엔진 변경] {(cfg.get('llm_provider') or 'openrouter').upper()}로 전환 — 이전 차단기 해제, 다음 발행부터 즉시 사용")
         # 검색 조건을 바꾸면 다음 검색부터 새 조건의 첫 줄이 즉시 실행되도록 커서를 초기화한다.
         new_search=(cfg.get('discover_keywords',''),cfg.get('discover_direct_queries',''))
         if new_search!=old_search:
@@ -9274,7 +9287,7 @@ def api_sbr_test():
 def api_openai_usage():
     cfg=load_config(); summary=_local_openai_usage_summary(cfg)
     try:
-        actual=_openai_admin_costs(cfg)
+        actual=_openai_admin_costs(cfg) if summary.get('llm_provider')=='openai' else None   # OpenAI 퇴출 후엔 Costs API 조회 안 함
         if actual is not None:
             total=float(actual.get('total_usd') or 0)
             summary['source']='official_costs_api'; summary['actual_month_cost_usd']=total
@@ -9300,34 +9313,31 @@ def api_usage():
     실측 여부(measured)와 추정 여부(estimated)를 명시해 UI가 '추정' 뱃지를 붙일 수 있게 한다."""
     cfg=load_config()
 
-    # --- OpenAI: 관리자 키 있으면 실측(월/일), 없으면 토큰 기반 추정 ---
-    oa=_local_openai_usage_summary(cfg)
-    oa_measured=False; oa_admin_error=None
-    try:
-        actual=_openai_admin_costs(cfg)
-        if actual is not None:
-            oa_measured=True
-            oa['month']['estimated_cost_usd']=float(actual.get('total_usd') or 0)  # 월 총액을 실측으로 대체
-            if actual.get('daily'): oa['actual_daily']=actual['daily']
-    except Exception as e:
-        oa_admin_error=str(e)[:180]
+    # --- AI 글 생성: 현재 엔진(OpenRouter=응답 실비용 / NVIDIA=무료) 기준 실측. OpenAI는 2026-09-11 퇴출(화면에서 제거) ---
+    oa=_local_openai_usage_summary(cfg); cur=oa.get('current') or {}
+    _pv=str(cur.get('provider') or 'openrouter'); _pm=str(cur.get('model') or '')
+    oa_measured=bool(cur.get('measured'))
+    by_model=[{'model':k,'requests':v.get('requests',0),'cost_usd':round(float(v.get('estimated_cost_usd') or 0),6),
+               'current':(k==_pm),'measured':('/' in k)}   # 슬래시 모델명(OpenRouter·NVIDIA)=실비용/무료, gpt-*=토큰 추정
+              for k,v in sorted((oa.get('by_model') or {}).items(),key=lambda kv:-float(kv[1].get('estimated_cost_usd') or 0))]
     openai_block={
-        'label':'OpenAI (GPT)',
-        'month_cost_usd':round(float(oa['month'].get('estimated_cost_usd') or 0),6),
-        'today_cost_usd':round(float(oa['today'].get('estimated_cost_usd') or 0),6),
-        'month_requests':int(oa['month'].get('requests') or 0),
-        'today_requests':int(oa['today'].get('requests') or 0),
-        'per_call_usd':oa.get('per_call_usd',0.0),
-        'daily':oa.get('actual_daily') or oa.get('daily',[]),
-        'hourly':oa.get('hourly',[]),
-        'unit_price':oa.get('unit_price',{}),
-        'measured':oa_measured,          # True=관리자키 실측, False=토큰 추정
+        'label':f'AI 글 생성 · {_pv.upper()}',
+        'model':_pm,
+        'month_cost_usd':round(float((cur.get('month') or {}).get('estimated_cost_usd') or 0),6),
+        'today_cost_usd':round(float((cur.get('today') or {}).get('estimated_cost_usd') or 0),6),
+        'month_requests':int((cur.get('month') or {}).get('requests') or 0),
+        'today_requests':int((cur.get('today') or {}).get('requests') or 0),
+        'per_call_usd':cur.get('per_call_usd',0.0),
+        'daily':cur.get('daily',[]),
+        'hourly':cur.get('hourly',[]),
+        'unit_price':({'per_post_usd':cur.get('per_call_usd',0.0)} if _pv=='openrouter' else ({'per_post_usd':0.0} if _pv=='nvidia' else {})),
+        'measured':oa_measured,
         'estimated':not oa_measured,
-        'admin_error':oa_admin_error,
-        'note':('OpenAI 조직 Costs API 실제 청구액(월/일)' if oa_measured
-                else '관리자 키 미설정 — 토큰 기반 추정치(설정 탭에서 관리자 키 입력 시 실측 전환)'),
-        'monthly_budget_usd':oa.get('monthly_budget_usd'),
-        'remaining_budget_usd':oa.get('remaining_budget_usd'),
+        'note':(f'{_pm} — OpenRouter 응답의 실제 청구액(usage.cost) 합계' if _pv=='openrouter'
+                else (f'{_pm} — NVIDIA 무료 엔드포인트($0)' if _pv=='nvidia' else '토큰 기반 추정치')),
+        'by_model':by_model,
+        'ledger_month_usd':round(float(oa['month'].get('estimated_cost_usd') or 0),6),   # 이번 달 전체 원장(퇴출 엔진 포함)
+        'ledger_today_usd':round(float(oa['today'].get('estimated_cost_usd') or 0),6),
     }
 
     # --- 2captcha: 횟수는 정확, 금액은 설정단가×성공횟수 추정. 잔액은 참고용. ---
@@ -9371,12 +9381,13 @@ def api_usage():
         'active':((cfg.get('search_provider') or 'brave').lower()=='brave'),
     }
 
-    total_month=round(openai_block['month_cost_usd']+captcha_block['month_cost_usd']+brave_block['month_cost_usd'],6)
-    total_today=round(openai_block['today_cost_usd']+captcha_block['today_cost_usd']+brave_block['today_cost_usd'],6)
+    # 합계는 이번 달 실제로 나간 돈 기준(퇴출된 OpenAI 원장분 포함) — 카드 상단은 현재 엔진만, 합계는 전체.
+    total_month=round(openai_block['ledger_month_usd']+captcha_block['month_cost_usd']+brave_block['month_cost_usd'],6)
+    total_today=round(openai_block['ledger_today_usd']+captcha_block['today_cost_usd']+brave_block['today_cost_usd'],6)
     return jsonify({'ok':True,'openai':openai_block,'twocaptcha':captcha_block,'brave':brave_block,
                     'total_month_usd':total_month,'total_today_usd':total_today,
                     'usdkrw':_usd_krw(cfg),  # USD→KRW 실시간 환율(원화 표시용)
-                    'note':'금액은 관리자키 실측(OpenAI)을 제외하면 설정 단가 기준 추정치입니다. 횟수는 정확합니다.'})
+                    'note':'AI 글 생성: OpenRouter는 응답 실측 청구액·NVIDIA는 무료·종료된 모델 행은 토큰 추정. 2captcha·Brave는 설정 단가×횟수 추정(횟수는 정확).'})
 
 # ★발행 테스트는 '전용 워커(TEST1 스레드)'에서 직렬로만 실행 (대표님 지시).
 #   - 전용 스레드명 → get_driver가 그 스레드의 크롬 1개를 재사용(테스트마다 새 크롬 안 띄움).
@@ -9792,6 +9803,26 @@ header{background:var(--c);border-bottom:1px solid var(--b);padding:10px 16px;di
 #p-wlog h3{font-size:15px}
 #p-wlog table td,#p-wlog table th{padding:7px 9px;font-size:12.5px}
 #p-wlog table th{font-size:11.5px}
+/* ★설정 탭 압축(대표님 2026-09-11 '자리 차지 많다·눈에 잘 들어오게'): 라벨-입력 가로 배치, 여백 축소, 고급 항목 접기, 3열 자동 그리드 */
+#p-set .card{padding:10px 12px;margin-bottom:0}
+#p-set .card h3{font-size:11px;margin-bottom:7px;color:var(--t);letter-spacing:.5px;text-transform:none}
+#p-set .grid3{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(340px,100%),1fr));gap:8px;align-items:start}
+#p-set .f{display:grid;grid-template-columns:118px minmax(0,1fr);gap:4px 8px;align-items:center;margin-bottom:5px}
+#p-set .f>small{color:var(--d);font-size:10.5px;line-height:1.25}
+#p-set .f>small a{color:var(--r);margin-left:4px;text-decoration:none}
+#p-set .lb{display:block;color:var(--d);font-size:10.5px;margin-bottom:2px}
+#p-set input,#p-set select,#p-set textarea{padding:5px 8px;font-size:12px}
+#p-set .chk{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--t);margin:4px 0}
+#p-set .chk input{width:auto}
+#p-set .help{font-size:10px;color:var(--d);line-height:1.45;margin:3px 0 5px}
+#p-set .r2{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+#p-set .r3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px}
+#p-set details.adv{border:1px solid var(--b);border-radius:7px;padding:6px 9px;margin-top:6px}
+#p-set details.adv>summary{cursor:pointer;font-size:11px;color:var(--p);font-weight:700;list-style:none}
+#p-set details.adv>summary::-webkit-details-marker{display:none}
+#p-set details.adv>summary::before{content:'▸ ';color:var(--d)}
+#p-set details.adv[open]>summary::before{content:'▾ '}
+@media (max-width:640px){#p-set input,#p-set select,#p-set textarea{font-size:16px}#p-set .r3{grid-template-columns:1fr 1fr}}   /* 폰: iOS 확대 방지 16px 유지 */
 .card{background:var(--c);border:1px solid var(--b);border-radius:10px;padding:14px;margin-bottom:10px}
 .card h3{font-size:10px;color:var(--d);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px}
 .row{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px}
@@ -9864,7 +9895,7 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 <iframe id="pvFrame" style="width:100%;height:70vh;border:0;background:#fff"></iframe></div></div>
 
 <div id="p-gen" class="panel">
-<div class="note">✔ 현재 적용 규칙 — <b style="color:var(--p)">메인 키워드1 + 같은 지역 키워드2·3</b>으로 OpenAI 장문 HTML을 생성합니다. 이미지는 저장소에서 1개만 사용하고 ALT에는 키워드1을 넣습니다. 지역 순서는 인천→경기→서울→충남→충북→세종→전북→전남→경상→경북→강원→제주이며, 모든 키워드를 사용하면 예약이 자동 종료됩니다. <b style="color:var(--g)">허용 동의가 기록된 사이트만 발행</b>됩니다.</div>
+<div class="note">✔ 현재 적용 규칙 — <b style="color:var(--p)">메인 키워드1 + 같은 지역 키워드2·3</b>으로 AI 장문 HTML을 생성합니다. 이미지는 저장소에서 1개만 사용하고 ALT에는 키워드1을 넣습니다. 지역 순서는 인천→경기→서울→충남→충북→세종→전북→전남→경상→경북→강원→제주이며, 모든 키워드를 사용하면 예약이 자동 종료됩니다. <b style="color:var(--g)">허용 동의가 기록된 사이트만 발행</b>됩니다.</div>
 
 <div class="card" id="progCard" style="display:none"><h3>발행 진행률</h3>
 <div class="prog"><div id="progBar"></div></div>
@@ -10080,136 +10111,124 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 
 <div id="p-cost" class="panel">
 <div class="card"><div class="row" style="align-items:center"><h3 style="margin:0">API 실시간 비용 · 사용량</h3><span style="flex:1"></span><span id="costAutoInfo" style="font-size:10px;color:var(--d);margin-right:8px">30초마다 자동 새로고침</span><button class="btn btn-d btn-xs" onclick="loadUsageDashboard()">새로고침</button></div>
-<div style="font-size:11px;color:var(--d);margin-top:6px">이번 달 합계 <b id="costTotalMonth" style="color:var(--p)">-</b> · 오늘 <b id="costTotalToday" style="color:var(--g)">-</b> <span style="color:var(--y)">· 금액은 OpenAI 관리자키 실측을 제외하면 설정 단가 기준 <b>추정치</b>입니다(횟수는 정확).</span></div>
+<div style="font-size:11px;color:var(--d);margin-top:6px">이번 달 합계 <b id="costTotalMonth" style="color:var(--p)">-</b> · 오늘 <b id="costTotalToday" style="color:var(--g)">-</b> <span style="color:var(--y)">· AI 글 생성: OpenRouter는 응답의 <b>실측</b> 청구액 · NVIDIA는 무료($0) · 종료된 모델 행은 토큰 추정 | 2captcha·Brave는 설정 단가×횟수 <b>추정</b>(횟수는 정확).</span></div>
 </div>
 <div id="costCards" style="display:grid;grid-template-columns:1fr;gap:12px;margin-top:10px"></div>
 </div>
 
 <div id="p-set" class="panel">
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-<div class="card"><h3>브랜드/전화</h3>
-<div style="margin-bottom:6px"><small style="color:var(--d)">브랜드명</small><input id="cBrand" value="{{cfg.brand}}"></div>
-<div style="margin-bottom:6px"><small style="color:var(--d)">대표 전화번호</small><input id="cPhone" value="{{cfg.phone}}"></div>
-<small style="color:var(--d)">전화번호(여러 개, 한 줄에 하나 — 제목에 랜덤 사용)</small>
-<textarea id="cPhones" rows="3" placeholder="01082755736&#10;01021636400&#10;01053505892"></textarea>
-<div style="margin-top:8px"><small style="color:var(--d)">기본 동영상 URL (필수 영상란 자동 입력)</small><input id="cVideoUrl" placeholder="https://www.youtube.com/watch?v=..."></div>
-<div style="margin-top:6px"><small style="color:var(--d)">홍보/랜딩 URL (필수 링크란 자동 입력)</small><input id="cLandingUrl" placeholder="https://내사이트.kr/"></div>
-<div style="margin-top:6px"><small style="color:var(--d)">게시용 이메일 (필수일 때만)</small><input id="cPostEmail" type="email" placeholder="name@example.com"></div>
-<div style="margin-top:6px"><small style="color:var(--d)">비회원 글 비밀번호 (필수일 때만)</small><input id="cGuestPw" type="password" placeholder="변경시에만 입력"></div>
-<div style="margin-top:12px;padding:10px;border:1px solid #2a5;border-radius:8px;background:#0f1a12">
-<div style="color:var(--g);font-weight:700;font-size:12px;margin-bottom:6px">📧 실제 이메일(IMAP) 인증 — 로그인 게시판 자동가입용 (강력 권장)</div>
-<div style="font-size:10px;color:var(--d);margin-bottom:6px">지메일 추천. 일회용 임시메일을 거부하는 게시판도 통과합니다. 각 가입은 <b>내주소+랜덤@gmail.com</b> 플러스주소로 유니크 발급되고, 인증메일을 IMAP으로 자동 읽어 처리합니다. 비우면 임시메일 사용.</div>
-<div class="row"><input id="cImapEmail" type="email" placeholder="예: mymail@gmail.com" style="max-width:260px"><input id="cImapPass" type="password" placeholder="앱 비밀번호 16자리 (변경시만)" style="max-width:240px"><input id="cImapHost" placeholder="imap.gmail.com" style="max-width:180px"></div>
-<div style="font-size:10px;color:var(--d);margin-top:5px">⚠️ 지메일: 2단계인증 켜고 <b>앱 비밀번호</b>를 발급해 넣으세요(일반 비번 아님). IMAP 사용 설정도 켜야 합니다.</div></div>
-<div style="font-size:10px;color:var(--d)">제목의 번호는 매번 <b style="color:var(--p)">[010]↔8275↔5736 · O1O=2572=3859 · [OIO-5350-5892]</b> 처럼 랜덤 기호로 변형됩니다. 여러 개면 그 중 하나를 랜덤 선택. 비우면 위 대표 전화번호 사용.</div></div>
-<div class="card"><h3>워커/비번</h3>
-<div style="margin-bottom:6px"><small style="color:var(--d)">워커 수 (서로 다른 사이트 동시 발행 · 권장 4, 최대 6)</small><input type="number" id="cWorkers" value="{{cfg.workers}}" min="1" max="6"></div>
-<small style="color:var(--d)">비밀번호</small><input type="password" id="cPw" placeholder="변경시 입력"></div>
-<div class="card"><h3>레이트 리밋 (도배 방지)</h3>
-<div style="margin-bottom:6px"><small style="color:var(--d)">포스트 간 지연 (초)</small><input type="number" id="cDelay" value="{{cfg.post_delay}}" min="0"></div>
-<small style="color:var(--d)">사이트당 1일 발행 한도 (0=무제한)</small><input type="number" id="cDaily" value="{{cfg.daily_limit}}" min="0"></div>
-<div class="card"><h3>GPT 본문 생성</h3>
-<label style="display:flex;align-items:center;gap:6px;color:var(--g);font-size:12px;margin-bottom:6px"><input type="checkbox" id="cUseGpt" style="width:auto">AI로 본문 생성 — 아래 선택한 엔진 사용(끄면 템플릿만)</label>
-<div style="font-size:10px;color:var(--d);margin-bottom:6px">키워드1을 메인 주제로 인식해 1,800~2,800자 장문을 작성하고, 키워드2·3은 같은 지역의 보조 키워드로만 사용합니다.</div>
-<div style="margin-bottom:6px"><small style="color:var(--d)">OpenAI API 키 <a href="#" onclick="clearKey('openai_key');return false" style="color:var(--r);margin-left:6px">🗑 서버에서 삭제</a></small><input type="password" id="cOpenai" placeholder="변경시만 입력 (sk-...)"></div>
-<div style="margin-bottom:6px"><small style="color:var(--d)">모델</small><input id="cModel" value="{{cfg.model}}" placeholder="gpt-4o-mini"></div>
-<div style="margin:8px 0 6px;padding:8px;border:1px solid var(--bd);border-radius:6px"><small style="color:var(--g);font-weight:700">🆓 글 생성 엔진 선택 (비용 절감)</small>
-<div style="margin-top:5px"><small style="color:var(--d)">제공자</small><select id="cLlmProvider"><option value="openai">OpenAI (유료 · 위 키·모델 사용)</option><option value="nvidia">NVIDIA 무료 엔드포인트 (build.nvidia.com)</option><option value="openrouter">OpenRouter (저가 · openrouter.ai)</option></select></div>
-<div style="margin-top:5px"><small style="color:var(--d)">NVIDIA API 키 <a href="#" onclick="clearKey('nvidia_api_key');return false" style="color:var(--r);margin-left:6px">🗑 서버에서 삭제</a></small><input type="password" id="cNvidiaKey" placeholder="변경시만 입력 (nvapi-...)"></div>
-<div style="margin-top:5px"><small style="color:var(--d)">NVIDIA 모델</small><input id="cNvidiaModel" placeholder="nvidia/nemotron-3-ultra-550b-a55b"></div>
-<div style="margin-top:5px"><small style="color:var(--d)">OpenRouter API 키 <a href="#" onclick="clearKey('openrouter_api_key');return false" style="color:var(--r);margin-left:6px">🗑 서버에서 삭제</a></small><input type="password" id="cOpenrouterKey" placeholder="변경시만 입력 (sk-or-v1-...)"></div>
-<div style="margin-top:5px"><small style="color:var(--d)">OpenRouter 모델</small><input id="cOpenrouterModel" placeholder="deepseek/deepseek-v4-flash-0731"></div>
-<div style="margin-top:6px"><button class="btn btn-g btn-xs" onclick="window.open('https://openrouter.ai','_blank')">OpenRouter 사이트 바로가기 ↗</button></div>
-<small style="color:var(--d)">무료 등급은 분당 요청 한도가 있어 한도에 걸리면 60초간 템플릿으로 자동 전환 후 재개</small></div>
-<details style="margin-top:8px;border-top:1px solid var(--bd);padding-top:8px"><summary style="cursor:pointer;color:var(--p);font-size:11px;font-weight:700">사용량·비용 상세 설정</summary>
-<div style="margin-top:7px"><small style="color:var(--d)">조직 관리자 키 (선택 · 실제 Costs API 조회용) <a href="#" onclick="clearKey('openai_admin_key');return false" style="color:var(--r);margin-left:6px">🗑 서버에서 삭제</a></small><input type="password" id="cOpenaiAdmin" placeholder="관리자 키 없으면 로컬 예상비용 사용"></div>
-<div class="row" style="margin-top:6px"><div style="flex:1"><small style="color:var(--d)">월 예산 USD</small><input type="number" id="cOpenaiBudget" min="0" step="0.01" value="20"></div>
-<div style="flex:1"><small style="color:var(--d)">입력 $/1M</small><input type="number" id="cOpenaiInPrice" min="0" step="0.001" value="0.15"></div>
-<div style="flex:1"><small style="color:var(--d)">출력 $/1M</small><input type="number" id="cOpenaiOutPrice" min="0" step="0.001" value="0.60"></div></div></details>
-<div id="openaiUsage" style="margin-top:9px;padding:9px;background:#0b1322;border:1px solid var(--bd);border-radius:7px;font-size:10px;color:var(--d)">사용량 불러오는 중...</div>
-<button class="btn btn-d btn-xs" style="margin-top:6px" onclick="loadOpenAIUsage()">사용량 새로고침</button></div>
-<div class="card"><h3>텔레그램 알림</h3>
-<div style="margin-bottom:6px"><small style="color:var(--d)">봇 토큰</small><input type="password" id="cTgTok" placeholder="변경시만 입력"></div>
-<div style="margin-bottom:6px"><small style="color:var(--d)">챗 ID</small><input id="cTgChat" placeholder="예: 123456789"></div>
-<div class="row" style="font-size:11px;color:var(--d)"><label style="display:flex;align-items:center;gap:4px"><input type="checkbox" id="cNotifyDone" style="width:auto">성공알림</label><label style="display:flex;align-items:center;gap:4px"><input type="checkbox" id="cNotifyFail" style="width:auto">실패알림</label><button class="btn btn-d btn-xs" onclick="api('/telegram/test','POST').then(r=>toast(r&&r.ok?'전송됨':'실패: '+(r&&r.error||''),r&&r.ok?'ok':'er'))">테스트 전송</button></div></div>
-<div class="card"><h3>🤖 CAPTCHA 자동 해결 (2captcha)</h3>
-<label style="display:flex;align-items:center;gap:6px;color:var(--g);font-size:12px;margin-bottom:6px"><input type="checkbox" id="cTwocaptchaEn" style="width:auto">2captcha 자동 해결 활성화 (reCAPTCHA, hCaptcha, Turnstile, kCaptcha)</label>
-<div style="margin-bottom:6px"><small style="color:var(--d)">2captcha API 키</small><input type="password" id="cTwocaptchaKey" placeholder="변경시만 입력 (https://2captcha.com)"></div>
-<div style="font-size:10px;color:var(--d)"><a href="https://2captcha.com/" target="_blank" rel="noopener" style="color:var(--p)">2captcha 계정 관리</a> · 키는 화면과 API 응답에 노출되지 않습니다. 자동 해결 실패 시 수동 입력으로 자동 폴백됩니다.</div>
-<div id="twocaptchaUsage" style="margin-top:9px;padding:9px;background:#0b1322;border:1px solid var(--bd);border-radius:7px;font-size:10px;color:var(--d)">2captcha 상태 확인 중...</div></div>
-<div class="card"><h3>🌐 프록시 (Bright Data — Cloudflare 우회)</h3>
-<label style="display:flex;align-items:center;gap:6px;color:var(--g);font-size:12px;margin-bottom:6px"><input type="checkbox" id="cProxyEn" style="width:auto">프록시 사용 (Cloudflare 걸린 Cafe24 로그인 우회)</label>
-<div class="row" style="margin-bottom:6px"><div style="flex:2"><small style="color:var(--d)">Host</small><input type="text" id="cProxyHost" placeholder="예: brd.superproxy.io"></div><div style="flex:1"><small style="color:var(--d)">Port</small><input type="text" id="cProxyPort" placeholder="예: 22225"></div></div>
-<div class="row" style="margin-bottom:6px"><div style="flex:1"><small style="color:var(--d)">Username</small><input type="text" id="cProxyUser" placeholder="brd-customer-...-zone-..."></div><div style="flex:1"><small style="color:var(--d)">Password</small><input type="password" id="cProxyPass" placeholder="변경시만 입력"></div></div>
-<label style="display:flex;align-items:center;gap:6px;color:var(--d);font-size:11px;margin-bottom:6px"><input type="checkbox" id="cProxyCfOnly" style="width:auto">Cloudflare 걸린 사이트에만 프록시 사용 (비용 절약 · 권장)</label>
-<div style="font-size:10px;color:var(--d)"><a href="https://brightdata.com/" target="_blank" rel="noopener" style="color:var(--p)">Bright Data 대시보드</a> · Residential Proxies 접속 정보(주거용, 회사메일 인증 필요). 비번은 화면·API에 노출되지 않습니다. 프록시 실패 시 직접연결로 자동 폴백됩니다.</div>
-<hr style="border:none;border-top:1px solid var(--bd);margin:10px 0">
-<label style="display:flex;align-items:center;gap:6px;color:var(--g);font-size:12px;margin-bottom:6px"><input type="checkbox" id="cUnlockerEn" style="width:auto">Web Unlocker API 사용 (CF·캡차 자동해결 · 개인가입 즉시가능 · 권장)</label>
-<div class="row" style="margin-bottom:6px"><div style="flex:2"><small style="color:var(--d)">Web Unlocker API 키</small><input type="password" id="cUnlockerKey" placeholder="변경시만 입력 (Bright Data API Key)"></div><div style="flex:1"><small style="color:var(--d)">존 이름</small><input type="text" id="cUnlockerZone" placeholder="web_unlocker1"></div></div>
-<div style="font-size:10px;color:var(--d)">Web Unlocker는 요청당 과금(약 $1.5/1000건, 성공건만). CF 걸린 Cafe24 게시판 접근에 사용. 키는 화면·API에 노출되지 않습니다.</div>
-<hr style="border:none;border-top:1px solid var(--bd);margin:10px 0">
-<label style="display:flex;align-items:center;gap:6px;color:var(--g);font-size:12px;margin-bottom:6px"><input type="checkbox" id="cSbrEn" style="width:auto">Scraping Browser 사용 (CF+로그인 사이트 · 타카고 등 로그인형 Cafe24)</label>
-<div style="margin-bottom:6px"><small style="color:var(--d)">Scraping Browser Endpoint</small><input type="password" id="cSbrEp" placeholder="변경시만 입력 (brd-customer-...-zone-scraping_browser:PASS@brd.superproxy.io:9515)"></div>
-<div style="font-size:10px;color:var(--d)">Web Unlocker가 못하는 <b>로그인 세션</b>이 필요한 CF 사이트(타카고 등)용 원격 크롬. Bright Data 대시보드에서 Scraping Browser 존 생성 후 endpoint 입력. GB당 과금(원격 크롬)이라 로그인형 Cafe24에만 사용. endpoint는 화면·API에 노출되지 않습니다.</div></div>
-<div class="card"><h3>🔑 자동가입 고정 계정</h3>
-<div style="font-size:10px;color:var(--d);margin-bottom:8px">자동가입 시 매번 랜덤 계정 대신 <b>고정 아이디/비번</b>으로 통일합니다(대표님 관리·중복ID 감소). 비우면 기존 랜덤 생성.</div>
-<div class="row" style="margin-bottom:6px"><div style="flex:1"><small style="color:var(--d)">고정 아이디</small><input type="text" id="cSignupId" placeholder="예: ghdakseovy"></div><div style="flex:1"><small style="color:var(--d)">고정 비밀번호</small><input type="password" id="cSignupPw" placeholder="변경시만 입력"></div></div>
-<div style="font-size:10px;color:var(--d)">비번은 화면·API에 노출되지 않습니다. 게시판마다 아이디 규칙(글자수)이 달라 가끔 안 맞을 수 있습니다.</div></div>
-<div class="card"><h3>🔎 도메인 발굴 (Brave Search API)</h3>
-<div style="margin-bottom:6px"><small style="color:var(--d)">Brave Search API 키</small><input type="password" id="cBraveKey" placeholder="변경시에만 입력"></div>
-<div style="font-size:10px;color:var(--d);margin-bottom:6px"><a href="https://api-dashboard.search.brave.com/" target="_blank" rel="noopener" style="color:var(--p)">Brave API 키 관리</a> · 키는 화면과 API 응답에 노출되지 않습니다.</div>
-<details style="margin-bottom:6px"><summary style="cursor:pointer;color:var(--d);font-size:11px">API 단가 설정 (비용 대시보드 추정용)</summary>
-<div style="font-size:10px;color:var(--y);margin:5px 0">2captcha·Brave는 건당 실제 과금액을 알려주지 않아, 아래 단가 × 횟수로 <b>추정</b>합니다. 횟수는 정확합니다.</div>
-<div class="row" style="margin-bottom:5px"><div style="flex:1"><small style="color:var(--d)">Brave 쿼리당 $</small><input type="number" id="cBravePrice" min="0" step="0.001" value="0.005" title="Pro 플랜 기준 쿼리당 $0.005"></div>
-<div style="flex:1"><small style="color:var(--d)">2captcha reCAPTCHA $/건</small><input type="number" id="cCapRePrice" min="0" step="0.0001" value="0.003"></div>
-<div style="flex:1"><small style="color:var(--d)">2captcha 이미지 $/건</small><input type="number" id="cCapImgPrice" min="0" step="0.0001" value="0.0005"></div></div>
-</details>
-<div class="row" style="margin-bottom:6px"><span style="color:var(--d);font-size:11px">하루 후보 목표</span><input type="number" id="cDTarget" value="100" min="10" max="1000" style="width:90px">
-<span style="color:var(--d);font-size:11px">하루 쿼리 한도</span><input type="number" id="cDQuery" value="100" min="1" max="10000" style="width:90px" title="Brave API 플랜 한도 안에서 사용"></div>
-<label style="display:flex;align-items:center;gap:6px;color:var(--g);font-size:12px;margin-bottom:6px"><input type="checkbox" id="cDiscoOn" style="width:auto">24시간 자동 발굴 켜기 (1분마다 빠르게 — 하루 할당량 500 채우기)</label>
-<small style="color:var(--d)">검색 키워드 목록 (한 줄에 하나 — 입력 그대로 Brave 검색, #으로 시작하면 메모)</small>
-<small style="display:block;color:var(--g);font-size:11px;margin:2px 0 4px;line-height:1.5">💡 <b>게시판 URL 조각</b>을 그대로 넣어도 됩니다 — 그 게시판의 글들을 찾아 <b>글목록(글쓰기 가능한 게시판)</b>으로 잘라 후보 등록.<br>예) <code>bbs/board.php?bo_table=free&amp;wr_id=</code> · <code>bbs/board.php?bo_table=youtube&amp;wr_id=</code> · <code>/board/list.html?board_no=</code></small>
-<textarea id="cDDirect" rows="6" placeholder="bbs/board.php?bo_table=free&amp;wr_id=&#10;bbs/board.php?bo_table=notice&amp;wr_id=&#10;&quot;홍보게시판&quot; 마사지&#10;# 이 줄은 메모(검색 안 함)"></textarea>
-<div style="font-size:10px;color:var(--g);margin-top:4px">설정 저장을 누르면 서버에 영구 저장되며, 위 목록만 입력 순서대로 검색합니다.</div>
-<small style="color:var(--d);margin-top:10px;display:block">🚫 제외 도메인 (웹빌더/템플릿 등 발행 불가 — 한 줄에 하나, 이 문자열이 포함된 도메인은 발굴에서 즉시 제외)</small>
-<textarea id="cExcludedDomains" rows="4" placeholder="isweb.co.kr&#10;imweb.me&#10;modoo.at&#10;wixsite.com"></textarea>
-<div style="font-size:10px;color:var(--d);margin-top:4px">예: isweb.co.kr 처럼 한 업체가 수많은 하위사이트를 찍어내는 웹빌더는 여기 넣으면 싹 제외됩니다.</div>
-<div style="font-size:11px;color:var(--r);margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">🗂 자동 탈락 도메인 <b id="rejCount" style="color:var(--r)">-</b>개 <span style="color:var(--d)">(발굴에서 자동 제외 중 — 위 목록과 별개로 시스템이 자동 수집·제외)</span><button class="btn btn-d btn-xs" type="button" onclick="showRejected()">목록 보기</button></div>
-<div id="rejList" style="display:none;margin-top:6px;max-height:220px;overflow:auto;background:#0d1420;border:1px solid var(--bd);border-radius:8px;padding:8px;font-size:11px;color:var(--d)"></div>
-<details style="margin-top:10px;border:1px solid var(--bd);border-radius:8px;padding:9px"><summary style="cursor:pointer;color:var(--p);font-weight:700">전국 시·구·동 + 키워드 일괄 생성</summary>
-<div style="font-size:10px;color:var(--d);margin:8px 0">전체 주소가 아닌 단계별 짧은 지역명으로 조합합니다: 서울+키워드 · 강남+키워드 · 호암직동+키워드. 같은 검색어는 자동으로 중복 제거합니다.</div>
-<div class="row" style="margin-bottom:6px"><select id="rgProvince" style="width:auto" onchange="fillGuSel('rgProvince','rgGuSel')"><option value="">전국</option></select>
-<select id="rgGuSel" style="width:auto" title="특정 시·군·구만 선택(비우면 시·도 전체)"><option value="">시·군·구 전체</option></select>
-<label style="font-size:11px"><input type="checkbox" id="rgCity" checked style="width:auto"> 시·도</label>
-<label style="font-size:11px"><input type="checkbox" id="rgGu" checked style="width:auto"> 시·구·군</label>
-<label style="font-size:11px"><input type="checkbox" id="rgDong" checked style="width:auto"> 읍·면·동</label>
-<select id="rgJoin" style="width:auto"><option value="">붙여쓰기</option><option value=" ">띄어쓰기</option></select></div>
-<textarea id="rgKeywords" rows="3" placeholder="출장마사지&#10;마사지&#10;홍보게시판"></textarea>
-<div class="row" style="margin-top:6px"><button class="btn btn-d btn-xs" onclick="previewRegionalKeywords()">생성 개수 확인</button>
-<button class="btn btn-v btn-xs" onclick="applyRegionalKeywords(false)">기존 목록에 추가</button>
-<button class="btn btn-y btn-xs" onclick="applyRegionalKeywords(true)">목록 교체</button>
-<span id="rgCount" style="font-size:10px;color:var(--g)"></span></div></details>
-<div style="font-size:10px;color:var(--d);margin-top:6px">후보 목록에서 필요한 사이트를 선택해 사이트 관리 목록에 등록할 수 있습니다.</div></div>
-<div class="card"><h3>자동 백업 · 봇 제어 · 발행 검증</h3>
-<div style="margin-bottom:6px"><small style="color:var(--d)">매일 자동 백업 시각 (HH:MM, KST · 비우면 끔)</small><input id="cBackupTime" placeholder="예: 04:00"></div>
-<div class="row" style="margin-bottom:6px"><button class="btn btn-g btn-xs" onclick="api('/backup/now','POST').then(r=>toast(r&&r.ok?'📦 백업 전송됨':'실패: '+(r&&r.error||'토큰 확인'),r&&r.ok?'ok':'er'))">지금 백업 전송</button><span style="color:var(--d);font-size:10px">텔레그램으로 zip 전송(설정·사이트·이력·예약·키워드)</span></div>
-<label style="display:flex;align-items:center;gap:6px;color:var(--g);font-size:12px;margin-bottom:6px"><input type="checkbox" id="cTgControl" style="width:auto">텔레그램 폰 제어 (봇에게 /상태 /오늘 /발행 /정지 /재개 /백업 /검증)</label>
-<label style="display:flex;align-items:center;gap:6px;color:var(--v);font-size:12px;margin-bottom:6px"><input type="checkbox" id="cVerify" style="width:auto">발행글 생존 자동 검증 (1시간마다 URL 재확인)</label>
-<label style="display:flex;align-items:center;gap:6px;color:var(--g);font-size:12px;margin-bottom:6px"><input type="checkbox" id="cMixKw" style="width:auto">지역 연동 키워드 혼합 (같은 지역의 서비스·브랜드만 조합)</label>
-<label style="display:flex;align-items:center;gap:6px;color:var(--y);font-size:12px"><input type="checkbox" id="cBlockUnpaid" style="width:auto">미납 회원 자동 정지 (이번 달 미납이면 그 회원 자동발행 중단)</label>
-<div style="font-size:10px;color:var(--d);margin-top:6px">폰 제어를 켜면 봇 채팅창에 명령을 보내 PC·패널 없이 조작할 수 있습니다(등록된 챗ID만 허용). 백업·검증은 텔레그램 토큰/챗ID가 필요합니다.<br><b style="color:var(--g)">중복 방지 상시 작동</b> — 모든 제목·본문은 과거와 겹치지 않게 매번 새로 생성되며, 같은 키워드라도 사이트마다 글이 다릅니다. 본문 끝에는 alt=지역(맨앞 키워드) 이미지가 삽입됩니다.</div></div>
+<!-- ★설정 탭 압축 재구성(대표님 2026-09-11 '자리 차지 많다·깔끔하게·눈에 잘 들어오게' + 'OpenAI 화면에서 제거'):
+     라벨-입력 가로 배치(.f), 3열 자동 그리드, 긴 설명은 title 툴팁/한 줄로, 고급(IMAP·Bright Data·지역생성·단가)은 접힘(details.adv).
+     모든 input id는 saveCfg/loadCfgUI와 1:1 — 바꾸지 말 것. OpenAI 키·모델·예산·단가 입력은 삭제됨(엔진: OpenRouter/NVIDIA). -->
+<div class="grid3">
+
+<div class="card"><h3>🏷 기본 정보</h3>
+<div class="f"><small>브랜드명</small><input id="cBrand" value="{{cfg.brand}}"></div>
+<div class="f"><small>대표 전화</small><input id="cPhone" value="{{cfg.phone}}"></div>
+<div class="f"><small>전화 목록<br><span style="font-size:9.5px">한 줄 하나 · 제목에 랜덤</span></small><textarea id="cPhones" rows="2" placeholder="01082755736&#10;01021636400" title="여러 개면 그 중 하나를 랜덤 선택. 제목의 번호는 [010]↔8275↔5736 처럼 기호가 매번 바뀜. 비우면 대표 전화 사용"></textarea></div>
+<div class="f"><small>동영상 URL</small><input id="cVideoUrl" placeholder="https://www.youtube.com/watch?v=..." title="영상란이 필수인 게시판에 자동 입력"></div>
+<div class="f"><small>랜딩 URL</small><input id="cLandingUrl" placeholder="https://내사이트.kr/" title="링크란이 필수인 게시판에 자동 입력"></div>
+<div class="f"><small>게시용 이메일</small><input id="cPostEmail" type="email" placeholder="name@example.com" title="이메일이 필수인 게시판에만 사용"></div>
+<div class="f"><small>비회원 글 비번</small><input id="cGuestPw" type="password" placeholder="변경시만 입력"></div>
+<details class="adv"><summary>📧 IMAP 이메일 인증 (자동가입용 · 지메일 앱 비밀번호)</summary>
+<div class="help">가입 인증메일을 IMAP으로 자동 읽음. 각 가입은 <b>내주소+랜덤@gmail.com</b>으로 유니크 발급. 지메일은 2단계인증 후 <b>앱 비밀번호</b>(일반 비번 아님)·IMAP 사용 켜기. 비우면 임시메일.</div>
+<div class="f"><small>이메일</small><input id="cImapEmail" type="email" placeholder="mymail@gmail.com"></div>
+<div class="f"><small>앱 비밀번호</small><input id="cImapPass" type="password" placeholder="16자리 (변경시만)"></div>
+<div class="f"><small>IMAP 호스트</small><input id="cImapHost" placeholder="imap.gmail.com"></div></details>
 </div>
-<div style="display:flex;gap:8px;margin-bottom:10px">
-<button class="btn btn-p" onclick="saveCfg()">설정 저장</button>
-<button class="btn btn-g" onclick="api('/workers/start','POST',{n:parseInt(document.getElementById('cWorkers').value)||2}).then(()=>toast('워커 시작'))">워커 시작</button>
-<button class="btn btn-y" onclick="api('/workers/pause','POST').then(()=>toast('일시정지'))">일시정지</button>
-<button class="btn btn-v" onclick="api('/workers/resume','POST').then(()=>toast('재개'))">재개</button>
-<button class="btn btn-r" onclick="api('/workers/stop','POST').then(()=>toast('워커 정지'))">워커 정지</button>
-<button class="btn btn-d" onclick="if(confirm('통계 초기화?'))api('/workers/reset','POST').then(()=>toast('초기화됨'))">통계 초기화</button></div>
-<div class="note">일시정지는 진행 중인 큐를 지우지 않고 멈춥니다(재개 시 이어서). 패널을 껐다 켜도 미완료 작업은 자동 복구됩니다.</div>
-<div class="card"><h3>🩺 서버 자가진단 (실제 발행 가능 여부)</h3>
-<div class="row"><button class="btn btn-v" onclick="runDiag()">진단 실행 (최대 60초)</button><span style="color:var(--d);font-size:10px">크롬 설치·드라이버 기동·페이지 로드·메모리·데이터 상태를 점검합니다</span></div>
-<div id="diagOut" style="margin-top:10px"></div></div></div>
+
+<div class="card"><h3>⚙️ 발행 제어</h3>
+<div class="r3">
+<div><small class="lb">워커 수 (권장 4)</small><input type="number" id="cWorkers" value="{{cfg.workers}}" min="1" max="6" title="서로 다른 사이트 동시 발행 수 · 최대 6"></div>
+<div><small class="lb">글 간격(초)</small><input type="number" id="cDelay" value="{{cfg.post_delay}}" min="0" title="도배 방지 — 포스트 간 지연"></div>
+<div><small class="lb">사이트당 1일 한도</small><input type="number" id="cDaily" value="{{cfg.daily_limit}}" min="0" title="0 = 무제한"></div>
+</div>
+<div class="f" style="margin-top:6px"><small>관제실 비밀번호</small><input type="password" id="cPw" placeholder="변경시만 입력"></div>
+<label class="chk"><input type="checkbox" id="cMixKw">지역 연동 키워드 혼합 <span class="help" style="margin:0">(같은 지역의 서비스·브랜드만 조합)</span></label>
+<label class="chk"><input type="checkbox" id="cVerify">발행글 생존 자동 검증 <span class="help" style="margin:0">(1시간마다 URL 재확인)</span></label>
+<label class="chk"><input type="checkbox" id="cBlockUnpaid">미납 회원 자동 정지</label>
+<div class="help">중복 방지는 상시 작동 — 제목·본문은 과거와 겹치지 않게 매번 새로 생성, 같은 키워드라도 사이트마다 다름.</div>
+<div class="row" style="margin:6px 0 0;gap:5px">
+<button class="btn btn-g btn-xs" onclick="api('/workers/start','POST',{n:parseInt(document.getElementById('cWorkers').value)||2}).then(()=>toast('워커 시작'))">워커 시작</button>
+<button class="btn btn-y btn-xs" onclick="api('/workers/pause','POST').then(()=>toast('일시정지'))">일시정지</button>
+<button class="btn btn-v btn-xs" onclick="api('/workers/resume','POST').then(()=>toast('재개'))">재개</button>
+<button class="btn btn-r btn-xs" onclick="api('/workers/stop','POST').then(()=>toast('워커 정지'))">정지</button>
+<button class="btn btn-d btn-xs" onclick="if(confirm('통계 초기화?'))api('/workers/reset','POST').then(()=>toast('초기화됨'))">통계 초기화</button></div>
+<div class="help" style="margin-top:4px">일시정지는 큐를 지우지 않고 멈춤(재개 시 이어서). 패널을 껐다 켜도 미완료 작업은 자동 복구.</div>
+</div>
+
+<div class="card"><h3>🧠 AI 본문 생성</h3>
+<label class="chk" style="color:var(--g)"><input type="checkbox" id="cUseGpt">AI로 본문 생성 (끄면 템플릿만)</label>
+<div class="f"><small>엔진</small><select id="cLlmProvider"><option value="openrouter">OpenRouter · 저가 (deepseek 등)</option><option value="nvidia">NVIDIA · 무료 (build.nvidia.com)</option></select></div>
+<div class="f"><small>OpenRouter 키 <a href="#" onclick="clearKey('openrouter_api_key');return false" title="서버에서 키 삭제">🗑</a></small><input type="password" id="cOpenrouterKey" placeholder="sk-or-v1-... (변경시만)"></div>
+<div class="f"><small>OpenRouter 모델</small><input id="cOpenrouterModel" placeholder="deepseek/deepseek-v4-flash-0731"></div>
+<div class="f"><small>NVIDIA 키 <a href="#" onclick="clearKey('nvidia_api_key');return false" title="서버에서 키 삭제">🗑</a></small><input type="password" id="cNvidiaKey" placeholder="nvapi-... (변경시만)"></div>
+<div class="f"><small>NVIDIA 모델</small><input id="cNvidiaModel" placeholder="nvidia/nemotron-3-ultra-550b-a55b"></div>
+<div class="row" style="margin:4px 0 0;gap:5px"><button class="btn btn-g btn-xs" onclick="window.open('https://openrouter.ai','_blank')">OpenRouter 사이트 ↗</button><button class="btn btn-d btn-xs" onclick="window.open('https://openrouter.ai/settings/credits','_blank')">크레딧 충전 ↗</button><button class="btn btn-d btn-xs" onclick="loadOpenAIUsage()">사용량 새로고침</button></div>
+<div id="openaiUsage" style="margin-top:7px;padding:7px 9px;background:#0b1322;border:1px solid var(--b);border-radius:7px;font-size:10.5px;color:var(--d);line-height:1.55">사용량 불러오는 중...</div>
+<div class="help">키워드1을 메인 주제로 1,800~2,800자 장문, 키워드2·3은 같은 지역의 보조 키워드. 분당 한도(429)에 걸리면 60초 템플릿 후 자동 재개. 🗑 = 서버에서 키 삭제.</div>
+</div>
+
+<div class="card"><h3>🔎 도메인 발굴 (Brave Search)</h3>
+<div class="f"><small>Brave API 키 <a href="https://api-dashboard.search.brave.com/" target="_blank" rel="noopener" title="Brave API 대시보드" style="color:var(--p)">↗</a></small><input type="password" id="cBraveKey" placeholder="변경시만 입력"></div>
+<div class="r2"><div><small class="lb">하루 후보 목표</small><input type="number" id="cDTarget" value="100" min="10" max="1000"></div><div><small class="lb">하루 쿼리 한도</small><input type="number" id="cDQuery" value="100" min="1" max="10000" title="Brave 플랜 한도 안에서"></div></div>
+<label class="chk" style="color:var(--g)"><input type="checkbox" id="cDiscoOn">24시간 자동 발굴 (1분마다)</label>
+<div class="f" style="grid-template-columns:1fr"><small>검색어 목록 — 한 줄 하나, 그대로 Brave 검색 · <b>게시판 URL 조각</b>(예 <code>bbs/board.php?bo_table=free&amp;wr_id=</code>)도 가능 · #은 메모</small>
+<textarea id="cDDirect" rows="5" placeholder="bbs/board.php?bo_table=free&amp;wr_id=&#10;&quot;홍보게시판&quot; 마사지&#10;# 메모(검색 안 함)"></textarea></div>
+<div class="f" style="grid-template-columns:1fr"><small>🚫 제외 도메인 — 웹빌더 등 · 한 줄 하나, 이 문자열이 포함되면 즉시 제외</small><textarea id="cExcludedDomains" rows="2" placeholder="isweb.co.kr&#10;imweb.me&#10;modoo.at"></textarea></div>
+<div class="row" style="margin:2px 0 0;font-size:11px;color:var(--r)">🗂 자동 탈락 <b id="rejCount">-</b>개 <span class="help" style="margin:0">(시스템이 자동 수집·제외)</span><button class="btn btn-d btn-xs" type="button" onclick="showRejected()">목록</button></div>
+<div id="rejList" style="display:none;margin-top:6px;max-height:220px;overflow:auto;background:#0d1420;border:1px solid var(--b);border-radius:8px;padding:8px;font-size:11px;color:var(--d)"></div>
+<details class="adv"><summary>전국 시·구·동 + 키워드 일괄 생성</summary>
+<div class="help">서울+키워드 · 강남+키워드 · 호암직동+키워드 식으로 단계별 짧은 지역명 조합. 중복은 자동 제거.</div>
+<div class="row" style="gap:4px"><select id="rgProvince" style="width:auto" onchange="fillGuSel('rgProvince','rgGuSel')"><option value="">전국</option></select><select id="rgGuSel" style="width:auto" title="특정 시·군·구만 (비우면 시·도 전체)"><option value="">시·군·구 전체</option></select>
+<label class="chk" style="margin:0"><input type="checkbox" id="rgCity" checked>시·도</label><label class="chk" style="margin:0"><input type="checkbox" id="rgGu" checked>시·구·군</label><label class="chk" style="margin:0"><input type="checkbox" id="rgDong" checked>읍·면·동</label>
+<select id="rgJoin" style="width:auto"><option value="">붙여쓰기</option><option value=" ">띄어쓰기</option></select></div>
+<textarea id="rgKeywords" rows="2" placeholder="출장마사지&#10;홍보게시판"></textarea>
+<div class="row" style="margin-top:5px;gap:4px"><button class="btn btn-d btn-xs" onclick="previewRegionalKeywords()">개수 확인</button><button class="btn btn-v btn-xs" onclick="applyRegionalKeywords(false)">목록에 추가</button><button class="btn btn-y btn-xs" onclick="applyRegionalKeywords(true)">목록 교체</button><span id="rgCount" style="font-size:10px;color:var(--g)"></span></div></details>
+<details class="adv"><summary>API 단가 (비용 탭 추정용 — 2captcha·Brave는 건당 실과금을 안 알려줌)</summary>
+<div class="r3" style="margin-top:5px"><div><small class="lb">Brave $/쿼리</small><input type="number" id="cBravePrice" min="0" step="0.001" value="0.005"></div><div><small class="lb">reCAPTCHA $/건</small><input type="number" id="cCapRePrice" min="0" step="0.0001" value="0.003"></div><div><small class="lb">이미지캡차 $/건</small><input type="number" id="cCapImgPrice" min="0" step="0.0001" value="0.0005"></div></div></details>
+</div>
+
+<div class="card"><h3>🤖 CAPTCHA 자동 해결 (2captcha)</h3>
+<label class="chk" style="color:var(--g)"><input type="checkbox" id="cTwocaptchaEn">자동 해결 켜기 (reCAPTCHA · hCaptcha · Turnstile · kCaptcha)</label>
+<div class="f"><small>2captcha 키</small><input type="password" id="cTwocaptchaKey" placeholder="변경시만 입력"></div>
+<div id="twocaptchaUsage" style="margin-top:4px;padding:7px 9px;background:#0b1322;border:1px solid var(--b);border-radius:7px;font-size:10.5px;color:var(--d)">2captcha 상태 확인 중...</div>
+<div class="help"><a href="https://2captcha.com/" target="_blank" rel="noopener" style="color:var(--p)">2captcha 계정 ↗</a> · 자동 해결 실패 시 수동 입력으로 폴백.</div>
+</div>
+
+<div class="card"><h3>📣 텔레그램 · 백업</h3>
+<div class="f"><small>봇 토큰</small><input type="password" id="cTgTok" placeholder="변경시만 입력"></div>
+<div class="f"><small>챗 ID</small><input id="cTgChat" placeholder="123456789"></div>
+<div class="row" style="gap:10px;margin:2px 0"><label class="chk" style="margin:0"><input type="checkbox" id="cNotifyDone">성공알림</label><label class="chk" style="margin:0"><input type="checkbox" id="cNotifyFail">실패알림</label><label class="chk" style="margin:0"><input type="checkbox" id="cTgControl">폰 제어</label><button class="btn btn-d btn-xs" onclick="api('/telegram/test','POST').then(r=>toast(r&&r.ok?'전송됨':'실패: '+(r&&r.error||''),r&&r.ok?'ok':'er'))">테스트 전송</button></div>
+<div class="f"><small>자동 백업 시각</small><div class="row" style="margin:0;gap:5px;flex-wrap:nowrap"><input id="cBackupTime" placeholder="04:00 (KST · 비우면 끔)" style="flex:1;min-width:0"><button class="btn btn-g btn-xs" onclick="api('/backup/now','POST').then(r=>toast(r&&r.ok?'📦 백업 전송됨':'실패: '+(r&&r.error||'토큰 확인'),r&&r.ok?'ok':'er'))">지금 백업</button></div></div>
+<div class="help">폰 제어: 봇에 /상태 /오늘 /발행 /정지 /재개 /백업 /검증 (등록된 챗ID만). 백업은 zip(설정·사이트·이력·예약·키워드)을 텔레그램으로 전송.</div>
+</div>
+
+<div class="card"><h3>🔑 자동가입 고정 계정</h3>
+<div class="r2"><div><small class="lb">고정 아이디</small><input type="text" id="cSignupId" placeholder="예: ghdakseovy"></div><div><small class="lb">고정 비밀번호</small><input type="password" id="cSignupPw" placeholder="변경시만 입력"></div></div>
+<div class="help">비우면 랜덤 계정. 게시판마다 아이디 규칙(글자수)이 달라 가끔 안 맞을 수 있음.</div>
+</div>
+
+<div class="card" style="grid-column:1/-1"><details class="adv" style="border:none;padding:0;margin:0"><summary>🌐 Bright Data 고급 — 프록시 · Web Unlocker · Scraping Browser (Cloudflare 걸린 Cafe24용, 평소엔 안 건드림)</summary>
+<div class="grid3" style="margin-top:8px">
+<div><label class="chk" style="color:var(--g)"><input type="checkbox" id="cProxyEn">프록시 사용 (Residential)</label>
+<div class="r2"><div><small class="lb">Host</small><input type="text" id="cProxyHost" placeholder="brd.superproxy.io"></div><div><small class="lb">Port</small><input type="text" id="cProxyPort" placeholder="22225"></div></div>
+<div class="r2" style="margin-top:4px"><div><small class="lb">Username</small><input type="text" id="cProxyUser" placeholder="brd-customer-...-zone-..."></div><div><small class="lb">Password</small><input type="password" id="cProxyPass" placeholder="변경시만"></div></div>
+<label class="chk"><input type="checkbox" id="cProxyCfOnly">CF 걸린 사이트에만 사용 (비용 절약)</label></div>
+<div><label class="chk" style="color:var(--g)"><input type="checkbox" id="cUnlockerEn">Web Unlocker (CF·캡차 자동해결 · 약 $1.5/1000건)</label>
+<div class="f"><small>API 키</small><input type="password" id="cUnlockerKey" placeholder="변경시만"></div>
+<div class="f"><small>존 이름</small><input type="text" id="cUnlockerZone" placeholder="web_unlocker1"></div></div>
+<div><label class="chk" style="color:var(--g)"><input type="checkbox" id="cSbrEn">Scraping Browser (로그인형 Cafe24 · GB 과금)</label>
+<div class="f" style="grid-template-columns:1fr"><small>Endpoint</small><input type="password" id="cSbrEp" placeholder="brd-customer-...-zone-scraping_browser:PASS@brd.superproxy.io:9515 (변경시만)"></div>
+<div class="help"><a href="https://brightdata.com/" target="_blank" rel="noopener" style="color:var(--p)">Bright Data ↗</a> · 키·비번은 화면·API에 노출 안 됨 · 실패 시 직접연결로 폴백.</div></div>
+</div></details></div>
+
+</div>
+<div style="display:flex;gap:8px;align-items:center;margin:4px 0 10px;flex-wrap:wrap">
+<button class="btn btn-p" onclick="saveCfg()">💾 설정 저장</button>
+<span class="help" style="margin:0">모든 카드의 값이 한 번에 저장됩니다.</span><span style="flex:1"></span>
+<button class="btn btn-v btn-xs" onclick="runDiag()">🩺 서버 자가진단 (최대 60초)</button></div>
+<div id="diagOut"></div></div>
 
 </div><!-- wrap -->
 
@@ -10577,8 +10596,7 @@ function previewPost(){const c=$('gContent').value.trim();if(!c){toast('먼저 �
 function closePreview(){$('pvOverlay').style.display='none';$('pvFrame').srcdoc=''}
 async function delSite(id){if(!confirm('삭제?'))return;await api('/sites','DELETE',{id});renderSites()}
 async function testSite(id){toast('Selenium 테스트 중...');const r=await api('/test/'+id,'POST');if(r&&r.ok)toast('✅ 테스트 성공!'+(r.platform?' ['+(r.platform==='cafe24'?'Cafe24':'그누보드')+']':'')+' '+(r.message||''));else toast('실패: '+(r?.error||r?.message||''),'er')}
-async function saveCfg(){const d={brand:$('cBrand').value.trim(),phone:$('cPhone').value.trim(),phones:$('cPhones').value,video_url:$('cVideoUrl').value.trim(),landing_url:$('cLandingUrl').value.trim(),post_email:$('cPostEmail').value.trim(),workers:parseInt($('cWorkers').value)||2,post_delay:parseInt($('cDelay').value)||0,daily_limit:parseInt($('cDaily').value)||0,use_gpt:$('cUseGpt').checked,model:$('cModel').value.trim()||'gpt-4o-mini',llm_provider:($('cLlmProvider')?$('cLlmProvider').value:'openai'),nvidia_model:($('cNvidiaModel')?$('cNvidiaModel').value.trim():''),openrouter_model:($('cOpenrouterModel')?$('cOpenrouterModel').value.trim():''),openai_monthly_budget_usd:parseFloat($('cOpenaiBudget').value)||0,openai_input_price_per_million:parseFloat($('cOpenaiInPrice').value)||0,openai_output_price_per_million:parseFloat($('cOpenaiOutPrice').value)||0,telegram_chat_id:$('cTgChat').value.trim(),notify_done:$('cNotifyDone').checked,notify_fail:$('cNotifyFail').checked,backup_time:$('cBackupTime').value.trim(),telegram_control:$('cTgControl').checked,verify_enabled:$('cVerify').checked,mix_keywords:$('cMixKw').checked,block_unpaid:$('cBlockUnpaid').checked,search_provider:'brave',discover_enabled:$('cDiscoOn').checked,discover_daily_target:parseInt($('cDTarget').value)||100,discover_query_limit:parseInt($('cDQuery').value)||100,discover_keywords:'',discover_direct_queries:$('cDDirect').value,excluded_domains:($('cExcludedDomains')?$('cExcludedDomains').value:''),imap_email:($('cImapEmail')?$('cImapEmail').value.trim():''),imap_password:($('cImapPass')&&$('cImapPass').value?$('cImapPass').value:'***설정됨***'),imap_host:($('cImapHost')&&$('cImapHost').value.trim()?$('cImapHost').value.trim():'imap.gmail.com'),twocaptcha_enabled:$('cTwocaptchaEn').checked,brave_price_per_query_usd:parseFloat($('cBravePrice').value)||0,twocaptcha_price_recaptcha_usd:parseFloat($('cCapRePrice').value)||0,twocaptcha_price_image_usd:parseFloat($('cCapImgPrice').value)||0,openai_cached_input_price_per_million:parseFloat($('cOpenaiCachedPrice')?.value)||undefined};
-if(d.openai_cached_input_price_per_million===undefined)delete d.openai_cached_input_price_per_million;
+async function saveCfg(){const d={brand:$('cBrand').value.trim(),phone:$('cPhone').value.trim(),phones:$('cPhones').value,video_url:$('cVideoUrl').value.trim(),landing_url:$('cLandingUrl').value.trim(),post_email:$('cPostEmail').value.trim(),workers:parseInt($('cWorkers').value)||2,post_delay:parseInt($('cDelay').value)||0,daily_limit:parseInt($('cDaily').value)||0,use_gpt:$('cUseGpt').checked,llm_provider:($('cLlmProvider')?$('cLlmProvider').value:'openrouter'),nvidia_model:($('cNvidiaModel')?$('cNvidiaModel').value.trim():''),openrouter_model:($('cOpenrouterModel')?$('cOpenrouterModel').value.trim():''),telegram_chat_id:$('cTgChat').value.trim(),notify_done:$('cNotifyDone').checked,notify_fail:$('cNotifyFail').checked,backup_time:$('cBackupTime').value.trim(),telegram_control:$('cTgControl').checked,verify_enabled:$('cVerify').checked,mix_keywords:$('cMixKw').checked,block_unpaid:$('cBlockUnpaid').checked,search_provider:'brave',discover_enabled:$('cDiscoOn').checked,discover_daily_target:parseInt($('cDTarget').value)||100,discover_query_limit:parseInt($('cDQuery').value)||100,discover_keywords:'',discover_direct_queries:$('cDDirect').value,excluded_domains:($('cExcludedDomains')?$('cExcludedDomains').value:''),imap_email:($('cImapEmail')?$('cImapEmail').value.trim():''),imap_password:($('cImapPass')&&$('cImapPass').value?$('cImapPass').value:'***설정됨***'),imap_host:($('cImapHost')&&$('cImapHost').value.trim()?$('cImapHost').value.trim():'imap.gmail.com'),twocaptcha_enabled:$('cTwocaptchaEn').checked,brave_price_per_query_usd:parseFloat($('cBravePrice').value)||0,twocaptcha_price_recaptcha_usd:parseFloat($('cCapRePrice').value)||0,twocaptcha_price_image_usd:parseFloat($('cCapImgPrice').value)||0};
 const bk=$('cBraveKey').value.trim();if(bk)d.brave_api_key=bk;
 // 프록시(Bright Data): 비번은 입력했을 때만 전송(빈칸이면 마스크값으로 기존 유지).
 d.proxy_enabled=$('cProxyEn').checked;d.proxy_host=$('cProxyHost').value.trim();d.proxy_port=$('cProxyPort').value.trim();d.proxy_user=$('cProxyUser').value.trim();d.proxy_only_for_cf=$('cProxyCfOnly').checked;
@@ -10592,13 +10610,13 @@ const sep=$('cSbrEp').value.trim();d.sbr_endpoint=(sep?sep:'***설정됨***');
 // 자동가입 고정계정
 d.signup_fixed_id=$('cSignupId').value.trim();
 const spw=$('cSignupPw').value.trim();d.signup_fixed_pw=(spw?spw:'***설정됨***');
-const pw=$('cPw').value.trim();if(pw)d.password=pw;const gp=$('cGuestPw').value.trim();if(gp)d.guest_post_password=gp;const ok=$('cOpenai').value.trim();if(ok)d.openai_key=ok;const oa=$('cOpenaiAdmin').value.trim();if(oa)d.openai_admin_key=oa;const nk=($('cNvidiaKey')?$('cNvidiaKey').value.trim():'');if(nk)d.nvidia_api_key=nk;const ork=($('cOpenrouterKey')?$('cOpenrouterKey').value.trim():'');if(ork)d.openrouter_api_key=ork;const tg=$('cTgTok').value.trim();if(tg)d.telegram_token=tg;const tc=$('cTwocaptchaKey').value.trim();if(tc)d.twocaptcha_api_key=tc;const r=await api('/config','POST',d);if(r&&r.ok){toast('저장 완료');$('cPw').value='';$('cGuestPw').value='';$('cOpenai').value='';$('cOpenaiAdmin').value='';if($('cNvidiaKey'))$('cNvidiaKey').value='';if($('cOpenrouterKey'))$('cOpenrouterKey').value='';$('cTgTok').value='';$('cTwocaptchaKey').value='';$('cProxyPass').value='';$('cUnlockerKey').value='';$('cSbrEp').value='';$('cSignupPw').value='';loadOpenAIUsage()}}
+const pw=$('cPw').value.trim();if(pw)d.password=pw;const gp=$('cGuestPw').value.trim();if(gp)d.guest_post_password=gp;const nk=($('cNvidiaKey')?$('cNvidiaKey').value.trim():'');if(nk)d.nvidia_api_key=nk;const ork=($('cOpenrouterKey')?$('cOpenrouterKey').value.trim():'');if(ork)d.openrouter_api_key=ork;const tg=$('cTgTok').value.trim();if(tg)d.telegram_token=tg;const tc=$('cTwocaptchaKey').value.trim();if(tc)d.twocaptcha_api_key=tc;const r=await api('/config','POST',d);if(r&&r.ok){toast('저장 완료');$('cPw').value='';$('cGuestPw').value='';if($('cNvidiaKey'))$('cNvidiaKey').value='';if($('cOpenrouterKey'))$('cOpenrouterKey').value='';$('cTgTok').value='';$('cTwocaptchaKey').value='';$('cProxyPass').value='';$('cUnlockerKey').value='';$('cSbrEp').value='';$('cSignupPw').value='';loadOpenAIUsage()}}
 async function loadCfgUI(){const c=await api('/config','GET');if(!c)return;$('cVideoUrl').value=c.video_url||'';$('cLandingUrl').value=c.landing_url||'';$('cPostEmail').value=c.post_email||'';$('cGuestPw').placeholder=(c.guest_post_password==='***설정됨***')?'설정됨 · 변경시에만 입력':'변경시에만 입력';$('cUseGpt').checked=!!c.use_gpt;$('cNotifyDone').checked=!!c.notify_done;$('cNotifyFail').checked=!!c.notify_fail;$('cTgControl').checked=!!c.telegram_control;$('cVerify').checked=(c.verify_enabled!==false);$('cMixKw').checked=(c.mix_keywords!==false);$('cBlockUnpaid').checked=(c.block_unpaid!==false);$('cDiscoOn').checked=!!c.discover_enabled;if(c.discover_daily_target)$('cDTarget').value=c.discover_daily_target;if(c.discover_query_limit)$('cDQuery').value=c.discover_query_limit;if(typeof c.discover_direct_queries==='string')$('cDDirect').value=c.discover_direct_queries;if($('cExcludedDomains')&&typeof c.excluded_domains==='string')$('cExcludedDomains').value=c.excluded_domains;if($('cImapEmail'))$('cImapEmail').value=c.imap_email||'';if($('cImapHost'))$('cImapHost').value=c.imap_host||'imap.gmail.com';if($('cImapPass'))$('cImapPass').placeholder=(c.imap_password==='***설정됨***')?'설정됨 · 변경시만 입력':'앱 비밀번호 16자리 (변경시만)';$('cBraveKey').placeholder=(c.brave_api_key==='***설정됨***')?'설정됨 · 변경시에만 입력':'Brave API 키 입력';
 if($('cProxyEn')){$('cProxyEn').checked=!!c.proxy_enabled;$('cProxyHost').value=c.proxy_host||'';$('cProxyPort').value=c.proxy_port||'';$('cProxyUser').value=c.proxy_user||'';$('cProxyCfOnly').checked=(c.proxy_only_for_cf!==false);$('cProxyPass').placeholder=(c.proxy_pass==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';}
 if($('cUnlockerEn')){$('cUnlockerEn').checked=!!c.unlocker_enabled;$('cUnlockerZone').value=c.unlocker_zone||'web_unlocker1';$('cUnlockerKey').placeholder=(c.unlocker_api_key==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';}
 if($('cSbrEn')){$('cSbrEn').checked=!!c.sbr_enabled;$('cSbrEp').placeholder=(c.sbr_endpoint==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';}
 if($('cSignupId')){$('cSignupId').value=c.signup_fixed_id||'';$('cSignupPw').placeholder=(c.signup_fixed_pw==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';}
-if(c.backup_time)$('cBackupTime').value=c.backup_time;if(c.model)$('cModel').value=c.model;if($('cLlmProvider'))$('cLlmProvider').value=c.llm_provider||'openai';if($('cNvidiaModel'))$('cNvidiaModel').value=c.nvidia_model||'';if($('cNvidiaKey'))$('cNvidiaKey').placeholder=(c.nvidia_api_key==='***설정됨***')?'설정됨 · 변경시만 입력':'nvapi-... (변경시만)';if($('cOpenrouterModel'))$('cOpenrouterModel').value=c.openrouter_model||'';if($('cOpenrouterKey'))$('cOpenrouterKey').placeholder=(c.openrouter_api_key==='***설정됨***')?'설정됨 · 변경시만 입력':'sk-or-v1-... (변경시만)';if(c.telegram_chat_id)$('cTgChat').value=c.telegram_chat_id;if(typeof c.phones==='string')$('cPhones').value=c.phones;$('cOpenai').placeholder=(c.openai_key==='***설정됨***')?'설정됨 · 변경시만 입력':'sk-... (변경시만)';$('cOpenaiAdmin').placeholder=(c.openai_admin_key==='***설정됨***')?'관리자 키 설정됨 · 변경시만 입력':'관리자 키 없으면 로컬 예상비용 사용';$('cOpenaiBudget').value=c.openai_monthly_budget_usd==null?20:c.openai_monthly_budget_usd;$('cOpenaiInPrice').value=c.openai_input_price_per_million==null?0.15:c.openai_input_price_per_million;$('cOpenaiOutPrice').value=c.openai_output_price_per_million==null?0.60:c.openai_output_price_per_million;$('cTgTok').placeholder=(c.telegram_token==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';$('cTwocaptchaEn').checked=!!c.twocaptcha_enabled;$('cTwocaptchaKey').placeholder=(c.twocaptcha_api_key==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';if(c.brave_price_per_query_usd!=null)$('cBravePrice').value=c.brave_price_per_query_usd;if(c.twocaptcha_price_recaptcha_usd!=null)$('cCapRePrice').value=c.twocaptcha_price_recaptcha_usd;if(c.twocaptcha_price_image_usd!=null)$('cCapImgPrice').value=c.twocaptcha_price_image_usd;loadOpenAIUsage();api('/rejected-domains','GET').then(r=>{if(r&&r.ok&&$('rejCount'))$('rejCount').textContent=r.count})}
+if(c.backup_time)$('cBackupTime').value=c.backup_time;if($('cLlmProvider'))$('cLlmProvider').value=(c.llm_provider==='nvidia')?'nvidia':'openrouter';if($('cNvidiaModel'))$('cNvidiaModel').value=c.nvidia_model||'';if($('cNvidiaKey'))$('cNvidiaKey').placeholder=(c.nvidia_api_key==='***설정됨***')?'설정됨 · 변경시만 입력':'nvapi-... (변경시만)';if($('cOpenrouterModel'))$('cOpenrouterModel').value=c.openrouter_model||'';if($('cOpenrouterKey'))$('cOpenrouterKey').placeholder=(c.openrouter_api_key==='***설정됨***')?'설정됨 · 변경시만 입력':'sk-or-v1-... (변경시만)';if(c.telegram_chat_id)$('cTgChat').value=c.telegram_chat_id;if(typeof c.phones==='string')$('cPhones').value=c.phones;$('cTgTok').placeholder=(c.telegram_token==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';$('cTwocaptchaEn').checked=!!c.twocaptcha_enabled;$('cTwocaptchaKey').placeholder=(c.twocaptcha_api_key==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';if(c.brave_price_per_query_usd!=null)$('cBravePrice').value=c.brave_price_per_query_usd;if(c.twocaptcha_price_recaptcha_usd!=null)$('cCapRePrice').value=c.twocaptcha_price_recaptcha_usd;if(c.twocaptcha_price_image_usd!=null)$('cCapImgPrice').value=c.twocaptcha_price_image_usd;loadOpenAIUsage();api('/rejected-domains','GET').then(r=>{if(r&&r.ok&&$('rejCount'))$('rejCount').textContent=r.count})}
 async function showRejected(){const box=$('rejList');if(!box)return;if(box.style.display!=='none'){box.style.display='none';return}box.style.display='block';box.innerHTML='불러오는 중…';const r=await api('/rejected-domains','GET');if(!r||!r.ok){box.innerHTML='조회 실패';return}if($('rejCount'))$('rejCount').textContent=r.count;const logmap={};(r.log||[]).forEach(x=>{if(!logmap[x.domain])logmap[x.domain]=x.reason||''});box.innerHTML='<div style="color:var(--r);margin-bottom:6px">총 '+r.count+'개 · 발굴 자동 제외됨 (재활성화하려면 옆 ↺ 클릭)</div>'+(r.domains||[]).map(d=>'<div style="display:flex;justify-content:space-between;gap:8px;padding:2px 0;border-bottom:1px solid #17202e"><span><b style="color:var(--t)">'+esc(d)+'</b> <span style="color:var(--d)">'+esc((logmap[d]||'').slice(0,30))+'</span></span><span style="cursor:pointer;color:var(--g)" title="재활성화(제외 해제)" onclick="unrejectDomain(\''+esc(d)+'\')">↺</span></div>').join('')}
 async function clearKey(k){if(!confirm(k+' 를 서버에서 지울까요? (그 엔진은 키를 다시 넣기 전까지 못 씁니다)'))return;const r=await api('/config/clear-key','POST',{key:k});if(r&&r.ok){toast((r.was_set?'삭제됨':'이미 비어 있음')+' · '+k,'ok');loadCfgUI()}else toast('실패','er')}
 async function unrejectDomain(dom){if(!confirm(dom+' 을(를) 자동 탈락에서 해제할까요? (다시 발굴 대상이 됩니다)'))return;const r=await api('/rejected-domains','POST',{remove:dom});if(r&&r.ok){toast('해제됨 · '+dom,'ok');showRejected();showRejected()}else toast('실패','er')}
@@ -10606,11 +10624,12 @@ async function loadOpenAIUsage(){
   const r=await api('/openai/usage','GET');
   const c=await api('/twocaptcha/usage','GET');
   if(r&&r.ok){
-    const m=r.month||{},t=r.today||{};const actual=r.actual_month_cost_usd;const cost=(actual==null?m.estimated_cost_usd:actual)||0;const remain=r.remaining_budget_usd;const src=r.source==='official_costs_api'?'공식 Costs API':'토큰 기준 예상';
-    const eng='<b>엔진 '+esc((r.llm_provider||'openai').toUpperCase())+'</b> · '+esc(r.llm_model||'')+' · 키 '+(r.llm_key_set?'<span style="color:var(--g)">있음</span>':'<span style="color:var(--r)">없음 — 아래에 키 입력 후 저장</span>')+(r.use_gpt?'':' · <span style="color:var(--y)">AI 생성 체크 꺼짐(템플릿만)</span>')+'<br>';
-    $('openaiUsage').innerHTML=eng+'<b style="color:var(--p)">이번 달 $'+Number(cost).toFixed(4)+'</b> · 남은 예산 '+(remain==null?'예산 미설정':'$'+Number(remain).toFixed(4))+'<br>오늘 요청 '+(t.requests||0)+'회 · 입력 '+Number(t.input_tokens||0).toLocaleString()+' · 출력 '+Number(t.output_tokens||0).toLocaleString()+' 토큰<br><span style="color:var(--g)">'+src+'</span> · '+esc(r.note||'')+(r.admin_error?'<br><span style="color:var(--y)">관리자 조회: '+esc(r.admin_error)+'</span>':'');
+    // 현재 엔진(모델)만 실측 표시 — OpenAI 예산/토큰 추정 표기는 2026-09-11 제거
+    const cur=r.current||{},cm=cur.month||{},ct=cur.today||{};
+    const eng='<b style="color:var(--t)">엔진 '+esc((r.llm_provider||'openrouter').toUpperCase())+'</b> · '+esc(r.llm_model||'')+' · 키 '+(r.llm_key_set?'<span style="color:var(--g)">있음</span>':'<span style="color:var(--r)">없음 — 위에 키 입력 후 저장</span>')+(r.use_gpt?'':' · <span style="color:var(--y)">AI 생성 체크 꺼짐(템플릿만)</span>');
+    $('openaiUsage').innerHTML=eng+'<br><b style="color:var(--p)">이번 달 $'+Number(cm.estimated_cost_usd||0).toFixed(4)+'</b> ('+(cm.requests||0)+'편) · 오늘 $'+Number(ct.estimated_cost_usd||0).toFixed(4)+' ('+(ct.requests||0)+'편) · 편당 $'+Number(cur.per_call_usd||0).toFixed(5)+' <span style="color:var(--g)">'+(cur.measured?'실측':'추정')+'</span>';
   } else {
-    $('openaiUsage').innerHTML='<span style="color:var(--y)">OpenAI 상태를 불러오지 못했습니다.</span>';
+    $('openaiUsage').innerHTML='<span style="color:var(--y)">AI 사용량을 불러오지 못했습니다.</span>';
   }
   if(c&&c.ok){
     const bal=(typeof c.balance==='number')?c.balance:0;const rem=(typeof c.remaining_usd==='number')?c.remaining_usd:bal;const delta=(typeof c.charged_since_last_check_usd==='number')?c.charged_since_last_check_usd:0;
@@ -10682,6 +10701,7 @@ function _costCard(b,extraNote){
       <div><div style="font-size:9px;color:var(--d);margin-bottom:3px">최근 14일 (일별 비용)</div>${_bars(b.daily,'cost')}</div>
       <div><div style="font-size:9px;color:var(--d);margin-bottom:3px">오늘 24시간 (시간별 비용)</div>${_bars(b.hourly,'cost')}</div>
     </div>
+    ${(b.by_model&&b.by_model.length)?'<table style="margin-top:8px;font-size:10.5px"><thead><tr><th>모델 (이번 달)</th><th style="text-align:right">횟수</th><th style="text-align:right">비용</th><th>기준</th></tr></thead><tbody>'+b.by_model.map(x=>`<tr style="${x.current?'':'color:var(--d)'}"><td>${esc(x.model)}${x.current?' <span class="twocap-chip ok">현재</span>':''}</td><td style="text-align:right">${Number(x.requests||0).toLocaleString()}회</td><td style="text-align:right">${_usd(x.cost_usd)}</td><td>${x.measured?'실측':'추정'}${x.current?'':' · 종료'}</td></tr>`).join('')+'</tbody></table>':''}
     ${extraNote?`<div class="twocap-footer"><span>${extraNote}</span></div>`:''}
   </div>`}
 let _usageTimer=null;
@@ -10705,7 +10725,7 @@ async function loadUsageDashboard(silent){
   const rateInfo=u.usdkrw?('환율 ₩'+Math.round(u.usdkrw.rate).toLocaleString()+'/$'+(u.usdkrw.source==='live'?' 실시간':u.usdkrw.source==='cache'?' 캐시':' 기본값')):'';
   const ai=$('costAutoInfo'); if(ai){const t=new Date();ai.textContent='30초마다 자동 새로고침 · 갱신 '+String(t.getHours()).padStart(2,'0')+':'+String(t.getMinutes()).padStart(2,'0')+':'+String(t.getSeconds()).padStart(2,'0')+(rateInfo?' · '+rateInfo:'')}
   const o=u.openai||{},c=u.twocaptcha||{},b=u.brave||{};
-  const oNote=o.admin_error?('관리자 조회 실패: '+esc(o.admin_error)):(o.remaining_budget_usd!=null?('남은 예산 '+_usd(o.remaining_budget_usd)):'');
+  const oNote=(o.ledger_month_usd!=null&&Math.abs((o.ledger_month_usd||0)-(o.month_cost_usd||0))>0.0001)?('이번 달 AI 원장 합계 '+_usd(o.ledger_month_usd)+' — 위 숫자는 현재 엔진만, 합계는 종료된 모델(표 참고) 포함'):'';
   let cNote='';
   if(c.balance_ok&&c.balance_usd!=null)cNote='참고용 잔액 '+_usd(c.balance_usd)+(c.balance_delta_usd?(' · 최근 차감 '+_usd(c.balance_delta_usd)):'');
   else if(c.balance_error)cNote='잔액조회: '+esc(c.balance_error);
