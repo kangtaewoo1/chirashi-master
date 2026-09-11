@@ -6401,7 +6401,12 @@ def _pc_node_alive(within=600):
     try:
         now=time.time()
         with _NODE_LOCK:
-            return any(float(b.get('last',0) or 0) > now-within for b in NODE_BEATS.values())
+            if NODE_BEATS:
+                return any(float(b.get('last',0) or 0) > now-within for b in NODE_BEATS.values())
+        # ★부팅 직후 유예: NODE_BEATS는 메모리라 재시작마다 비워짐 → 노드가 다시 beat하기 전 ~30초를
+        #   '노드 죽음'으로 오판해 cafe24를 서버가 집어 탈락내던 누수 방지. 부팅 180초 내 무beat면 살아있다고 간주
+        #   (노드는 자동시작이라 곧 beat함). 180초 지나도 침묵이면 진짜 죽은 것 → 폴백.
+        return (now-_BOOT_EPOCH) < 180
     except Exception:
         return False
 
@@ -7461,6 +7466,7 @@ def index():
 # ★배포 반영 확인용(대표님 '언제 되는데/아직 안뜬다' 대응): 현재 구동중 git SHA + 부팅시각.
 #   인증 없이 조회 가능(민감정보 없음). before_request 화이트리스트에 등록됨.
 _BOOT_TS=time.strftime('%Y-%m-%d %H:%M:%S')
+_BOOT_EPOCH=time.time()   # _pc_node_alive 부팅유예 판정용(재시작 직후 NODE_BEATS 비어있는 ~30초 오판 방지)
 @app.route('/api/version')
 def api_version():
     sha=''
