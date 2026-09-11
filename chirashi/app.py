@@ -187,8 +187,14 @@ def _local_openai_usage_summary(cfg):
     budget=float(cfg.get('openai_monthly_budget_usd') or 0)
     m=agg(mr); t=agg(tr)
     per_call=round(m['estimated_cost_usd']/m['requests'],6) if m['requests'] else 0.0  # 이번 달 평균 1건당 예상비용
+    # ★모델별 이번달 집계(대표님 2026-09-11 '지출 $97.88 vs 예산 $20 이거 맞아?'): 서버가 mini인지 4o인지 원장으로 확정용.
+    bym={}
+    for x in mr:
+        k=str(x.get('model') or '?'); b=bym.setdefault(k,{'requests':0,'input_tokens':0,'output_tokens':0,'estimated_cost_usd':0.0})
+        b['requests']+=int(x.get('requests',1) or 0); b['input_tokens']+=int(x.get('input_tokens',0) or 0)
+        b['output_tokens']+=int(x.get('output_tokens',0) or 0); b['estimated_cost_usd']=round(b['estimated_cost_usd']+float(x.get('estimated_cost_usd',0) or 0),6)
     series=_time_series(rows,'estimated_cost_usd')
-    return {'source':'local_estimate','month':m,'today':t,'monthly_budget_usd':budget,
+    return {'source':'local_estimate','month':m,'today':t,'monthly_budget_usd':budget,'by_model':bym,'model_setting':cfg.get('model'),
             'remaining_budget_usd':round(max(0,budget-m['estimated_cost_usd']),6) if budget>0 else None,
             'per_call_usd':per_call,'daily':series['daily'],'hourly':series['hourly'],
             'unit_price':{'input_per_million':float(cfg.get('openai_input_price_per_million') or 0.15),
@@ -1421,6 +1427,13 @@ def generate_post_gpt(keywords, cfg, workroom_id=None):
         json={"model":model,"temperature":0.85,"max_tokens":3800,
               "messages":[{"role":"system","content":sys_p},{"role":"user","content":usr_p}]},
         timeout=60)
+    # ★잔액 소진 구분(대표님 2026-09-11 '이거 맞아?' — 잔액 -$1.44인데 로그는 '레이트리밋'): OpenAI는 크레딧 바닥도
+    #   429로 주지만 body error.type이 insufficient_quota. 이를 구분 못해 5분마다 헛요청+오해 로그가 찍혔음.
+    if resp.status_code==429:
+        try: _et=str(((resp.json() or {}).get('error') or {}).get('type') or '')
+        except Exception: _et=''
+        if 'insufficient_quota' in _et or 'billing' in _et:
+            raise RuntimeError('OpenAI 잔액 소진(insufficient_quota) — platform.openai.com 크레딧 충전 필요')
     resp.raise_for_status()
     payload=resp.json()
     _record_openai_usage(model,payload.get('usage') or {},cfg)
@@ -1468,9 +1481,14 @@ def _gen_once(keywords, cfg, workroom_id=None):
             return generate_post_gpt(keywords,cfg,workroom_id=workroom_id)
         except Exception as e:
             _msg=str(e)
-            if '429' in _msg or 'Too Many' in _msg or 'rate limit' in _msg.lower():
+            # 여러 워커가 같은 순간 429를 받아 같은 줄을 6번 찍던 것 방지: 이미 스킵 중이면 로그 생략.
+            _first=(time.time()>=_GPT_SKIP_UNTIL[0])
+            if '잔액 소진' in _msg or 'insufficient_quota' in _msg:
+                _GPT_SKIP_UNTIL[0]=time.time()+1800   # 30분 스킵 — 충전 전엔 재시도 무의미(헛요청·오해 로그 방지)
+                if _first: add_log('[GPT 잔액소진→30분간 템플릿] OpenAI 크레딧 부족 — platform.openai.com에서 충전해야 GPT 글 재개(그동안 템플릿)')
+            elif '429' in _msg or 'Too Many' in _msg or 'rate limit' in _msg.lower():
                 _GPT_SKIP_UNTIL[0]=time.time()+300   # 5분간 GPT 스킵
-                add_log('[GPT 429→5분간 템플릿 사용] OpenAI 레이트리밋 — 발행 속도 유지 위해 잠시 GPT 끔')
+                if _first: add_log('[GPT 429→5분간 템플릿 사용] OpenAI 레이트리밋 — 발행 속도 유지 위해 잠시 GPT 끔')
             else:
                 add_log(f'[GPT 실패→템플릿] {_msg[:80]}')
     return generate_rich_html(keywords,cfg,workroom_id=workroom_id)
@@ -7509,7 +7527,7 @@ def chk():
     #  /api/test/* = 발행 테스트 트리거(등록 사이트에 실제 글1건 발행해 검증).
     _p=request.path
     if _p=='/api/version': return  # 배포 SHA 확인 — 공개(민감정보 없음)
-    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/report-site','/api/unlocker/test','/api/sbr/test') or _p.startswith('/api/test/'):
+    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/openai/usage','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/report-site','/api/unlocker/test','/api/sbr/test') or _p.startswith('/api/test/'):
         tok=(request.args.get('token') or '').strip()
         cfgtok=(load_config().get('log_token') or '').strip()
         if cfgtok and tok==cfgtok:
