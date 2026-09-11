@@ -674,6 +674,14 @@ def _signup_form_measure(site):
     email_verification=bool(
         re.search(r'(?:e-?mail|이메일)\s*(?:주소)?\s*(?:인증|확인)(?:을|를|이|가)?\s*(?:반드시|필수|해야|하셔야|완료해야|하여야)',text,re.I) or
         re.search(r'(?:인증\s*(?:메일|이메일)|인증\s*링크).{0,40}(?:발송|보냈|전송|클릭|확인)',text,re.I))
+    # ★cafe24 실측(2026-09-12 대표님 '다른 카페24로'): join.html은 안내문 없이 hidden 플래그로 인증을 켠다.
+    #   is_email_auth_use=T → 이메일 인증 필수(임시메일 거부·인증메일 못받아 가입실패). 텍스트 매칭만으론 놓쳐 False 오판했음.
+    if platform=='cafe24':
+        def _flag_true(nm):
+            m=re.search(r'name=["\']'+nm+r'["\'][^>]*value=["\']?\s*(T|1|true|Y)\b',html,re.I) \
+              or re.search(r'value=["\']?\s*(T|1|true|Y)\b[^>]*name=["\']'+nm+r'["\']',html,re.I)
+            return bool(m)
+        if _flag_true('is_email_auth_use'): email_verification=True
     signature=[(f.get('role'),f.get('name'),f.get('id'),f.get('type'),f.get('minlength'),f.get('maxlength'),f.get('pattern')) for f in fields]
     fingerprint=hashlib.sha256(json.dumps(signature,ensure_ascii=False,sort_keys=True).encode()).hexdigest()
     return {'signup_url':url,'form_url':measured_url,'form_action':urllib.parse.urljoin(measured_url,form.get('action','')),
@@ -5697,13 +5705,22 @@ def screen_candidate(url, cfg=None):
     #   자동가입을 건너뛰고 '수동가입 대기(manual_signup)'로 분류 → 크롬·2captcha 낭비 0.
     #   (비회원 글쓰기 가능하면 가입 자체가 불필요하므로 login_required일 때만 검사.)
     res['signup_email_verify']=False; res['signup_phone_cert']=False
-    if res.get('login_required') and not res.get('write_form'):
-        signup_urls=[base+'/bbs/register.php', base+'/member/join.html',
-                     base+'/bbs/register_form.php', base+'/shop/member.php?type=join']
+    _is_cafe24=(res.get('platform')=='cafe24' or 'cafe24' in base)
+    # ★cafe24는 비회원 글쓰기가 막혀도 write_form 판정이 애매할 수 있어(로그인 리다이렉트) 항상 가입폼 확인.
+    if (res.get('login_required') and not res.get('write_form')) or _is_cafe24:
+        signup_urls=([base+'/member/join.html'] if _is_cafe24 else []) + \
+                    [base+'/bbs/register.php', base+'/bbs/register_form.php', base+'/shop/member.php?type=join']
         for su in signup_urls:
             sr=get(su)
             if not sr or sr.status_code>=400: continue
             sh=sr.text or ''
+            # ★cafe24 hidden 인증 플래그(2026-09-12): 안내문 없이 is_email_auth_use/is_mobile/name_auth_use=T로 인증을 켬.
+            if _is_cafe24:
+                def _f(nm):
+                    return bool(re.search(r'name=["\']'+nm+r'["\'][^>]*value=["\']?\s*(T|1|true|Y)\b',sh,re.I)
+                                or re.search(r'value=["\']?\s*(T|1|true|Y)\b[^>]*name=["\']'+nm+r'["\']',sh,re.I))
+                if _f('is_mobile_auth_use') or _f('is_name_auth_use') or _f('is_ipin_auth_use'): res['signup_phone_cert']=True
+                if _f('is_email_auth_use'): res['signup_email_verify']=True
             # 본인인증(휴대폰/실명) 신호
             if any(k in sh for k in ['win_hp_cert','nice본인인증','checkplus','휴대폰 본인인증','휴대폰본인인증',
                                      'nice_ok','본인인증','실명인증','SMS 인증','아이핀','ipin']):
@@ -5712,7 +5729,7 @@ def screen_candidate(url, cfg=None):
             if (re.search(r'(?:e-?mail|이메일)\s*(?:주소)?\s*(?:인증|확인)(?:을|를|이|가)?\s*(?:반드시|필수|해야|하셔야|완료해야|하여야)',sh,re.I)
                 or re.search(r'(?:인증\s*(?:메일|이메일)|인증\s*링크).{0,40}(?:발송|보냈|전송|클릭|확인)',sh,re.I)):
                 res['signup_email_verify']=True
-            if re.search(r'wr_subject|mb_id|mb_password',sh,re.I) or res['signup_phone_cert'] or res['signup_email_verify']:
+            if re.search(r'wr_subject|mb_id|mb_password|member_id',sh,re.I) or res['signup_phone_cert'] or res['signup_email_verify']:
                 break   # 가입폼(또는 인증신호) 찾음 → 더 볼 필요 없음
     return res
 
