@@ -7723,7 +7723,7 @@ def chk():
     #  /api/test/* = 발행 테스트 트리거(등록 사이트에 실제 글1건 발행해 검증).
     _p=request.path
     if _p=='/api/version': return  # 배포 SHA 확인 — 공개(민감정보 없음)
-    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/sites/unlock-cafe24','/api/sites/purge-fake-cafe24','/api/openai/usage','/api/config/clear-key','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/report-site','/api/unlocker/test','/api/sbr/test') or _p.startswith('/api/test/'):
+    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/sites/unlock-cafe24','/api/sites/purge-fake-cafe24','/api/candidates/rescreen-cafe24','/api/openai/usage','/api/config/clear-key','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/report-site','/api/unlocker/test','/api/sbr/test') or _p.startswith('/api/test/'):
         tok=(request.args.get('token') or '').strip()
         cfgtok=(load_config().get('log_token') or '').strip()
         if cfgtok and tok==cfgtok:
@@ -8426,6 +8426,25 @@ def api_rejected_domains():
     except Exception: logn=300
     log=list(reversed(raw.get('log') or []))[:logn]   # 최근 사유(기본 300, ?logn=2000까지)
     return jsonify({'ok':True,'count':len(doms),'domains':doms[:2000],'log':log})
+
+@app.route('/api/candidates/rescreen-cafe24',methods=['POST'])
+def api_cand_rescreen_cafe24():
+    """★cafe24 후보만 재검수(토큰 허용, 2026-09-12): 인증 판정 로직 개선 후 기존 후보의 signup_email_verify/phone_cert를
+       다시 세팅. 인증 필수로 판정되면 claim에서 자동 제외됨. body: {limit?}. 오래 걸려 배치로."""
+    d=request.get_json(silent=True) or {}
+    lim=int(d.get('limit',30) or 30)
+    with _cand_lock:
+        cands=load_cands()
+        tgt=[c for c in cands if c.get('platform')=='cafe24' and c.get('status') in ('ready','approved')]
+        for c in tgt: c['screened']=False
+        save_cands(cands)
+    n=screen_pending(lim)
+    # 재검수 후 인증필수로 바뀐 것 수 집계
+    with _cand_lock:
+        cands=load_cands()
+        certd=[c for c in cands if c.get('platform')=='cafe24' and (c.get('signup_email_verify') or c.get('signup_phone_cert'))]
+    add_log(f'[cafe24 재검수] {n}건 재검수 · 인증필수로 판정된 cafe24 {len(certd)}곳(claim 제외됨)','검수')
+    return jsonify({'ok':True,'screened':n,'cert_required':len(certd)})
 
 @app.route('/api/candidates/screen',methods=['POST'])
 def api_cand_screen():
