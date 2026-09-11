@@ -526,12 +526,39 @@ def _signup_form_measure(site):
             #   실패해도 예외 삼켜 기존 흐름. cafe24에만 적용(그누보드는 기존과 동일).
             if platform=='cafe24':
                 _ju=(site.get('signup_url') or base+'/member/join.html')
+                def _agree_step():
+                    """cafe24 약관 단계: agreement.html이면 동의 체크박스 전부 켜고 다음(회원가입)을 눌러 join.html로.
+                       ★노드 실측 2026-09-11: join.html 직행 시 '약관에동의하셔야합니다' alert → agreement로 튕기며
+                       Selenium이 alert에 막혀 측정이 죽던 사이트(unexpected alert open). 제출버튼 우선, a[href=join]은 최후."""
+                    try:
+                        _c=(d.current_url or '').lower()
+                        if 'agreement' not in _c and '/agree' not in _c: return False
+                        for cb in d.find_elements(By.CSS_SELECTOR,"input[type='checkbox']"):
+                            try:
+                                nm=((cb.get_attribute('name') or '')+' '+(cb.get_attribute('id') or '')).lower()
+                                if ('agree' in nm or 'all' in nm) and not cb.is_selected():
+                                    try: cb.click()
+                                    except Exception: d.execute_script('arguments[0].checked=true;arguments[0].dispatchEvent(new Event("change",{bubbles:true}));',cb)
+                            except Exception: continue
+                        for sel in ("button[type='submit']","input[type='submit']","a.btnSubmit","a.btn_submit","button.btnSubmit","a[href*='join']","button","a"):
+                            for el in d.find_elements(By.CSS_SELECTOR,sel):
+                                try:
+                                    if not el.is_displayed(): continue
+                                    tx=((el.text or '')+' '+(el.get_attribute('value') or '')+' '+(el.get_attribute('alt') or '')).strip()
+                                    if sel in ("button[type='submit']","input[type='submit']") or re.search(r'(다음|동의하고|동의|회원가입|가입하기|확인|next|agree)',tx,re.I):
+                                        d.execute_script('arguments[0].click()',el); time.sleep(2); dismiss_alerts(d); return True
+                                except Exception: continue
+                    except Exception: pass
+                    return False
                 try:
-                    d.get(_ju)
+                    d.get(_ju); time.sleep(1); dismiss_alerts(d)
+                    if _agree_step(): time.sleep(1.5)   # 약관 먼저 요구하는 사이트 → 통과 후 join.html
                     _chal=False
                     for _ in range(16):   # 0.5초×16=8초: JS 리다이렉트·위젯 로드 대기
+                        dismiss_alerts(d)
                         _cu=(d.current_url or '').lower()
                         if 'veritas-hub' in _cu or 'challenge' in _cu: _chal=True; break
+                        if ('agreement' in _cu or '/agree' in _cu) and _agree_step(): time.sleep(1.5); continue
                         try: _ps=(d.page_source or '')[:20000].lower()
                         except Exception: _ps=''
                         if 'cf-turnstile' in _ps or ('turnstile' in _ps and 'sitekey' in _ps): _chal=True; break
@@ -549,6 +576,8 @@ def _signup_form_measure(site):
                             d.get(_ju); time.sleep(2)   # 자동 복귀 안 되면 재진입(챌린지 통과 쿠키 유지)
                         else:
                             time.sleep(1.5)
+                        dismiss_alerts(d)
+                        if _agree_step(): time.sleep(1.5)   # 챌린지 뒤에 약관 alert가 뜨는 사이트
                     url=_ju   # 이후 page_source 측정은 join.html 기준(마지막 후보 아님)
                 except Exception as _e:
                     add_log(f'[가입측정 Turnstile 오류] {str(_e)[:80]}')
@@ -5000,6 +5029,14 @@ BLACK_DOMAINS=['naver.com','daum.net','google.','youtube.','facebook.','instagra
                'chosun.com','donga.com','joins.com','hani.co.kr','mk.co.kr','news','gov',
                'coupang.com','11st.co.kr','gmarket.co.kr','auction.co.kr','interpark',
                'twseo.kr','marketingmonster.kr']
+# ★기업 소개성 게시판 제외(대표님 지시 2026-09-11 '다트미디어 CEO 인사말 등록은 아니다'): 회사 정체성 페이지
+#   (CEO인사말·회사소개·연혁·조직도·오시는길)에 유흥 홍보글 = 즉시 삭제·신고 위험·SEO 0. 스팸 흔적이 있어도 탈락.
+#   ※채용공고·공지사항·업체등록(company)·가입인사는 대표님 황금패턴/개방게시판이라 제외하지 않는다.
+CORP_BOARD_TITLE=['ceo 인사말','ceo인사말','ceo 메시지','대표 인사말','대표인사말','인사말','회사소개','회사 소개','기업소개',
+                  '기업 소개','회사연혁','회사 연혁','연혁','조직도','오시는길','오시는 길','찾아오시는','회사개요','경영이념',
+                  'ci소개','ci 소개','greeting','company profile','about us']
+CORP_BOARD_TABLE=['ceo','greeting','greetings','aboutus','about_us','history','organization','org_chart','location',
+                  'vision','philosophy','ci']
 AD_BAN_WORDS=['광고 금지','광고금지','홍보 금지','홍보금지','상업적 게시물','상업적게시물','광고성 글 삭제',
               '광고글 삭제','도배 금지','스팸 금지','영리 목적','상업적 목적 금지','무단 홍보']
 # 주차/만료 도메인 (검색엔진엔 남아있지만 실제론 껍데기)
@@ -5435,6 +5472,14 @@ def screen_candidate(url, cfg=None):
     res['board_name']=title[:80]
     # 주차/만료 도메인 판별 (검색엔진엔 남아있지만 실제론 껍데기)
     tl=title.lower()
+    # ★기업 소개성 게시판(CEO 인사말·회사소개·연혁·조직도…) 즉시 탈락 — 대표님 지시 2026-09-11.
+    #   '가입인사' 같은 개방 게시판은 '인사말' 오탐 방지로 제외.
+    try:
+        _bt=(res.get('bo_table') or '').lower()
+        _corp_t=([w for w in CORP_BOARD_TITLE if w in tl] if '가입' not in tl else [])
+        if _corp_t or _bt in CORP_BOARD_TABLE:
+            res['corp_board']=(_corp_t[0] if _corp_t else _bt)
+    except Exception: pass
     res['parked']=(any(w in low or w in tl for w in PARKED_WORDS) or len(html)<800)
     # 불법·도박 사이트 판별 (제휴 대상 부적합)
     res['illegal']=any(w in low for w in ILLEGAL_WORDS)
@@ -5751,6 +5796,7 @@ def screen_pending(limit=30):
         if not r.get('reachable'): r['status']='ready'; r['reject_reason']='현재 접속 불가 — 후보 유지·재검수 가능'
         elif r.get('read_restricted'): r['status']='rejected'; r['reject_reason']=f'읽기제한 게시판 — {r.get("read_restricted")}(발행해도 조회차단·SEO0)'
         elif r.get('index_blocked'): r['status']='rejected'; r['reject_reason']=f'색인차단 — {r.get("index_blocked")}'
+        elif r.get('corp_board'): r['status']='rejected'; r['reject_reason']=f'기업 소개 게시판({r.get("corp_board")}) — 홍보 부적합(삭제·신고 위험)'
         elif r.get('parked'): r['status']='rejected'; r['reject_reason']='주차/만료 도메인 (실제 게시판 아님)'
         elif r.get('illegal'): r['status']='rejected'; r['reject_reason']='도박·불법 사이트 (제휴 부적합)'
         elif r.get('ad_banned'): r['status']='rejected'; r['reject_reason']='광고 금지 명시'
@@ -7463,7 +7509,7 @@ def chk():
     #  /api/test/* = 발행 테스트 트리거(등록 사이트에 실제 글1건 발행해 검증).
     _p=request.path
     if _p=='/api/version': return  # 배포 SHA 확인 — 공개(민감정보 없음)
-    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/report-site','/api/unlocker/test','/api/sbr/test') or _p.startswith('/api/test/'):
+    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/report-site','/api/unlocker/test','/api/sbr/test') or _p.startswith('/api/test/'):
         tok=(request.args.get('token') or '').strip()
         cfgtok=(load_config().get('log_token') or '').strip()
         if cfgtok and tok==cfgtok:
@@ -7791,6 +7837,35 @@ def api_sites_purge_secret():
         if flagged: save_sites(sites)
     add_log(f'[비밀글 일괄제외] {len(flagged)}곳 발행 중단(구글 색인불가)','정리')
     return jsonify({'ok':True,'flagged':len(flagged),'sites':flagged})
+
+@app.route('/api/sites/reject',methods=['POST'])
+def api_sites_reject():
+    """★사이트 즉시 제외(대표님 지시 2026-09-11 '다트미디어 CEO 인사말 등록은 아니다'). body {domain, reason}.
+       등록 사이트 rejected+발행중단, 같은 도메인 후보 rejected, 도메인 영구탈락(재발굴 차단). 관제실 ↺로 되돌릴 수 있음."""
+    d=request.get_json(silent=True) or {}
+    raw=str(d.get('domain') or '').strip()
+    dom=(_domain_of(raw) if raw.startswith('http') else raw).lower().replace('www.','').strip()
+    reason=str(d.get('reason') or '수동 제외')[:120]
+    if not dom: return jsonify({'ok':False,'error':'domain 필요'}),400
+    now=_kst_now().strftime('%Y-%m-%d %H:%M'); hit=[]
+    with POST_LOCK:
+        sites=load_sites()
+        for s in sites:
+            if _domain_of(s.get('site_url','')).replace('www.','')==dom:
+                s['status']='rejected'; s['permission']=False; s['write_test_status']='failed'
+                s['verified_post_url']=''; s['last_fail_reason']=reason; s['rejected_at']=now
+                hit.append((s.get('name') or s.get('site_url') or '')[:40])
+        if hit: save_sites(sites)
+    ch=0
+    with _cand_lock:
+        cands=load_cands()
+        for c in cands:
+            if (c.get('domain') or _domain_of(c.get('url',''))).lower().replace('www.','')==dom and c.get('status')!='rejected':
+                c['status']='rejected'; c['reject_reason']=reason; c['claimed_by']=''; c['claim_expire']=0; ch+=1
+        if ch: save_cands(cands)
+    add_rejected_domains([dom],reason)
+    add_log(f'[수동 제외] {dom} — {reason} (사이트 {len(hit)}·후보 {ch})','정리')
+    return jsonify({'ok':True,'domain':dom,'sites':hit,'candidates':ch})
 
 @app.route('/api/pipeline/claim',methods=['POST'])
 def api_pipeline_claim():
@@ -10129,9 +10204,11 @@ function renderNodeStrip(){const box=$('nodeStrip');if(!box)return;
   const nodes=window._nodes||[];const now=window._nodeNow||(Date.now()/1000);
   if(!nodes.length){box.innerHTML='<div style="grid-column:1/3;padding:10px;text-align:center;color:var(--d);font-size:12px;border:1px dashed #33425f;border-radius:8px">아직 연결된 발행노드가 없습니다 — PC/노트북에서 pc_node.py 실행 시 여기에 표시됩니다</div>';return}
   box.innerHTML=nodes.map(n=>{
-    const age=now-(n.last||0);const live=age<90;
-    const dot=live?'<span style="color:var(--g)">🟢 활성</span>':'<span style="color:var(--r)">🔴 끊김('+_ago(age)+')</span>';
-    const brd=live?'#166534':'#7f1d1d';const bg=live?'#0d2a17':'#2a0d0d';
+    // ★3단계(대표님 스샷 2026-09-11 '노트북 끊김 1분43초'): 노드는 claim·회신 때만 beat라 4곳 동시발행 배치(2~4분)
+    //   동안 beat가 없음 → 90초 기준이면 정상 작업을 '끊김'으로 오표시. 2분 내 활성 / 7분 내 작업중 / 그 이후 끊김.
+    const age=now-(n.last||0);const state=age<120?'live':(age<420?'busy':'dead');
+    const dot=state==='live'?'<span style="color:var(--g)">🟢 활성</span>':(state==='busy'?'<span style="color:var(--y)">🟡 작업 중('+_ago(age)+')</span>':'<span style="color:var(--r)">🔴 끊김('+_ago(age)+')</span>');
+    const brd=state==='dead'?'#7f1d1d':(state==='busy'?'#713f12':'#166534');const bg=state==='dead'?'#2a0d0d':(state==='busy'?'#2a1a0a':'#0d2a17');
     return '<div style="border:1px solid '+brd+';border-radius:8px;background:'+bg+';padding:8px 11px">'
       +'<div style="display:flex;justify-content:space-between;align-items:center"><b style="font-size:13px">'+esc(_nodeLabel(n.node_id))+'</b><span style="font-size:11px">'+dot+'</span></div>'
       +'<div style="font-size:11.5px;color:var(--t);margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="'+esc(n.action||'')+'">'+esc(n.action||'대기 중')+'</div>'
