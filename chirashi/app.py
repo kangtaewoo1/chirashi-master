@@ -1229,8 +1229,10 @@ def generate_rich_html(keywords, cfg, workroom_id=None):
     rel=RELATED_POOL[:]; random.shuffle(rel)
     _upd=_kst_now().strftime('%Y년 %m월')   # 우측 하단 업데이트 표기용
     H=lambda t:f'<h2 style="color:{c1};border-bottom:3px solid {c2};padding-bottom:10px;font-size:24px;margin-top:34px;">{t}</h2>'
-    # 이미지 alt = 치환키워드 맨앞(지역) 그대로 (SEO). imgs가 비면 이미지 블록을 아예 넣지 않는다.
-    IMG=lambda i,cap='':('' if not imgs else (f'<div style="text-align:center;margin:34px 0;"><img src="{imgs[i%len(imgs)]}" alt="{r}" style="max-width:100%;height:auto;border-radius:8px;" loading="lazy" />'+(f'<p style="color:#888;font-size:13px;margin-top:8px;">▲ {cap}</p>' if cap else '')+'</div>'))
+    # 이미지 alt = 메인 키워드(지역+업종, 붙여쓰기 예 '마포셔츠룸') — 구글 이미지 검색에 그 키워드로 노출되게(대표님 2026-09-12).
+    #   지역만 넣던 것을 제목 핵심키워드와 일치시킴. 캡션이 없으면 'alt 키워드+브랜드'를 캡션으로 자동 부여(주변 텍스트도 SEO 신호).
+    _imgalt=f'{r}{s}'
+    IMG=lambda i,cap='':('' if not imgs else (f'<div style="text-align:center;margin:34px 0;"><img src="{imgs[i%len(imgs)]}" alt="{_imgalt}" title="{_imgalt}" style="max-width:100%;height:auto;border-radius:8px;" loading="lazy" />'+f'<p style="color:#888;font-size:13px;margin-top:8px;">▲ {cap or (_imgalt+" "+b)}</p>'+'</div>'))
 
     intro=random.choice([
         f'{r} 지역에서 {s}를 찾고 계신가요? {mood} 분위기의 <strong>{r} {s}</strong>는 회식과 모임 장소로 꾸준히 사랑받는 곳입니다. {b}에서 위치와 이용 정보를 한눈에 정리해 드립니다.',
@@ -1529,7 +1531,9 @@ def generate_post_gpt(keywords, cfg, workroom_id=None):
             f'<p style="font-size:14px;font-weight:800;color:{AC};letter-spacing:2px;margin:0 0 12px;">목차</p>'
             f'<ul style="list-style:none;padding:0;margin:0;font-size:15px;">{_items}</ul></div>')
     _label=random.choice(['총정리','이용 안내','완벽 가이드','한눈에 정리','상세 안내'])
-    _img_block=(f'<div style="text-align:center;margin:0 0 28px;"><img src="{imgs[0]}" alt="{r}" style="max-width:100%;border-radius:8px;" loading="lazy"/></div>' if imgs else '')
+    # 이미지 alt=메인 키워드(지역+업종) — 구글 이미지 노출용(대표님 2026-09-12). 캡션에 키워드+브랜드도 넣어 주변텍스트 강화.
+    _imgalt=f'{r}{s}'
+    _img_block=(f'<div style="text-align:center;margin:0 0 28px;"><img src="{imgs[0]}" alt="{_imgalt}" title="{_imgalt}" style="max-width:100%;border-radius:8px;" loading="lazy"/><p style="color:#888;font-size:13px;margin-top:8px;">▲ {_imgalt} {b}</p></div>' if imgs else '')
     header=(f'<div style="font-size:12px;font-weight:700;letter-spacing:5px;color:{AC};margin-bottom:12px;">{_label} · {r} {s}</div>'
             f'<h1 style="font-size:32px;font-weight:800;line-height:1.3;margin:0 0 16px;color:#111;">{title}</h1>'
             f'<div style="width:80px;height:4px;background:{AC};margin:0 0 28px;border-radius:2px;"></div>'
