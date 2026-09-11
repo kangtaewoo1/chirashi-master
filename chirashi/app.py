@@ -8072,6 +8072,17 @@ def api_sites_reject():
     add_log(f'[수동 제외] {dom} — {reason} (사이트 {len(hit)}·후보 {ch})','정리')
     return jsonify({'ok':True,'domain':dom,'sites':hit,'candidates':ch})
 
+def _cafe24_result_is_new(prev_url, new_url):
+    """cafe24 결과 URL이 '새 글'인지 글번호로 판정. /article/<board>/<bo>/<N>/ 의 N이 이전 결과(prev)보다 커야 새 글.
+       번호를 못 읽으면(비-cafe24·목록 URL 등) 판단 보류=True. ★takago 가짜 성공(남의 스팸글 106090 반복 보고) 차단용."""
+    try:
+        m2=re.search(r'/article/[^/]+/\d+/(\d+)/?',str(new_url or ''))
+        if not m2: return True
+        m1=re.search(r'/article/[^/]+/\d+/(\d+)/?',str(prev_url or ''))
+        if not m1: return True
+        return int(m2.group(1))>int(m1.group(1))
+    except Exception: return True
+
 @app.route('/api/sites/unlock-cafe24',methods=['POST'])
 def api_sites_unlock_cafe24():
     """★잠긴 Cafe24 사이트 발행 재개(대표님 지시 2026-09-11 '카페24 왜 안되냐'): Bright Data(SBR) 계정정지로
@@ -8175,6 +8186,9 @@ def api_pipeline_report():
             continue   # 다른 노드/서버로 이미 넘어간 claim — 무시
         ok=bool(r.get('ok')); result_url=str(r.get('result_url') or '')
         name=c.get('board_name') or c.get('domain') or (c.get('url','') or '')[:30]
+        # ★가짜 성공 차단(2026-09-11): cafe24 결과 글번호가 발굴 때 본 글번호보다 크지 않으면 남의 글(목록 첫 글) → 실패 처리
+        if ok and c.get('platform')=='cafe24' and not _cafe24_result_is_new(c.get('url'),result_url):
+            ok=False; r=dict(r); r['msg']=f'동일/이전 글 URL 재보고({result_url[-14:]}) — 미등록(가짜 성공 차단)'; r['is_temp']=False
         try:
             if ok and result_url.startswith(('http://','https://')):
                 _promote_candidate_to_site(c,result_url,bo=r.get('bo_table') or c.get('bo_table'),permission=True)
@@ -8267,6 +8281,10 @@ def api_pipeline_report_site():
         try:
             _site=next((s for s in load_sites() if str(s.get('id') or '')==sid),None)
             _nm=((_site or {}).get('name') or (_site or {}).get('site_url') or sid[:8])
+            # ★가짜 성공 서버측 차단(2026-09-11): 옛 코드 노드가 '목록 첫 글'(남의 글)을 성공 URL로 보고하던 것을
+            #   글번호로 잡는다 — 이전 verified_post_url과 같거나 더 작은 /article/…/N/ 이면 새 글이 아님.
+            if ok and _site and not _cafe24_result_is_new(_site.get('verified_post_url'),url):
+                ok=False; r=dict(r); r['msg']=f'동일/이전 글 URL 재보고({url[-14:]}) — 미등록으로 처리(가짜 성공 차단)'
             if ok and url.startswith(('http://','https://')):
                 set_site_flag(sid,write_test_status='passed',verified_post_url=url,verified_at=now,
                               registration_source='verified_test',pc_claim_by='',pc_claim_expire=0)
