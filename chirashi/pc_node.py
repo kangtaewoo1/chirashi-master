@@ -221,7 +221,11 @@ def _process_one(cand, cfg, pool):
                 res["msg"] = f"자동가입 실패: {str(msg_su)[:80]}"
                 log(f"[가입실패] {name} — {str(msg_su)[:70]}")
                 return res
-        ok, msg = app.do_post(tmp, title, html, skip_login=_just_signed)
+        # ★cafe24는 가입 직후여도 skip_login=False로 실제 로그인해야 함(2026-09-12 실측): 가입완료 세션과 write.html
+        #   접근 세션이 별개라, 재로그인을 건너뛰면 write가 member/login.html로 튕겨 '글쓰기 페이지 못찾음/404'로 죽었음
+        #   (로그인튕김 59 vs 폼진입 2). 그누보드는 기존대로 skip_login=_just_signed(가입 세션 그대로 발행).
+        _skip = _just_signed and (tmp.get("platform") != "cafe24")
+        ok, msg = app.do_post(tmp, title, html, skip_login=_skip)
         # write가 로그인으로 튕기면 가입 후 1회 재시도. ★Cafe24는 '글쓰기 페이지 못찾음'도 대개 로그인 필요이므로
         #   그 사유도 자동가입 트리거에 포함(대표님 지시 2026-09-11 '각 사이트 자동가입').
         _need_signup = _re.search(r"(로그인이 필요|로그인 실패|로그인 화면|권한이 없|권한 없)", str(msg)) or \
@@ -231,7 +235,8 @@ def _process_one(cand, cfg, pool):
             ok_su, msg_su = app.auto_signup_guarded(tmp, submit=True)
             if ok_su:
                 res["mb_id"] = tmp.get("mb_id", ""); res["mb_pass"] = tmp.get("mb_pass", "")
-                ok, msg = app.do_post(tmp, title, html, skip_login=True)
+                # 재가입 후에도 cafe24는 실제 로그인(위와 같은 이유)
+                ok, msg = app.do_post(tmp, title, html, skip_login=(tmp.get("platform") != "cafe24"))
             else:
                 msg = f"{msg} · 자동가입 실패: {str(msg_su)[:60]}"
         result_url = msg if (ok and str(msg).startswith(("http://", "https://"))) else ""
