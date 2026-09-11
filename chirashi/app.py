@@ -7767,7 +7767,15 @@ def api_version():
         try:
             with open(os.path.join(BASE_DIR,'.git','refs','heads','master')) as f: sha=f.read().strip()[:7]
         except Exception: sha='?'
-    return jsonify({'ok':True,'sha':sha,'booted':_BOOT_TS})
+    # ★배포 검증용(2026-09-11): 서버엔 .git이 없어 sha가 '?' → 실행 중인 app.py 파일의 md5·크기를 노출.
+    #   git push(자동배포) 와 push_update가 겹치면 옛 파일로 재시작될 수 있어, 로컬 md5와 대조해 확정한다.
+    _md5='?'; _sz=0
+    try:
+        import hashlib
+        with open(os.path.abspath(__file__),'rb') as _f: _b=_f.read()
+        _md5=hashlib.md5(_b).hexdigest()[:12]; _sz=len(_b)
+    except Exception: pass
+    return jsonify({'ok':True,'sha':sha,'booted':_BOOT_TS,'app_md5':_md5,'app_size':_sz})
 
 # API
 @app.route('/api/generate',methods=['POST'])
