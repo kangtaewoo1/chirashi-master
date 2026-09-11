@@ -1,7 +1,23 @@
 @echo off
 REM chirashi cafe24 inspect - local Chrome dumps login/write DOM of failing sites
-REM Run in the chirashi folder (same as pc_node.py). ASCII-only on purpose (cp949 safe).
-cd /d "%~dp0"
+REM Works from any folder: finds the chirashi folder (pc_node.py) automatically. ASCII-only (cp949 safe).
+set CH=%~dp0
+if exist "%CH%pc_node.py" goto found
+set CH=%USERPROFILE%\Desktop\google-twseo-kr-windows-20260831-220257\chirashi\
+if exist "%CH%pc_node.py" goto found
+set CH=%USERPROFILE%\Desktop\chirashi\
+if exist "%CH%pc_node.py" goto found
+set CH=%USERPROFILE%\chirashi\
+if exist "%CH%pc_node.py" goto found
+echo.
+echo ERROR: pc_node.py not found. Put this .bat inside the chirashi folder
+echo        (the folder that has START_ALL.bat and pc_node.py) and run it again.
+echo        This .bat is at: %~dp0
+pause
+exit /b 1
+:found
+cd /d "%CH%"
+echo Using chirashi folder: %CD%
 set CHIRASHI_HEADFUL=1
 echo.
 echo [1/3] inspecting sjmania.co.kr
