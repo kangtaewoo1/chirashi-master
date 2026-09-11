@@ -9822,7 +9822,7 @@ header{background:var(--c);border-bottom:1px solid var(--b);padding:10px 16px;di
 #p-set details.adv>summary::-webkit-details-marker{display:none}
 #p-set details.adv>summary::before{content:'▸ ';color:var(--d)}
 #p-set details.adv[open]>summary::before{content:'▾ '}
-@media (max-width:640px){#p-set input,#p-set select,#p-set textarea{font-size:16px}#p-set .r3{grid-template-columns:1fr 1fr}}   /* 폰: iOS 확대 방지 16px 유지 */
+@media (max-width:640px){ #p-set input,#p-set select,#p-set textarea{font-size:16px} #p-set .r3{grid-template-columns:1fr 1fr} }   /* 폰: iOS 확대 방지 16px 유지. 주의: 여는 중괄호 바로 뒤에 #을 붙이면 Jinja 주석 토큰이 되므로 반드시 띄움 */
 .card{background:var(--c);border:1px solid var(--b);border-radius:10px;padding:14px;margin-bottom:10px}
 .card h3{font-size:10px;color:var(--d);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px}
 .row{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px}
