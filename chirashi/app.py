@@ -8196,9 +8196,11 @@ def api_revive_cafe24():
        body: {limit?} — 한 번에 되살릴 최대 수(기본 전체). 반환: 되살린 수."""
     d=request.get_json(silent=True) or {}
     limit=int(d.get('limit',0) or 0)   # 0=전체
-    # 되살릴 사유(로컬크롬으로 재시도 가치 있음)
+    # 되살릴 사유(로컬크롬으로 재시도 가치 있음). ★2026-09-12 cafe24 가입 정복(중복확인·주소·전화·제출 다 구현)으로
+    #   예전 가입 실패분도 이제 뚫림 → '가입 필수필드 실패·로그인 확인 실패·가입폼 측정 실패'도 복원 대상에 추가.
     _revive_hit=['wrong customer','sbr','scraping browser','원격','글쓰기 페이지 못찾음','글쓰기 못찾음',
-                 'turnstile','캡차','타임아웃','일시적','확인 불가','확인불가','등록 확인']
+                 'turnstile','캡차','타임아웃','일시적','확인 불가','확인불가','등록 확인',
+                 '가입 필수필드','로그인 확인 실패','가입폼 측정 실패','가입 입력 폼','규칙 위반','입력값 규칙']
     # 되살리면 안 되는 사유(재시도 무의미)
     _skip_hit=['오류안내','본인인증','실명인증','휴대폰','sms','문자인증','아이핀','성인인증','19금','인증필요',
                '포인트','읽기 제한','권한']
@@ -8208,6 +8210,8 @@ def api_revive_cafe24():
     purge_cert=bool(d.get('purge_cert',True))
     purged=0; purge_doms=[]
     revived=0
+    _cfgc=load_config()
+    _imap_set=bool((_cfgc.get('imap_email') or '').strip() and (_cfgc.get('imap_password') or '').strip())
     with _cand_lock:
         cands=load_cands()
         for c in cands:
@@ -8224,6 +8228,8 @@ def api_revive_cafe24():
             if limit and revived>=limit: continue
             if c.get('platform')!='cafe24' or c.get('status')!='rejected': continue
             if c.get('illegal') or c.get('parked') or c.get('ad_banned'): continue
+            # 이메일 인증 필수 cafe24는 IMAP 미설정이면 복원해도 즉시 포기 → 헛도니 제외(2026-09-12)
+            if c.get('signup_email_verify') and not _imap_set: continue
             rr=str(c.get('reject_reason') or '').lower()
             if any(k in rr for k in _skip_hit): continue          # 안 될 사유 제외
             if rr and not any(k in rr for k in _revive_hit): continue  # 되살릴 사유만(빈 사유는 스킵)
