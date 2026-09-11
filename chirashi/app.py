@@ -7599,7 +7599,7 @@ def chk():
     #  /api/test/* = 발행 테스트 트리거(등록 사이트에 실제 글1건 발행해 검증).
     _p=request.path
     if _p=='/api/version': return  # 배포 SHA 확인 — 공개(민감정보 없음)
-    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/openai/usage','/api/config/clear-key','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/report-site','/api/unlocker/test','/api/sbr/test') or _p.startswith('/api/test/'):
+    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/sites/unlock-cafe24','/api/openai/usage','/api/config/clear-key','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/report-site','/api/unlocker/test','/api/sbr/test') or _p.startswith('/api/test/'):
         tok=(request.args.get('token') or '').strip()
         cfgtok=(load_config().get('log_token') or '').strip()
         if cfgtok and tok==cfgtok:
@@ -7957,6 +7957,35 @@ def api_sites_reject():
     add_log(f'[수동 제외] {dom} — {reason} (사이트 {len(hit)}·후보 {ch})','정리')
     return jsonify({'ok':True,'domain':dom,'sites':hit,'candidates':ch})
 
+@app.route('/api/sites/unlock-cafe24',methods=['POST'])
+def api_sites_unlock_cafe24():
+    """★잠긴 Cafe24 사이트 발행 재개(대표님 지시 2026-09-11 '카페24 왜 안되냐'): Bright Data(SBR) 계정정지로
+       'Wrong customer name' 연속 실패→auto_drop된 등록 사이트를 잠금 해제. 노드는 이제 로컬크롬만 쓰므로 될 것.
+       fail_streak·auto_drop·pc_claim 리셋 + status idle + permission 복구(검증됐던 것). body: {domain?} — 없으면 전체."""
+    d=request.get_json(silent=True) or {}
+    raw=str(d.get('domain') or '').strip()
+    dom=(_domain_of(raw) if raw.startswith('http') else raw).lower().replace('www.','').strip() if raw else ''
+    _sbr_hit=('wrong customer','scraping browser','brightdata','sbr','원격','글쓰기 페이지 못찾음','timeout','타임아웃')
+    unlocked=[]
+    with POST_LOCK:
+        sites=load_sites()
+        for s in sites:
+            if s.get('platform')!='cafe24': continue
+            if dom and _domain_of(s.get('site_url','')).replace('www.','')!=dom: continue
+            lr=str(s.get('last_fail_reason') or '').lower()
+            # 도메인 지정이면 무조건, 전체면 SBR/엔진 실패로 잠긴 것만(사용자가 진짜 거부한 건 건드리지 않음)
+            locked=(s.get('auto_dropped_at') or int(s.get('fail_streak',0) or 0)>0)
+            if not dom and not (locked and any(k in lr for k in _sbr_hit)): continue
+            if not locked and not dom: continue
+            s['fail_streak']=0; s.pop('last_fail_reason',None); s.pop('auto_drop_reason',None); s.pop('auto_dropped_at',None)
+            s['pc_claim_by']=''; s['pc_claim_expire']=0; s['pc_last_try']=0
+            if s.get('status')=='failed': s['status']='idle'
+            if str(s.get('verified_post_url') or '')[:4]=='http': s['permission']=True   # 이미 실게시 검증된 것은 허용 복구
+            unlocked.append((s.get('name') or s.get('site_url') or '')[:34])
+        if unlocked: save_sites(sites)
+    add_log(f'[Cafe24 잠금해제] {len(unlocked)}곳 발행 재개(로컬크롬) — {dom or "전체 SBR실패분"}','파이프라인')
+    return jsonify({'ok':True,'unlocked':len(unlocked),'sites':unlocked})
+
 @app.route('/api/pipeline/claim',methods=['POST'])
 def api_pipeline_claim():
     """★PC 발행노드(대표님 지시 2026-09-09): PC가 '가입·발행 대기' 후보를 원자적으로 잠그고 받아간다.
@@ -8071,10 +8100,17 @@ def api_pipeline_claim_sites():
         for s in sites:   # 만료 claim 회수
             if s.get('pc_claim_by') and float(s.get('pc_claim_expire',0) or 0)<=now:
                 s['pc_claim_by']=''; s['pc_claim_expire']=0
+        # ★검증됐지만 SBR로 죽어 잠긴 것도 재위임(2026-09-11): 예전엔 verified_post_url이 http면 영영 제외돼,
+        #   Bright Data 'Wrong customer name'으로 auto_drop된 hbbiomall·타카고 등이 로컬크롬 전환 후에도
+        #   재발행 대상에서 빠졌음. 검증 전(미검증) OR 잠김(permission=False·auto_dropped_at 있음)이면 위임.
+        def _need_pub(s):
+            if str(s.get('verified_post_url') or '')[:4]!='http': return True   # 미검증
+            if s.get('auto_dropped_at') and not s.get('permission'): return True  # 검증됐으나 실패로 잠김 → 재발행
+            return False
         elig=[s for s in sites
               if (s.get('platform')=='cafe24')
               and str(s.get('mb_id') or '').strip()
-              and str(s.get('verified_post_url') or '')[:4]!='http'   # 아직 실게시 검증 전
+              and _need_pub(s)
               and s.get('status')!='rejected'
               and not (s.get('pc_claim_by') and float(s.get('pc_claim_expire',0) or 0)>now)
               and float(s.get('pc_last_try',0) or 0) < now-1800]      # 30분 쿨다운

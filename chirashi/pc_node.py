@@ -264,7 +264,26 @@ def _safe_workers(requested):
         return 4
 
 
+def _force_local_chrome():
+    """Bright Data(Scraping Browser·Web Unlocker·프록시)를 노드 로컬 config에서 영구 OFF.
+       ★근본원인(2026-09-11 대표님 '카페24 왜 안되냐/오류 계속뜸'): do_post·cafe24_post가 내부에서
+       app.load_config()를 다시 읽어 sbr_enabled를 보는데, 노드 로컬 config에 SBR endpoint가 남아 있으면
+       webdriver.Remote(SBR)로 접속→계정 정지된 Bright Data가 'Wrong customer name'으로 거부→발행 0.
+       Bright Data는 계정정지로 폐기했고 PC 로컬크롬이 실제 IP로 CF를 넘으므로, 노드에선 항상 로컬크롬만 쓴다.
+       save_config로 박아 넣어야 이후 어디서 load_config()가 불려도 OFF가 유지된다."""
+    try:
+        c = app.load_config(); changed = False
+        for k in ("sbr_enabled", "unlocker_enabled", "proxy_enabled"):
+            if c.get(k):
+                c[k] = False; changed = True
+        if changed:
+            app.save_config(c)
+            log("⚠ Bright Data(SBR·Unlocker·프록시) 로컬 강제 OFF — 로컬크롬만 사용(Wrong customer name 방지)")
+    except Exception as e:
+        log(f"로컬크롬 강제 설정 실패(무시): {str(e)[:60]}")
+
 def run(once=False, workers=None, idle=30):
+    _force_local_chrome()
     cfg = app.load_config()
     n = _safe_workers(workers)
     log(f"PC 발행노드 시작 — node_id={NODE_ID} · 서버={SERVER} · 동시 {n}개")
