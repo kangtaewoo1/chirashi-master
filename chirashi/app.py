@@ -5252,6 +5252,39 @@ def _post_read_block_reason(url):
         return '본문 없음(빈 페이지)'
     return ''
 
+def _index_block_reason(html, page_url, resp_headers=None):
+    """글 상세페이지 HTML을 보고 '구글이 색인 못할 신호'가 있으면 사유 문자열, 없으면 ''.
+       ★대표님 지시 2026-09-11 '며칠 지나도 색인 안 되는 글 많다 — 발행 전 미리 판별'.
+       실측(52개): canonical 불일치 16·noindex 5·본문안읽힘 5가 헛발행의 주범.
+       발행해도 색인 안 되면 SEO 0이므로, 이 신호 있으면 검수에서 애초에 제외한다.
+       (판정은 '확실한 것'만: 오탐으로 멀쩡한 게시판을 버리지 않도록 보수적으로.)"""
+    if not html: return ''
+    h=html
+    try:
+        # 1) meta robots / X-Robots-Tag 의 noindex — 구글에게 '색인하지 마' 명시. 가장 확실.
+        mm=re.search(r'<meta[^>]+name=["\']robots["\'][^>]*>', h, re.I)
+        if mm and re.search(r'noindex', mm.group(0), re.I):
+            return 'noindex 태그 — 구글 색인 차단(발행해도 SEO0)'
+        if resp_headers:
+            xr=str(resp_headers.get('X-Robots-Tag','') or resp_headers.get('x-robots-tag','') or '')
+            if 'noindex' in xr.lower():
+                return 'noindex(헤더) — 구글 색인 차단'
+        # 2) canonical 이 '이 글이 아닌 다른 곳(목록/홈)'을 가리키면 우리 글이 원본으로 안 잡힘.
+        #    ★보수적 판정: 상세글 URL엔 글번호(wr_id/article번호)가 있는데 canonical엔 그게 없으면 차단.
+        cm=re.search(r'<link[^>]+rel=["\']canonical["\'][^>]*href=["\']([^"\']+)["\']', h, re.I)
+        if cm:
+            from urllib.parse import urljoin as _uj, urlsplit as _us
+            can=_uj(page_url, cm.group(1))
+            pu=_us(page_url)
+            pid=re.search(r'wr_id=(\d+)', pu.query) or re.search(r'/(?:article|board)/[^/]+/\d+/(\d+)', pu.path)
+            if pid:
+                num=pid.group(1)
+                if num not in can:
+                    return f'canonical 불일치 — 목록/홈을 원본으로 지정({can[:40]}) → 이 글 색인 안 됨'
+    except Exception:
+        return ''
+    return ''
+
 def _cafe24_board_map(html, page_url=''):
     """Cafe24 페이지 HTML에서 게시판 경로 매핑을 추출. 반환: {board_no(str): 경로(str)}.
        예: <a href="/board/product2/list.html?board_no=6"> → {'6':'product2'}.
@@ -5320,11 +5353,22 @@ def screen_candidate(url, cfg=None):
         if _wm:
             from urllib.parse import urljoin as _uj
             _plink=_wm.group(1).replace('&amp;','&')   # HTML 엔티티 디코드(안 하면 URL 깨짐)
-            _rb=_post_read_block_reason(_uj(r.url,_plink))
+            _purl=_uj(r.url,_plink)
+            _rb=_post_read_block_reason(_purl)
             if _rb:
                 res['read_restricted']=_rb
                 res['note']=f'읽기제한({_rb}) — 발행해도 조회차단·SEO0'
                 return res   # 즉시 탈락(더 볼 것 없음)
+            # ★색인 차단 신호(대표님 지시 2026-09-11): 기존 글 하나를 열어 noindex/canonical 검사.
+            #   발행해도 구글이 색인 안 할 게시판이면 애초에 탈락(헛발행 방지).
+            try:
+                _pr=_rq.get(_purl,timeout=12,verify=False,headers=UA,allow_redirects=True)
+                _ib=_index_block_reason(_pr.text or '', str(_pr.url), _pr.headers)
+                if _ib:
+                    res['index_blocked']=_ib
+                    res['note']=f'색인차단({_ib[:40]})'
+                    return res   # 즉시 탈락
+            except Exception: pass
     except Exception: pass
     # 플랫폼
     if 'bo_table' in low or 'gnuboard' in low or '/bbs/' in low: res['platform']='gnuboard'
@@ -5650,6 +5694,7 @@ def screen_pending(limit=30):
         # 자동 탈락 사유
         if not r.get('reachable'): r['status']='ready'; r['reject_reason']='현재 접속 불가 — 후보 유지·재검수 가능'
         elif r.get('read_restricted'): r['status']='rejected'; r['reject_reason']=f'읽기제한 게시판 — {r.get("read_restricted")}(발행해도 조회차단·SEO0)'
+        elif r.get('index_blocked'): r['status']='rejected'; r['reject_reason']=f'색인차단 — {r.get("index_blocked")}'
         elif r.get('parked'): r['status']='rejected'; r['reject_reason']='주차/만료 도메인 (실제 게시판 아님)'
         elif r.get('illegal'): r['status']='rejected'; r['reject_reason']='도박·불법 사이트 (제휴 부적합)'
         elif r.get('ad_banned'): r['status']='rejected'; r['reject_reason']='광고 금지 명시'
@@ -7344,7 +7389,7 @@ def chk():
     #  /api/test/* = 발행 테스트 트리거(등록 사이트에 실제 글1건 발행해 검증).
     _p=request.path
     if _p=='/api/version': return  # 배포 SHA 확인 — 공개(민감정보 없음)
-    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/report-site','/api/unlocker/test','/api/sbr/test') or _p.startswith('/api/test/'):
+    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/report-site','/api/unlocker/test','/api/sbr/test') or _p.startswith('/api/test/'):
         tok=(request.args.get('token') or '').strip()
         cfgtok=(load_config().get('log_token') or '').strip()
         if cfgtok and tok==cfgtok:
@@ -7619,11 +7664,26 @@ def api_revive_cafe24():
     # 되살리면 안 되는 사유(재시도 무의미)
     _skip_hit=['오류안내','본인인증','실명인증','휴대폰','sms','문자인증','아이핀','성인인증','19금','인증필요',
                '포인트','읽기 제한','권한']
+    # ★대표님 지시 2026-09-11 '휴대폰 인증벽은 빨리 걸러내 도망': 자동 불가한 본인인증 후보를
+    #   manual_signup에 방치하지 말고 영구제외 → 파이프라인이 '뚫리는 것'에만 집중.
+    #   (도메인 영구탈락은 관제실 ↺ 버튼으로 되돌릴 수 있어 안전.)
+    purge_cert=bool(d.get('purge_cert',True))
+    purged=0; purge_doms=[]
     revived=0
     with _cand_lock:
         cands=load_cands()
         for c in cands:
-            if limit and revived>=limit: break
+            # (1) 휴대폰 본인인증벽 후보 영구제외 — manual_signup·ready·approved 어디에 있든
+            if purge_cert and c.get('signup_phone_cert') and c.get('status')!='rejected':
+                c['status']='rejected'
+                c['reject_reason']='휴대폰 본인인증 필요 — 자동발행 불가(영구제외, 대표님 지시)'
+                c['claimed_by']=''; c['claim_expire']=0
+                dom=(c.get('domain') or _domain_of(c.get('url',''))).strip()
+                if dom: purge_doms.append(dom)
+                purged+=1
+                continue
+            # (2)(3) 재시도 가치 있는 cafe24 탈락 복원(엔진실패·SBR죽음 등)
+            if limit and revived>=limit: continue
             if c.get('platform')!='cafe24' or c.get('status')!='rejected': continue
             if c.get('illegal') or c.get('parked') or c.get('ad_banned'): continue
             rr=str(c.get('reject_reason') or '').lower()
@@ -7633,9 +7693,29 @@ def api_revive_cafe24():
             c['pipeline_attempts']=0; c['signup_retry']=0
             c['claimed_by']=''; c['claim_expire']=0; c['last_pipeline_at']=0
             revived+=1
-        if revived: save_cands(cands)
-    add_log(f'[Cafe24 재시도] rejected {revived}곳 ready 복원 — 노드가 로컬크롬으로 재발행 시도','파이프라인')
-    return jsonify({'ok':True,'revived':revived})
+        if revived or purged: save_cands(cands)
+    if purge_doms: add_rejected_domains(purge_doms,'휴대폰 본인인증(자동불가)')
+    add_log(f'[Cafe24 정리] 인증벽 {purged}곳 영구제외 · 재시도 {revived}곳 ready 복원(로컬크롬 재발행)','파이프라인')
+    return jsonify({'ok':True,'revived':revived,'purged':purged})
+
+@app.route('/api/sites/purge-secret',methods=['POST'])
+def api_sites_purge_secret():
+    """★비밀글 사이트 일괄 제외(대표님 지시 2026-09-11 '아직도 돈다'): 발행이력에 비밀글(is_secret)로
+       찍힌 사이트를 지금 즉시 secret_forced 표시 → 다음 발행부터 제외. (발행마다 하나씩 잡히는 걸
+       기다리지 않고 이미 아는 것은 한 번에 정리.) 반환: 표시한 사이트 수."""
+    hist=load_json(HISTORY_FILE,[])
+    sids={str(h.get('site_id') or '') for h in hist if h.get('is_secret') and h.get('site_id')}
+    now=_kst_now().strftime('%Y-%m-%d %H:%M')
+    flagged=[]
+    with POST_LOCK:
+        sites=load_sites()
+        for s in sites:
+            if str(s.get('id') or '') in sids and not s.get('secret_forced'):
+                s['secret_forced']=True; s['secret_at']=now
+                flagged.append((s.get('name') or s.get('site_url') or '')[:30])
+        if flagged: save_sites(sites)
+    add_log(f'[비밀글 일괄제외] {len(flagged)}곳 발행 중단(구글 색인불가)','정리')
+    return jsonify({'ok':True,'flagged':len(flagged),'sites':flagged})
 
 @app.route('/api/pipeline/claim',methods=['POST'])
 def api_pipeline_claim():
