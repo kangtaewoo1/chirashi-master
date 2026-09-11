@@ -6372,6 +6372,12 @@ def auto_signup(site, submit=True):
     mid,pw=_signup_credentials(site,profile.get('rules'))
     # 이메일 인증이 필요한 게시판이면 임시메일(mail.tm)로 실제 수신 가능한 주소를 쓴다.
     need_email_verify=bool(profile.get('email_verification_required'))
+    # ★cafe24 이메일 인증은 임시메일(mail.tm) 전환율 0 + 인증대기가 노드를 멎게 함(2026-09-12 실측: 07:19 이후 12분 hang).
+    #   IMAP(지메일) 미설정이면 cafe24 인증 사이트는 즉시 포기 → 노드가 무인증 사이트로 바로 넘어감(헛대기 제거).
+    if need_email_verify and site.get('platform')=='cafe24':
+        _imap_set=bool((cfg.get('imap_email') or '').strip() and (cfg.get('imap_password') or '').strip())
+        if not _imap_set:
+            return False,'이메일 인증 필요 cafe24 — IMAP(지메일) 미설정이라 자동가입 불가(임시메일 전환율 0, 헛대기 방지)'
     tm_addr=tm_pw=tm_token=None
     if need_email_verify:
         tm_addr,tm_pw,tm_token=tempmail_create()
