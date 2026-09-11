@@ -196,7 +196,12 @@ def _local_openai_usage_summary(cfg):
         b['requests']+=int(x.get('requests',1) or 0); b['input_tokens']+=int(x.get('input_tokens',0) or 0)
         b['output_tokens']+=int(x.get('output_tokens',0) or 0); b['estimated_cost_usd']=round(b['estimated_cost_usd']+float(x.get('estimated_cost_usd',0) or 0),6)
     series=_time_series(rows,'estimated_cost_usd')
+    # 현재 엔진/키 유무(값 아님) — 제공자 전환 후 "AI가 도는지" 관제실·토큰API에서 바로 확인용(2026-09-11 OpenRouter 전환 직후 원장 0건 진단)
+    _pv=(cfg.get('llm_provider') or 'openai').strip().lower()
+    _pk=(cfg.get('nvidia_api_key') if _pv=='nvidia' else (cfg.get('openrouter_api_key') if _pv=='openrouter' else cfg.get('openai_key')))
+    _pm=(cfg.get('nvidia_model') if _pv=='nvidia' else (cfg.get('openrouter_model') if _pv=='openrouter' else cfg.get('model')))
     return {'source':'local_estimate','month':m,'today':t,'monthly_budget_usd':budget,'by_model':bym,'model_setting':cfg.get('model'),
+            'llm_provider':_pv,'llm_model':_pm,'llm_key_set':bool((_pk or '').strip()),'use_gpt':bool(cfg.get('use_gpt')),
             'remaining_budget_usd':round(max(0,budget-m['estimated_cost_usd']),6) if budget>0 else None,
             'per_call_usd':per_call,'daily':series['daily'],'hourly':series['hourly'],
             'unit_price':{'input_per_million':float(cfg.get('openai_input_price_per_million') or 0.15),
@@ -1504,6 +1509,7 @@ def generate_post_gpt(keywords, cfg, workroom_id=None):
     return header+body+cta, title
 
 _GPT_SKIP_UNTIL=[0.0]   # time.time()까지 GPT 스킵(429 서킷브레이커)
+_NOKEY_LOGGED=[0.0]     # '키 없음→템플릿' 안내 마지막 시각(10분 1회)
 
 def _gen_once(keywords, cfg, workroom_id=None):
     # GPT 429(레이트리밋) 서킷브레이커: 429가 나면 5분간 GPT를 건너뛰고 템플릿 직행.
@@ -1530,6 +1536,10 @@ def _gen_once(keywords, cfg, workroom_id=None):
                 if _first: add_log('[GPT 429→5분간 템플릿 사용] OpenAI 레이트리밋 — 발행 속도 유지 위해 잠시 GPT 끔')
             else:
                 add_log(f'[GPT 실패→템플릿] {_msg[:80]}')
+    elif cfg.get('use_gpt') and not _llm_key and time.time()-_NOKEY_LOGGED[0]>600:
+        # 체크는 켜졌는데 선택 엔진의 키가 비면 조용히 템플릿으로 빠져 원인을 알 수 없었음 → 10분에 1번 알림
+        _NOKEY_LOGGED[0]=time.time()
+        add_log(f'[AI 생성 건너뜀→템플릿] {_pv.upper()} API 키가 비어 있음 — 설정 탭에서 {_pv.upper()} 키를 입력·저장해야 AI 글 생성')
     return generate_rich_html(keywords,cfg,workroom_id=workroom_id)
 
 def generate_article(keywords, cfg, unique=True, workroom_id=None):
@@ -10582,7 +10592,8 @@ async function loadOpenAIUsage(){
   const c=await api('/twocaptcha/usage','GET');
   if(r&&r.ok){
     const m=r.month||{},t=r.today||{};const actual=r.actual_month_cost_usd;const cost=(actual==null?m.estimated_cost_usd:actual)||0;const remain=r.remaining_budget_usd;const src=r.source==='official_costs_api'?'공식 Costs API':'토큰 기준 예상';
-    $('openaiUsage').innerHTML='<b style="color:var(--p)">이번 달 $'+Number(cost).toFixed(4)+'</b> · 남은 예산 '+(remain==null?'예산 미설정':'$'+Number(remain).toFixed(4))+'<br>오늘 요청 '+(t.requests||0)+'회 · 입력 '+Number(t.input_tokens||0).toLocaleString()+' · 출력 '+Number(t.output_tokens||0).toLocaleString()+' 토큰<br><span style="color:var(--g)">'+src+'</span> · '+esc(r.note||'')+(r.admin_error?'<br><span style="color:var(--y)">관리자 조회: '+esc(r.admin_error)+'</span>':'');
+    const eng='<b>엔진 '+esc((r.llm_provider||'openai').toUpperCase())+'</b> · '+esc(r.llm_model||'')+' · 키 '+(r.llm_key_set?'<span style="color:var(--g)">있음</span>':'<span style="color:var(--r)">없음 — 아래에 키 입력 후 저장</span>')+(r.use_gpt?'':' · <span style="color:var(--y)">AI 생성 체크 꺼짐(템플릿만)</span>')+'<br>';
+    $('openaiUsage').innerHTML=eng+'<b style="color:var(--p)">이번 달 $'+Number(cost).toFixed(4)+'</b> · 남은 예산 '+(remain==null?'예산 미설정':'$'+Number(remain).toFixed(4))+'<br>오늘 요청 '+(t.requests||0)+'회 · 입력 '+Number(t.input_tokens||0).toLocaleString()+' · 출력 '+Number(t.output_tokens||0).toLocaleString()+' 토큰<br><span style="color:var(--g)">'+src+'</span> · '+esc(r.note||'')+(r.admin_error?'<br><span style="color:var(--y)">관리자 조회: '+esc(r.admin_error)+'</span>':'');
   } else {
     $('openaiUsage').innerHTML='<span style="color:var(--y)">OpenAI 상태를 불러오지 못했습니다.</span>';
   }
