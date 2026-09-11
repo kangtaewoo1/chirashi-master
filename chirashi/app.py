@@ -517,7 +517,43 @@ def _signup_form_measure(site):
     if not forms:
         try:
             from selenium.webdriver.common.by import By
-            d=get_driver(); d.get(url); time.sleep(1.5)
+            d=get_driver()
+            # ★cafe24 가입페이지 Turnstile(대표님 승인 2026-09-11, 재실측 2회로 확정):
+            #   /member/join.html은 requests·크롬 모두 veritas-hub 챌린지로 리다이렉트(JS, 1~3초 뒤). 폼이 안 떠
+            #   531행 '가입 입력 폼을 찾지 못했습니다'로 죽던 지점. 1차 수정이 안 먹은 이유 둘: ①위 루프 실패 시
+            #   url이 '마지막 후보'(myshop/join/agreement)라 폴백이 엉뚱한 페이지를 봄 ②1.5초 뒤 검사는 리다이렉트
+            #   전. → cafe24는 join.html을 명시적으로 열고 최대 8초 리다이렉트를 관찰, 챌린지면 풀고 복귀 후 측정.
+            #   실패해도 예외 삼켜 기존 흐름. cafe24에만 적용(그누보드는 기존과 동일).
+            if platform=='cafe24':
+                _ju=(site.get('signup_url') or base+'/member/join.html')
+                try:
+                    d.get(_ju)
+                    _chal=False
+                    for _ in range(16):   # 0.5초×16=8초: JS 리다이렉트·위젯 로드 대기
+                        _cu=(d.current_url or '').lower()
+                        if 'veritas-hub' in _cu or 'challenge' in _cu: _chal=True; break
+                        try: _ps=(d.page_source or '')[:20000].lower()
+                        except Exception: _ps=''
+                        if 'cf-turnstile' in _ps or ('turnstile' in _ps and 'sitekey' in _ps): _chal=True; break
+                        if _ps and re.search(r'type=["\']?password',_ps): break   # 폼이 이미 떴으면 챌린지 없음
+                        time.sleep(0.5)
+                    if _chal:
+                        _ok,_m,_t,_i=solve_captcha_with_2captcha(d,site,'turnstile',load_config())
+                        add_log(f'[가입측정 Turnstile] {site.get("name") or base} — {_m}')
+                        for _ in range(15):   # 콜백 제출 후 가입 페이지로 복귀 대기(최대 15초)
+                            _c2=(d.current_url or '').lower()
+                            if 'veritas-hub' not in _c2 and 'challenge' not in _c2: break
+                            time.sleep(1)
+                        _c3=(d.current_url or '').lower()
+                        if 'veritas-hub' in _c3 or 'challenge' in _c3:
+                            d.get(_ju); time.sleep(2)   # 자동 복귀 안 되면 재진입(챌린지 통과 쿠키 유지)
+                        else:
+                            time.sleep(1.5)
+                    url=_ju   # 이후 page_source 측정은 join.html 기준(마지막 후보 아님)
+                except Exception as _e:
+                    add_log(f'[가입측정 Turnstile 오류] {str(_e)[:80]}')
+            else:
+                d.get(url); time.sleep(1.5)
             for nm in ('agree','agree2'):
                 for el in d.find_elements(By.CSS_SELECTOR,f"input[name='{nm}']"):
                     try:
@@ -874,6 +910,12 @@ PHONE_SEPS=['↔','●','=','~','-',' ','.','·','_','ㆍ','∼','◆','ㅡ']
 TITLE_EXTRAS=['확실한','24시','검증된','재방문200%','인기','추천','친절한','예약가능','빠른안내','만족도높은',
               '실시간','당일예약','프리미엄','가성비','단골많은','후회없는','1위','핫플','고급진','편안한',
               '깔끔한','안전한','합리적인','신상','VIP','친절상담','바로연결','문의환영','강력추천','최고의']
+def tel_href(raw):
+    """전화번호 → 모바일에서 터치 시 바로 걸리는 tel: 링크(대표님 지시 2026-09-11 '터치하면 전화연결').
+       표시용 표기(도배방지로 기호 섞음)는 그대로 두고 href에만 숫자만 넣는다 — 표기 변형과 실제 발신을 분리.
+       게시판이 tel: 스킴을 걷어내면 그냥 글자로 남아 지금과 같음(손해 없음)."""
+    return 'tel:'+re.sub(r'\D','',str(raw or ''))
+
 def format_phone_random(phone):
     """제목용 번호 랜덤 변형 (매번 다른 기호·표기). 사람은 읽을 수 있게 유지."""
     d=re.sub(r'[^0-9]','',phone or '01082755736')
@@ -1297,7 +1339,8 @@ def generate_rich_html(keywords, cfg, workroom_id=None):
           f'<div style="display:inline-grid;gap:6px;text-align:center;font-size:14px;color:#cbd5e1;margin-bottom:14px;">'
           f'<div>일반 예약</div><div style="color:{c2};font-size:18px;">⚡</div><div>당일 예약</div>'
           f'<div style="color:{c2};font-size:18px;">⚡</div><div style="font-weight:bold;color:#ffe082;">VIP 서비스</div></div>'
-          f'<p style="font-size:24px;font-weight:bold;color:#fff;margin:0;background:#0f1621;padding:12px;border-radius:8px;">📞 {p}</p></div>'
+          f'<p style="font-size:24px;font-weight:bold;color:#fff;margin:0;background:#0f1621;padding:12px;border-radius:8px;"><a href="{tel_href(rawphone)}" style="color:#fff;text-decoration:none;display:block;">📞 {p}</a></p>'
+          f'<p style="font-size:13px;color:#cbd5e1;margin:8px 0 0;">📱 터치하면 바로 연결</p></div>'
         + f'<p style="font-size:12px;color:#999;text-align:right;margin:16px 0 8px;">최신 업데이트 · {_upd} 기준</p>')
     return html, title
 
@@ -1380,7 +1423,8 @@ def generate_post_gpt(keywords, cfg, workroom_id=None):
             f'{toc_box}')
     cta=(f'<div style="margin:38px 0 8px;padding:24px;background:#1f2733;color:#e8edf4;border-radius:12px;text-align:center;">'
          f'<p style="font-size:17px;font-weight:bold;color:#fff;margin:0 0 12px;">📞 {r} {s} 문의·예약</p>'
-         f'<p style="font-size:24px;font-weight:bold;color:#fff;margin:0;background:#0f1621;padding:12px;border-radius:8px;">{p}</p>'
+         f'<p style="font-size:24px;font-weight:bold;color:#fff;margin:0;background:#0f1621;padding:12px;border-radius:8px;"><a href="{tel_href(_rawph)}" style="color:#fff;text-decoration:none;display:block;">{p}</a></p>'
+         f'<p style="font-size:13px;color:#cbd5e1;margin:8px 0 0;">📱 터치하면 바로 연결</p>'
          f'<p style="font-size:14px;color:#cbd5e1;margin:12px 0 0;">{b}</p></div>'
          f'<p style="font-size:12px;color:#999;text-align:right;margin:16px 0 8px;">최신 업데이트 · {_upd} 기준</p>')
     return header+body+cta, title
