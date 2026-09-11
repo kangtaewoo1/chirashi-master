@@ -5058,8 +5058,15 @@ CAFE24_SVC_KEYWORDS=['노래방','마사지','출장마사지','가라오케','�
                      '쓰리노','출장안마','스웨디시','풀싸롱','텐프로','건마','안마']
 
 def _cafe24_boardname_queries():
-    """Cafe24 게시판명 × 업종 조합 검색어 — /article/게시판명/ 형태 형제 게시판 역발굴."""
+    """Cafe24 게시판명 × 업종 조합 검색어 — /article/게시판명/ 형태 형제 게시판 역발굴.
+       ★Brave 실측(2026-09-11): '상품 Q&A + 업종 + 010 문의' 조합이 게시판글 20/20(100%) 적중.
+       rapigencare식 /article/상품-qa/6/ 황금게시판 무더기 발굴. 이 조합을 맨 앞에 둔다."""
     qs=[]
+    # 0) 100% 적중 조합 최우선: 게시판명 + 업종 + '010 문의'(업자 홍보글 역추적)
+    for bn in CAFE24_BOARD_NAMES:
+        for sv in CAFE24_SVC_KEYWORDS:
+            qs.append(f'{bn} {sv} 010 문의')       # 예: 상품 Q&A 노래방 010 문의 (실측 100%)
+    # 1) 게시판명 × 업종(기본형) + 홍보 역추적
     for bn in CAFE24_BOARD_NAMES:
         for sv in CAFE24_SVC_KEYWORDS:
             qs.append(f'"{bn}" {sv}')            # 예: "상품 Q&A" 노래방
@@ -5089,7 +5096,10 @@ def _board_finder_queries(provider):
        ★무인증(비회원/기본가입) 게시판 조각을 맨 앞에 배치해 쿼리 한도 안에서 최우선 실행."""
     qs=[]
     if provider=='brave':
-        # 0) 무인증 최우선 — 실측상 유일 전환 유형(비회원/이메일인증 없는 가입)
+        # ★0순위(Brave 실측 100% 적중, 대표님 지시 2026-09-11 '타율 좋게'): Cafe24 게시판명×업종×010
+        #   = rapigencare식 /article/상품-qa/ 황금게시판. Brave 토큰(비용) 최우선 소비 대상.
+        qs.extend(_cafe24_boardname_queries())
+        # 1) 무인증 — 실측상 유일 전환 유형(비회원/이메일인증 없는 가입)
         for frag in NO_VERIFY_FRAGMENTS:
             qs.append(frag)
             for i in INTENT[:2]:
@@ -5109,8 +5119,7 @@ def _board_finder_queries(provider):
             qs.append(frag)
             for i in INTENT[:2]:
                 qs.append(f'{frag} {i}')
-        # ★Cafe24 게시판명 × 업종 (대표님 지시) — /article/상품-qa/ 형제 게시판 역발굴
-        qs.extend(_cafe24_boardname_queries())
+        # (Cafe24 게시판명×업종 쿼리는 위 0순위에서 이미 최우선 추가됨)
     else:
         # Google: inurl: 연산자가 강력 — 무인증(비회원 글쓰기) 신호를 맨 앞에.
         qs.append('inurl:bbs/write.php 비회원 글쓰기')
