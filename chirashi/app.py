@@ -10,7 +10,7 @@
   이용자가 보장해야 합니다. 자동 프로그램 금지 규칙이 있는 곳에는 사용 금지.
 """
 
-import sys, os, re, json, time, random, threading, queue, urllib.parse, secrets, hashlib, base64, copy, uuid, html as html_lib
+import sys, os, re, json, time, random, threading, queue, urllib.parse, urllib.request, urllib.error, secrets, hashlib, base64, copy, uuid, html as html_lib
 # 콘솔 코드페이지가 cp949 등일 때 이모지 print가 UnicodeEncodeError로 죽는 것 방지.
 # (Windows에서 PYTHONIOENCODING 미설정 시 startup print의 ⏰/🔁 등이 크래시 유발)
 for _stream in ('stdout', 'stderr'):
