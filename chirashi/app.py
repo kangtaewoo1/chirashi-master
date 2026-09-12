@@ -3346,11 +3346,25 @@ def cafe24_post(site, title, content_html, skip_login=False):
         time.sleep(2)
         try:
             if d.find_elements(By.CSS_SELECTOR,"input[name='member_passwd']"):
-                d.execute_script("""
-                    // 1) Cafe24 정식 로그인 제출 함수(신형 스킨) — 최우선.
+                d.execute_script(r"""
+                    // ★신형 cafe24(2026-09-12 mereta 실측): 로그인버튼 onclick이 MemberAction.login('member_form_<랜덤숫자>').
+                    //   폼 id가 매번 달라 예측 불가 → 버튼 onclick에서 폼id를 뽑거나 password칸의 form id로 MemberAction.login 호출.
+                    try{
+                      if(typeof MemberAction!=='undefined' && MemberAction && typeof MemberAction.login==='function'){
+                        var fid=null;
+                        // 로그인 버튼 onclick에서 MemberAction.login('...') 인자 추출
+                        var btns=document.querySelectorAll("a[onclick*='MemberAction.login'],button[onclick*='MemberAction.login']");
+                        for(var i=0;i<btns.length;i++){ var m=(btns[i].getAttribute('onclick')||'').match(/MemberAction\.login\(['"]([^'"]+)['"]\)/); if(m){ fid=m[1]; break; } }
+                        // 못 찾으면 password칸이 속한 form의 id
+                        if(!fid){ var pf=(document.querySelector("input[name='member_passwd']")||{}).form; if(pf && pf.id) fid=pf.id; }
+                        if(fid){ MemberAction.login(fid); return; }
+                        try{ MemberAction.login(); return; }catch(e){}
+                      }
+                    }catch(e){}
+                    // 구형 스킨 함수들
                     if(typeof useLoginKeepingSubmit==='function'){ try{ useLoginKeepingSubmit(); return; }catch(e){} }
                     if(typeof fnLogin==='function'){ try{ fnLogin(); return; }catch(e){} }
-                    // 2) 폴백: 로그인 폼 직접 제출.
+                    // 폴백: 로그인 폼 직접 제출.
                     var f=document.querySelector("form[action*='Member/login']")||document.querySelector("form[action*='login']")||
                           (document.querySelector("input[name='member_passwd']")||{}).form;
                     if(f){ if(typeof f.requestSubmit==='function')f.requestSubmit(); else f.submit(); }
@@ -3672,15 +3686,71 @@ def cafe24_post(site, title, content_html, skip_login=False):
     _fill_first(d,["input[name='subject']","#subject","input[name='title']"],title)
     editor_content,html_mode=editor_content_for_page(d,content_html)
 
-    # 본문 (Cafe24 SmartEditor iframe / CKEditor / textarea)
+    # 본문 (Cafe24 SmartEditor iframe / CKEditor / Froala / textarea)
     filled=False
+    # ★Froala 에디터 우선(2026-09-12 mereta 실측: 신형 cafe24 상품Q&A가 Froala.
+    #   .fr-element[contenteditable] div에 innerHTML을 넣고, Froala 인스턴스가 있으면 .html.set()으로
+    #   내부 상태까지 갱신한 뒤 원본 textarea로 동기화(sync)해야 제출된다. div만 채우면 제출 시 본문 빈 것으로
+    #   판정돼 목록으로 튕겨 '가짜 성공'이 났다.)
     try:
-        iframe=d.find_element(By.CSS_SELECTOR,"iframe[id*='content'],iframe.cke_wysiwyg_frame,iframe[title*='Rich'],iframe[title*='편집']")
-        d.switch_to.frame(iframe)
-        d.execute_script("document.body.innerHTML=arguments[0]",editor_content)
-        d.switch_to.default_content(); filled=True
-    except Exception:
-        d.switch_to.default_content()
+        fr=d.execute_script("""
+            var content=arguments[0];
+            // 1) Froala 공개 인스턴스가 있으면 그걸로(가장 확실)
+            try{
+              if(window.FroalaEditor && FroalaEditor.INSTANCES && FroalaEditor.INSTANCES.length){
+                for(var k=0;k<FroalaEditor.INSTANCES.length;k++){
+                  var inst=FroalaEditor.INSTANCES[k];
+                  try{ inst.html.set(content); inst.events.trigger('contentChanged'); if(inst.$oel&&inst.$oel.length){inst.$oel.val(content);} }catch(e){}
+                }
+                return 'froala-instance';
+              }
+            }catch(e){}
+            // 2) jQuery 데이터에 froala 인스턴스가 걸려있는 경우
+            try{
+              if(window.jQuery){
+                var $fr=jQuery('.fr-element.fr-view, .froala-editor, [data-froala]');
+                if($fr.length){
+                  var el=$fr.get(0);
+                  el.innerHTML=content;
+                  // Froala가 관찰하도록 input 이벤트
+                  el.dispatchEvent(new Event('input',{bubbles:true}));
+                  el.dispatchEvent(new Event('blur',{bubbles:true}));
+                  // 원본 textarea 동기화
+                  var $ta=jQuery(el).closest('.fr-box').prev('textarea');
+                  if(!$ta.length) $ta=jQuery('textarea[name=content],textarea[name=contents],textarea#content');
+                  if($ta.length){ $ta.val(content); $ta.get(0).dispatchEvent(new Event('change',{bubbles:true})); }
+                  return 'froala-jq';
+                }
+              }
+            }catch(e){}
+            // 3) 순수 DOM: .fr-element contenteditable div
+            var fe=document.querySelector('.fr-element.fr-view, .fr-element[contenteditable=true]');
+            if(fe){
+              fe.innerHTML=content;
+              fe.dispatchEvent(new Event('input',{bubbles:true}));
+              fe.dispatchEvent(new Event('keyup',{bubbles:true}));
+              fe.dispatchEvent(new Event('blur',{bubbles:true}));
+              // 근처 원본 textarea 동기화
+              var box=fe.closest('.fr-box')||fe.parentElement;
+              var ta=(box&&box.parentElement?box.parentElement.querySelector('textarea'):null)
+                    ||document.querySelector("textarea[name='content'],textarea[name='contents'],textarea#content,textarea[name='board_content']");
+              if(ta){ ta.value=content; ta.dispatchEvent(new Event('change',{bubbles:true})); }
+              return 'froala-dom';
+            }
+            return '';
+        """, editor_content)
+        if fr:
+            filled=True; add_log(f'[Cafe24본문] Froala 입력({fr})')
+    except Exception as _fe:
+        pass
+    if not filled:
+        try:
+            iframe=d.find_element(By.CSS_SELECTOR,"iframe[id*='content'],iframe.cke_wysiwyg_frame,iframe[title*='Rich'],iframe[title*='편집']")
+            d.switch_to.frame(iframe)
+            d.execute_script("document.body.innerHTML=arguments[0]",editor_content)
+            d.switch_to.default_content(); filled=True
+        except Exception:
+            d.switch_to.default_content()
     if not filled:
         from selenium.webdriver.common.by import By as _By
         for sel in ["textarea[name='content']","textarea#content","textarea[name='contents']",
@@ -3728,8 +3798,16 @@ def cafe24_post(site, title, content_html, skip_login=False):
     dismiss_alerts(d)
     # 알림 문구도 수집(제출 막혔을 때 원인)
     _al=' '.join(getattr(d,'_last_alerts',[]) or [])
-    if any(k in curl for k in ['read.html','list.html','article','board_no','view.html']) and 'write.html' not in curl and 'write' not in curl.split('?')[0].split('/')[-1]:
-        add_log(f'[Cafe24등록] 성공 → {curl[:60]}')
+    # ★가짜 성공 차단(2026-09-12 mereta 실측): 제출 실패 시 cafe24는 write→list.html로 그냥 튕긴다.
+    #   URL에 list.html/board_no만 있다고 성공 처리하면 안 됨(실측: 제출前後 최대글번호 동일·목록에 우리 글 없음인데
+    #   list.html 튕김만으로 '성공' 오판). → 개별 글 상세 URL(read.html·/article/{숫자}·view.html·board_view·wr_id)로
+    #   이동한 경우만 URL로 즉시 성공. list.html은 아래 목록 재조회에서 우리 제목이 확인돼야만 성공.
+    _cl2=curl.lower()
+    _is_detail=(('write' not in _cl2) and (
+        'read.html' in _cl2 or 'view.html' in _cl2 or 'board_view' in _cl2 or 'wr_id=' in _cl2
+        or re.search(r'/article/[^/]+/\d+/\d{3,}', _cl2) is not None))
+    if _is_detail:
+        add_log(f'[Cafe24등록] 성공(상세글 이동) → {curl[:60]}')
         return True,(curl or '등록 완료')
     try: body=d.find_element(By.TAG_NAME,'body').text[:1500]
     except Exception: body=''
@@ -3739,46 +3817,44 @@ def cafe24_post(site, title, content_html, skip_login=False):
         return True,'등록됨'
     if any(k in blob for k in ['승인 대기','승인대기','관리자 확인']):
         return True,'등록됨(승인 대기)'
-    # ★목록 재조회로 등록 확정(대표님 실측 2026-09-11): takago는 제출 후 URL이 write에 머물고(AJAX 등록)
-    #   페이지 이동이 없어 위 판정들이 다 실패했지만, 글은 실제로 등록됨(106072 확인). → 글목록을 다시 열어
-    #   방금 쓴 제목이 목록에 있으면 성공으로 확정하고 그 글의 /article/ URL을 결과로 반환.
-    if 'write' in (curl.split('?')[0].split('/')[-1] or ''):   # 아직 write 페이지에 머물면
+    # ★목록 재조회로 등록 확정(2026-09-12 mereta 실측으로 전면 개정): 제출 실패 시 write→list.html로 튕기고
+    #   URL만으론 성공/실패 구분 불가. 상세글로 안 갔으면(위 _is_detail=False) '항상' 목록을 다시 열어
+    #   방금 쓴 제목의 '핵심부'가 실제로 목록에 있어야만 성공으로 확정한다.
+    #   ⚠️옛 버전의 region(제목 맨 앞 단어) 보조 매칭은 제거: mereta 목록엔 이미 '인천/셔츠룸' 들어간 스팸글이 많아
+    #     옛 4자리 글(4429, 5/26)을 우리 글로 오탐 → 가짜 성공의 주범이었다. needle 정밀 매칭만 사용.
+    if not _is_detail:
         try:
             _abn=str(site.get('article_board_name') or '').strip()
-            # ★목록 URL 후보 넓게(2026-09-12 실측: 제출 후 board/product/list.html로 감). abn경로·product·기본 모두.
             _lists=[l for l in [
                 (base+f'/board/{_abn}/{bo}/') if (_abn and bo) else '',
                 (base+f'/board/product/list.html?board_no={bo}') if bo else '',
                 (base+f'/board/list.html?board_no={bo}') if bo else '',
                 (base+f'/front/php/b/board_list.php?board_no={bo}') if bo else '',
             ] if l]
-            # ★제목 매칭 개선(2026-09-12 실측: 제목 앞 12자에 [O1O]∼56O3 같은 랜덤기호가 있어 목록 텍스트와 안 맞아
-            #   실제 등록됐는데도 '미등록' 오판. → 기호·공백 제거한 한글+숫자 핵심부로 매칭. 지역명(맨 앞 단어)도 보조키.
             def _core(s):
                 return re.sub(r'[^0-9A-Za-z가-힣]','',re.sub(r'\s+','',s or ''))
-            _tc=_core(title); _needle=_tc[:10]
-            _region=(re.split(r'[\s\[\(]',str(title or '').strip())+[''])[0]
+            _tc=_core(title); _needle=_tc[:12]
+            # needle이 너무 짧으면(핵심 8자 미만) 오탐 위험 → 확정 판정 안 함
+            if len(_needle)<8:
+                add_log(f'[Cafe24등록] 제목 핵심부 너무 짧음({_needle}) — 확정 불가')
+                return False,'Cafe24 등록 확인 불가 — 제목 식별 불가'
             _hit=None
             for _list in _lists:
                 try:
                     d.get(_list); time.sleep(2); dismiss_alerts(d)
                 except Exception: continue
                 _hit=d.execute_script("""
-                    var needle=arguments[0], region=arguments[1];
+                    var needle=arguments[0];
                     var core=function(s){return (s||'').replace(/\\s+/g,'').replace(/[^0-9A-Za-z\\uAC00-\\uD7A3]/g,'');};
-                    var as=Array.from(document.querySelectorAll("a[href*='/article/'],a[href*='read.html'],a[href*='board_view'],a[href*='wr_id']"));
+                    var as=Array.from(document.querySelectorAll("a[href*='/article/'],a[href*='read.html'],a[href*='board_view'],a[href*='wr_id'],a[href*='view.html']"));
                     for(var i=0;i<as.length;i++){ var t=core(as[i].textContent);
-                        if(needle && t.indexOf(needle)>=0){ return as[i].href; }
-                        if(region && region.length>=2 && t.indexOf(core(region))>=0 && t.length>region.length){ return as[i].href; } }
-                    return core(document.body.innerText).indexOf(needle)>=0 ? 'FOUND' : '';
-                """, _needle, _region)
+                        if(needle && t.indexOf(needle)>=0){ return as[i].href; } }
+                    return '';
+                """, _needle)
                 if _hit: break
             if _hit and str(_hit).startswith('http'):
                 add_log(f'[Cafe24등록] 성공(목록에서 제목 확인) → {_hit[:60]}')
                 return True,_hit
-            if _hit=='FOUND':
-                add_log('[Cafe24등록] 성공(목록에 제목 확인)')
-                return True,(_lists[0] if _lists else curl)
             add_log(f'[Cafe24등록] 미등록 — 제출 후 목록에 제목 없음({_needle}) · 승인대기/스팸필터/제출실패 의심')
             return False,'Cafe24 등록 확인 불가 — 제출 후 목록에 글 없음(승인대기·스팸필터·제출실패)'
         except Exception as _e:
@@ -6326,24 +6402,44 @@ def _cafe24_signup_gate(d, site, cfg, join_url, max_sec=75):
             except Exception: pass
             continue
         if 'agreement' in cu or '/agree' in cu:
-            for cb in d.find_elements(By.CSS_SELECTOR,"input[type='checkbox']"):
-                try:
-                    nm=((cb.get_attribute('name') or '')+' '+(cb.get_attribute('id') or '')).lower()
-                    if ('agree' in nm or 'all' in nm) and not cb.is_selected():
-                        try: cb.click()
-                        except Exception: d.execute_script('arguments[0].checked=true;arguments[0].dispatchEvent(new Event("change",{bubbles:true}));',cb)
-                except Exception: continue
+            # ★약관 정확 처리(2026-09-12 mereta 실측): 전체동의(sAgreeAllChecked) 우선, 그다음 필수 약관(agree_service/agree_privacy)
+            #   반드시 체크. 필수 미체크면 '다음(checkAgreement)'이 alert로 막혀 가입이 아예 안 됐음(=가짜 성공).
+            d.execute_script(r"""
+              function chk(el){ if(el && !el.checked){ el.checked=true; el.dispatchEvent(new Event('click',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true})); } }
+              // 1) 전체동의 먼저
+              var all=document.querySelector("input[name='sAgreeAllChecked'],input[id*='AgreeAll'],input[name*='all_agree']"); if(all) chk(all);
+              // 2) 필수 약관(이름에 agree + service/privacy/required, 또는 라벨에 '필수') 전부
+              document.querySelectorAll("input[type='checkbox']").forEach(function(e){
+                var n=((e.name||'')+' '+(e.id||'')).toLowerCase();
+                var lab=(e.closest('label')||e.parentElement); var lt=(lab?lab.textContent:'')||'';
+                if(/agree_service|agree_privacy|agree.*required|required.*agree/.test(n) || (/agree/.test(n)&&/필수/.test(lt))) chk(e);
+              });
+            """)
+            time.sleep(0.5)
+            # 3) '다음' = checkAgreement() 직접 호출 우선 → 없으면 버튼 클릭
             clicked=False
-            for sel in ("button[type='submit']","input[type='submit']","a.btnSubmit","a.btn_submit","button.btnSubmit","a[href*='join']","button","a"):
-                for el in d.find_elements(By.CSS_SELECTOR,sel):
-                    try:
-                        if not el.is_displayed(): continue
-                        tx=((el.text or '')+' '+(el.get_attribute('value') or '')+' '+(el.get_attribute('alt') or '')).strip()
-                        if sel in ("button[type='submit']","input[type='submit']") or re.search(r'(다음|동의하고|동의|회원가입|가입하기|확인|next|agree)',tx,re.I):
-                            d.execute_script('arguments[0].click()',el); clicked=True; break
-                    except Exception: continue
-                if clicked: break
-            time.sleep(2.5)
+            try:
+                r=d.execute_script(r"""
+                  // 다음버튼 onclick에서 checkAgreement('...') 추출해 호출
+                  var bs=document.querySelectorAll("a[onclick*='checkAgreement'],button[onclick*='checkAgreement']");
+                  for(var i=0;i<bs.length;i++){ var m=(bs[i].getAttribute('onclick')||'').match(/checkAgreement\(([^)]*)\)/);
+                    if(m){ try{ eval('checkAgreement('+m[1]+')'); return 'checkAgreement호출'; }catch(e){} } }
+                  if(typeof checkAgreement==='function'){ try{ checkAgreement('/member/join.html'); return 'checkAgreement기본'; }catch(e){} }
+                  return '';
+                """)
+                if r: clicked=True
+            except Exception: pass
+            if not clicked:
+                for sel in ("a[onclick*='checkAgreement']","button[type='submit']","input[type='submit']","a.btnSubmit","a.btn_submit","button.btnSubmit","a[href*='join']","button","a"):
+                    for el in d.find_elements(By.CSS_SELECTOR,sel):
+                        try:
+                            if not el.is_displayed(): continue
+                            tx=((el.text or '')+' '+(el.get_attribute('value') or '')+' '+(el.get_attribute('alt') or '')).strip()
+                            if 'checkAgreement' in (el.get_attribute('onclick') or '') or sel in ("button[type='submit']","input[type='submit']") or re.search(r'(다음|동의하고|동의|회원가입|가입하기|확인|next|agree)',tx,re.I):
+                                d.execute_script('arguments[0].click()',el); clicked=True; break
+                        except Exception: continue
+                    if clicked: break
+            time.sleep(2.5); dismiss_alerts(d)
             if not clicked:
                 try: d.get(join_url); time.sleep(2)
                 except Exception: pass
@@ -6715,8 +6811,16 @@ def auto_signup(site, submit=True):
     #   그누보드 셀렉터(#fregister)로는 못 눌러 제출이 안 되고 join.html에 머물렀음. cafe24 먼저 시도.
     if site.get('platform')=='cafe24':
         from selenium.webdriver.common.by import By
-        # cafe24 표준 제출 함수 직접 호출(가장 확실) → 없으면 버튼 텍스트로
-        _safe_js(d,"try{if(typeof MemberJoinAction!=='undefined'&&MemberJoinAction.submit){MemberJoinAction.submit();}else if(typeof join_submit==='function'){join_submit();}else if(typeof fn_join==='function'){fn_join();}}catch(e){}")
+        # ★cafe24 가입 제출 함수 직접 호출(2026-09-12 mereta 실측: '가입하기'가 memberJoinAction() 호출). 여러 스킨 함수 시도.
+        _safe_js(d,"""try{
+            if(typeof memberJoinAction==='function'){memberJoinAction();return;}
+            if(typeof MemberJoinAction!=='undefined'&&MemberJoinAction.submit){MemberJoinAction.submit();return;}
+            if(typeof join_submit==='function'){join_submit();return;}
+            if(typeof fn_join==='function'){fn_join();return;}
+            // 가입 버튼 onclick에서 함수 추출해 호출
+            var bs=document.querySelectorAll("a[onclick*='oin'],button[onclick*='oin'],input[onclick*='oin']");
+            for(var i=0;i<bs.length;i++){var oc=bs[i].getAttribute('onclick')||'';if(/join|가입/i.test((bs[i].textContent||'')+oc)&&!/agree|약관/i.test(oc)){try{eval(oc);return;}catch(e){}}}
+        }catch(e){}""")
         time.sleep(1)
         _cu=(d.current_url or '').lower()
         if 'join.html' in _cu or 'join_step' in _cu:   # 아직 안 넘어감 → 버튼 클릭
