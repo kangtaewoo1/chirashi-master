@@ -4002,16 +4002,48 @@ def cafe24_post(site, title, content_html, skip_login=False):
     if not filled:
         from selenium.webdriver.common.by import By as _By
         for sel in ["textarea[name='content']","textarea#content","textarea[name='contents']",
-                    "div[contenteditable='true']","textarea[name='board_content']"]:
+                    "div[contenteditable='true']","textarea[name='board_content']",
+                    # ★cafe24 에디터 변종 보강(2026-09-13 대표님 지시): SmartEditor2·Summernote·ir1·기타 스킨.
+                    "textarea[name='board_contents']","textarea[name='ir1']","textarea#ir1",
+                    ".note-editable[contenteditable='true']",".se2_inputarea","textarea.cke_source"]:
             try:
                 el=d.find_element(_By.CSS_SELECTOR,sel)
-                if sel.startswith('div'):
-                    d.execute_script("arguments[0].innerHTML=arguments[1]",el,editor_content)
+                if 'contenteditable' in sel or sel.startswith('div') or '.note-editable' in sel:
+                    d.execute_script("arguments[0].innerHTML=arguments[1];arguments[0].dispatchEvent(new Event('input',{bubbles:true}));arguments[0].dispatchEvent(new Event('blur',{bubbles:true}));",el,editor_content)
                 else:
                     el.clear(); el.send_keys(editor_content)
-                filled=True; break
+                filled=True; add_log(f'[Cafe24본문] 폴백 셀렉터 입력({sel})'); break
             except Exception: continue
     if not filled:
+        # ★최후 폴백(2026-09-13): 보이는 contenteditable div 아무거나 or 보이는 textarea 아무거나에 입력 시도.
+        #   (스킨마다 name/id가 제각각이라 셀렉터 목록으로 다 못 잡는 경우 — 화면에 보이는 편집영역을 직접 채운다)
+        try:
+            _any=d.execute_script("""
+                var c=arguments[0];
+                // 보이는 contenteditable(제목칸 제외: 높이가 어느정도 큰 것)
+                var eds=Array.from(document.querySelectorAll("[contenteditable='true'],[contenteditable='']"));
+                for(var i=0;i<eds.length;i++){var e=eds[i];var r=e.getBoundingClientRect();
+                  if(r.width>150&&r.height>40&&e.offsetParent!==null){
+                    e.innerHTML=c;e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('blur',{bubbles:true}));return 'ce';}}
+                // 보이는 textarea 중 가장 큰 것
+                var tas=Array.from(document.querySelectorAll('textarea')).filter(function(t){var r=t.getBoundingClientRect();return t.offsetParent!==null&&r.height>30;});
+                tas.sort(function(a,b){return b.getBoundingClientRect().height-a.getBoundingClientRect().height;});
+                if(tas.length){tas[0].value=c;tas[0].dispatchEvent(new Event('input',{bubbles:true}));tas[0].dispatchEvent(new Event('change',{bubbles:true}));return 'ta';}
+                return '';
+            """, editor_content)
+            if _any:
+                filled=True; add_log(f'[Cafe24본문] 최후폴백 입력({_any})')
+        except Exception: pass
+    if not filled:
+        # 실패 시 에디터 DOM 덤프(다음 진단용) — 어떤 에디터인지 셀렉터 파악.
+        try:
+            _ed=d.execute_script("""
+                return {textareas:Array.from(document.querySelectorAll('textarea')).map(function(t){return (t.name||t.id||'')+'#'+Math.round(t.getBoundingClientRect().height);}).slice(0,8),
+                        ce:Array.from(document.querySelectorAll("[contenteditable]")).map(function(e){return (e.className||e.id||'').slice(0,30);}).slice(0,6),
+                        iframes:Array.from(document.querySelectorAll('iframe')).map(function(f){return (f.id||f.title||f.name||'').slice(0,24);}).slice(0,6)};
+            """) or {}
+            add_log(f"[Cafe24본문진단] textarea={_ed.get('textareas')} ce={_ed.get('ce')} iframe={_ed.get('iframes')}")
+        except Exception: pass
         return False,'Cafe24 본문 입력란 못찾음 — 에디터 셀렉터 확인'
 
     if '<img' not in (content_html or '').lower(): attach_saved_images(d,1)
