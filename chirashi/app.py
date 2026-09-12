@@ -2900,6 +2900,19 @@ def reset_driver():
             try: x.quit()
             except: pass
 
+def quit_all_drivers():
+    """★모든 스레드의 크롬 드라이버를 강제 종료(2026-09-13 좀비 크롬 누적 해결).
+       배치 타임아웃으로 hang 워커를 버릴 때, 그 워커 스레드의 드라이버가 _drivers에 남아
+       크롬 프로세스가 좀비로 쌓여(동시2 설정인데 크롬8개) 메모리를 먹고 다음 워커까지 hang시켰음.
+       hang 워커는 daemon이라 join 못하므로 여기서 등록된 모든 드라이버를 quit해 크롬을 정리한다."""
+    with _drv_lock:
+        items=list(_drivers.items()); _drivers.clear()
+    n=0
+    for k,x in items:
+        try: x.quit(); n+=1
+        except Exception: pass
+    return n
+
 # ==================== Selenium 그누보드 글쓰기 ====================
 def _robust_fill(d, el, value):
     """입력 요소에 값을 넣는다. send_keys가 실패(hidden/readonly 등 invalid element state)하면

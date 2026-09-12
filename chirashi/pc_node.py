@@ -355,7 +355,17 @@ def run(once=False, workers=None, idle=30):
                 _alive = [t.name for t in threads if t.is_alive()]
                 if _alive:
                     log(f"⚠ 배치 타임아웃 — hang 워커 {len(_alive)}개 버리고 진행({','.join(_alive)[:60]})")
-                    try: app.reset_driver()
+                    # ★좀비 크롬 정리(2026-09-13): hang 워커는 daemon이라 못 죽이지만, 그 드라이버를 모두 quit해
+                    #   크롬 프로세스가 쌓여 메모리를 먹고 다음 배치까지 hang시키던 악순환을 끊는다.
+                    try:
+                        _qn = app.quit_all_drivers() if hasattr(app,'quit_all_drivers') else 0
+                        log(f"  좀비 드라이버 {_qn}개 정리")
+                    except Exception: pass
+                    # 하드 백스톱: OS 레벨에 남은 크롬/드라이버 강제 종료(Windows)
+                    try:
+                        import subprocess as _sp
+                        _sp.run(['taskkill','/F','/IM','chrome.exe','/T'],capture_output=True,timeout=20)
+                        _sp.run(['taskkill','/F','/IM','chromedriver.exe','/T'],capture_output=True,timeout=20)
                     except Exception: pass
                 _report(results)
             if once:
