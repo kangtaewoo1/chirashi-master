@@ -9445,7 +9445,14 @@ def api_diag():
     # 5) 데이터 상태
     step('허용 사이트',len([s for s in load_sites() if is_publishable(s)])>0,
          f'발행가능 {len([s for s in load_sites() if is_publishable(s)])}개 / 전체 {len(load_sites())}개')
-    step('키워드 풀',len(load_keywords())>0,f'{len(load_keywords())}개')
+    # ★키워드 풀 판정(2026-09-12): 전역 keywords.json만 보던 것 → 작업실(workrooms) 통합 풀로.
+    #   작업실로만 운영해도 '0개 ❌' 오탐이 나던 문제 해결. collect_all_keywords가 전역+모든 작업실 합침.
+    try:
+        _allkw=collect_all_keywords(); _glob=len(load_keywords())
+        step('키워드 풀',len(_allkw)>0,
+             f'총 {len(_allkw)}개'+(f' (전역 {_glob} + 작업실)' if len(_allkw)!=_glob else ''))
+    except Exception:
+        step('키워드 풀',len(load_keywords())>0,f'{len(load_keywords())}개')
     step('이미지 URL',True,f'{len(load_image_urls())}개'+(' (기본 이미지 사용)' if not load_image_urls() else ''))
     out['ok']=all(s['ok'] for s in out['steps'] if s['name'] in ('크롬 설치','크롬 드라이버 기동','페이지 로드 테스트'))
     return jsonify(out)
