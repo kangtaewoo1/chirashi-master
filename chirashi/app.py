@@ -4006,7 +4006,12 @@ def cafe24_post(site, title, content_html, skip_login=False):
             except Exception: _others=0
             _board_alive=(_others>=3)
             # (b) 반려 문구 분류
-            if any(k in _blob2 for k in ['본문','내용을 입력','내용이 없']):
+            # ★cafe24 스팸/금지어 차단(2026-09-12 nazel 실측 + cafe24 공식): '게시글 등록이 일시적으로 중단'은
+            #   게시판 관리자가 켠 불량어(금지어)+스팸 걸러내기에 우리 유흥 키워드(셔츠룸/전화번호 등)가 걸린 것.
+            #   시간·숙성 무관하게 '이 게시판이 우리 콘텐츠를 거부' → 재시도 무의미, 영구 제외 대상.
+            if any(k in _blob2 for k in ['일시적으로 중단','일시적으로 차단','스팸','금지어','불량어','등록이 제한','작성이 제한']):
+                _why='스팸/금지어 차단 — 이 게시판이 우리 콘텐츠 거부(영구 제외)'
+            elif any(k in _blob2 for k in ['본문','내용을 입력','내용이 없']):
                 _why='본문 미입력 반려(에디터 sync 실패 추정)'
             elif any(k in _blob2 for k in ['상품을 선택','상품 선택','product']):
                 _why='상품 연결 필수(상품Q&A — 상품선택 안 됨)'
@@ -7443,6 +7448,10 @@ def auto_pipeline_once(limit=5):
                 add_log(f'[탈락] {name} — 발행됐으나 결과 URL 확인 불가')
             else:
                 reason,_,is_temp=classify_fail(msg)
+                # ★스팸/금지어 차단·본인인증 등 '구조적으로 안 되는 곳'은 재시도 무의미 → 즉시 영구 제외(2026-09-12).
+                #   특히 cafe24 '스팸/금지어 차단'은 문구에 '일시적'이 들어가 classify_fail이 일시적으로 오판하므로 명시 차단.
+                if any(k in str(msg) for k in ('스팸/금지어 차단','콘텐츠 거부','본인인증','영구 제외','승인제 게시판')):
+                    is_temp=False
                 # 일시적 실패라도 무한 재시도로 배치 슬롯을 소모하지 않게 상한(5회)을 둔다.
                 attempts=int(c.get('pipeline_attempts',0) or 0)+1
                 if is_temp and attempts<5:
