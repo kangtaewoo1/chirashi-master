@@ -80,3 +80,4 @@ _*.py
 claudedocs/
 data/*.pre-*.bak
 .pc_discovery_cursor
+captcha_dataset/

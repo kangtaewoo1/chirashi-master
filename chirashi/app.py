@@ -2137,6 +2137,28 @@ def _ocr_kcaptcha(image_bytes):
     except Exception:
         return ''
 
+# ★kcaptcha 학습 데이터 축적(대표님 지시 2026-09-13 '데이터 쌓이면 나중에 가능하지 않냐'):
+#   캡차 이미지 + '검증된 정답'(가입/발행 성공 = 그 OCR값이 정답이었음)을 파일로 저장.
+#   나중에 이 데이터로 ddddocr 재학습(fine-tune) → gnuboard kcaptcha 정확도↑ → 2captcha 비용 0.
+#   파일명: <정답>_<md5앞8>.png (중복 이미지 자동 dedup). 검증 전 후보는 pending/, 검증되면 verified/.
+CAPTCHA_DATASET_DIR = BASE_DIR / 'captcha_dataset'
+def _save_captcha_sample(image_bytes, answer, verified=False):
+    """캡차 이미지+정답 저장. verified=True면 가입/발행 성공으로 정답 확정된 것(학습 최우선 라벨)."""
+    try:
+        if not image_bytes or not answer: return
+        ans=re.sub(r'[^0-9A-Za-z가-힣]','',str(answer))
+        if not (3<=len(ans)<=8): return
+        import hashlib
+        sub='verified' if verified else 'pending'
+        d=CAPTCHA_DATASET_DIR/sub
+        d.mkdir(parents=True,exist_ok=True)
+        h=hashlib.md5(image_bytes).hexdigest()[:8]
+        fp=d/f'{ans}_{h}.png'
+        if not fp.exists():
+            with open(fp,'wb') as f: f.write(image_bytes)
+    except Exception:
+        pass   # 데이터 수집 실패가 가입/발행을 막으면 안 됨
+
 def solve_captcha_with_2captcha(d,site,cap_type,cfg,timeout=300):
     """CAPTCHA 자동 해결. ★kcaptcha는 자체 OCR(ddddocr) 우선이라 2captcha 미설정이어도 시도(2026-09-12)."""
     api_key=(cfg.get('twocaptcha_api_key') or '').strip()
@@ -2204,6 +2226,9 @@ def solve_captcha_with_2captcha(d,site,cap_type,cfg,timeout=300):
             _ocr=_ocr_kcaptcha(image_bytes)
             if _ocr and 3<=len(_ocr)<=8:
                 _record_captcha_usage('kcaptcha_ocr',True,cfg)   # OCR 성공 원장(2captcha 비용 0)
+                _save_captcha_sample(image_bytes,_ocr,verified=False)   # 후보 저장(성공 시 검증본으로 승격)
+                try: d._last_kcaptcha=(image_bytes,_ocr)   # 성공 검증 시 verified로 승격하려 보관
+                except Exception: pass
                 add_log(f'[kcaptcha OCR] 자체해결 "{_ocr}" (2captcha 미사용)')
                 return True,'kcaptcha OCR 해결',_ocr,{'type':'kcaptcha','answer':_ocr,'ocr':True}
             # ② OCR 실패/불확실 → 2captcha 폴백(설정돼 있을 때만)
@@ -2215,6 +2240,8 @@ def solve_captcha_with_2captcha(d,site,cap_type,cfg,timeout=300):
                 result=solver.normal(temp_path)
                 answer=result.get('code') or str(result)
                 _record_captcha_usage('kcaptcha',True,cfg)
+                # 2captcha 정답은 사람이 푼 것이라 ~100% 정확 → 최고 품질 학습 라벨로 즉시 verified 저장.
+                _save_captcha_sample(image_bytes,re.sub(r'[^0-9A-Za-z가-힣]','',str(answer)),verified=True)
                 return True,'kcaptcha 해결 완료(2captcha)',answer,{'type':'kcaptcha','answer':answer}
             except Exception as e:
                 return False,f'kcaptcha 해결 실패: {str(e)[:80]}','',{}
@@ -7230,6 +7257,44 @@ def auto_signup(site, submit=True):
     if not submitted:
         _safe_js(d,"var f=document.getElementById('fregister')||document.forms['fregister']||document.querySelector(\"form[action*='register_form_update']\")||document.querySelector(\"form[action*='join']\");if(f){if(f.requestSubmit)f.requestSubmit();else f.submit();}")
     time.sleep(3); dismiss_alerts(d)
+    # ★kcaptcha 오답 재시도(대표님 지시 2026-09-13 '어떻게든 가입'): 그누보드는 캡차가 틀리면 alert 없이
+    #   register_form.php에 그대로 머문다(OCR이 그럴듯한 오답을 내면 solve는 성공으로 보고 → 조용히 반려).
+    #   → '제출했는데 아직 가입폼(비번칸)이 보이면' = 캡차 오답 신호 → 캡차 새로고침·재OCR·재입력·재제출 2회 더.
+    if cap=='kcaptcha' and site.get('platform')!='cafe24':
+        from selenium.webdriver.common.by import By
+        def _still_on_form():
+            try:
+                if 'register_form' not in (d.current_url or '').lower(): return False
+                return bool([e for e in d.find_elements(By.CSS_SELECTOR,"input[name='mb_password'],input[type='password']") if e.is_displayed()])
+            except Exception: return False
+        _rtry=0
+        while _still_on_form() and _rtry<2:
+            _rtry+=1
+            add_log(f'[자동가입 캡차재시도] {_snm} — 제출 후 가입폼 잔존(캡차 오답 추정) {_rtry}/2')
+            try: _kcaptcha_force_load(d); time.sleep(1)
+            except Exception: pass
+            _ok2,_m2,_ans2,_i2=solve_captcha_with_2captcha(d,site,'kcaptcha',cfg)
+            if not (_ok2 and _ans2): continue
+            _done2=False
+            for csel in ["input[name='captcha_key']","#captcha_key","input[name*='captcha']","input[id*='captcha']"]:
+                for el in _safe_find(d,csel):
+                    try:
+                        if el.is_displayed(): el.clear(); el.send_keys(_ans2); _done2=True; break
+                    except Exception: pass
+                if _done2: break
+            # 재제출(그누보드 표준 폼)
+            for sel in ("form#fregister input[type='submit']","form[name='fregister'] input[type='submit']",
+                        "form#fregister button[type='submit']","form[action*='register_form_update'] input[type='submit']",
+                        "form[action*='register_form_update'] button[type='submit']","input[type='submit']","button[type='submit']"):
+                _s2=False
+                for el in _safe_find(d,sel):
+                    try:
+                        if el.is_displayed(): d.execute_script('arguments[0].click()',el); _s2=True; break
+                    except Exception: pass
+                if _s2: break
+            else:
+                _safe_js(d,"var f=document.forms['fregister']||document.querySelector(\"form[action*='register_form_update']\");if(f){if(f.requestSubmit)f.requestSubmit();else f.submit();}")
+            time.sleep(3); dismiss_alerts(d)
     # ★제출 후 alert에 '필수' 문구가 있으면(주소/전화 등 미입력) 그 사유를 명확히 반환(2026-09-12 대표님 '주소 입력도 해야?').
     try:
         _al=' '.join(getattr(d,'_last_alerts',[]) or [])
@@ -7286,6 +7351,13 @@ def auto_signup(site, submit=True):
                       login_saved=True,no_verify=_no_verify,
                       signup_updated_at=datetime.now().isoformat(timespec='seconds'))
         _tag=' 🍯무인증' if _no_verify else ' (이메일인증)'
+        # ★가입 성공 = 마지막 kcaptcha OCR 답이 정답이었음 → verified 학습 데이터로 승격(대표님 데이터축적 지시).
+        try:
+            _lk=getattr(d,'_last_kcaptcha',None)
+            if _lk and _lk[0] and _lk[1]:
+                _save_captcha_sample(_lk[0],_lk[1],verified=True)
+                d._last_kcaptcha=None
+        except Exception: pass
         add_log(f'[자동가입 성공]{_tag} {site.get("name") or site.get("site_url","")} — {mid} ({msg})')
         return True,f'자동가입 성공 — {mid}'
 
