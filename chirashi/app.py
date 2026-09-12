@@ -8179,7 +8179,7 @@ def chk():
     #  /api/test/* = 발행 테스트 트리거(등록 사이트에 실제 글1건 발행해 검증).
     _p=request.path
     if _p=='/api/version': return  # 배포 SHA 확인 — 공개(민감정보 없음)
-    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/sites/unlock-cafe24','/api/sites/purge-fake-cafe24','/api/candidates/rescreen-cafe24','/api/regions/normalize-existing','/api/imap/test','/api/openai/usage','/api/config/clear-key','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/report-site','/api/unlocker/test','/api/sbr/test') or _p.startswith('/api/test/'):
+    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/sites/unlock-cafe24','/api/sites/purge-fake-cafe24','/api/candidates/rescreen-cafe24','/api/candidates/revive-rejected','/api/regions/normalize-existing','/api/imap/test','/api/openai/usage','/api/config/clear-key','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/report-site','/api/unlocker/test','/api/sbr/test') or _p.startswith('/api/test/'):
         tok=(request.args.get('token') or '').strip()
         cfgtok=(load_config().get('log_token') or '').strip()
         if cfgtok and tok==cfgtok:
@@ -8894,6 +8894,42 @@ def api_rejected_domains():
     except Exception: logn=300
     log=list(reversed(raw.get('log') or []))[:logn]   # 최근 사유(기본 300, ?logn=2000까지)
     return jsonify({'ok':True,'count':len(doms),'domains':doms[:2000],'log':log})
+
+@app.route('/api/candidates/revive-rejected',methods=['POST'])
+def api_cand_revive_rejected():
+    """★탈락 후보 회수(대표님 지시 2026-09-12, 토큰 허용): 재시도 가치 높은 탈락 사유를 골라
+       screened=False·status=ready로 되돌려 재검수 큐에 넣는다. cafe24 가입·로그인·Froala 개선 후
+       살아날 수 있는 것들(셀레늄 일시오류·자동가입실패·로그인필요)을 우선 회수.
+       body: {reasons?: [키워드...], dry_run?}. 기본 reasons = 셀레늄에러·자동가입실패·로그인필요."""
+    d=request.get_json(silent=True) or {}
+    dry=bool(d.get('dry_run'))
+    # 회수 대상 사유 키워드(reject_reason/note에 이 문자열이 있으면 회수)
+    default_reasons=['Message:','Stacktrace','WinError','자동가입 실패','로그인 필요','로그인이 필요','로그인 필요할',
+                     '등록 확인 불가','타임아웃','일시적 실패','글쓰기 페이지 못찾']
+    reasons=d.get('reasons') or default_reasons
+    # 회수에서 '영구 제외'해야 할 것(되돌려도 소용없는 것)은 제외
+    never=['본인인증','휴대폰','도박','불법','읽기제한','색인차단','제외 도메인','주차','만료','기업']
+    def _hit(s):
+        s=str(s or '')
+        if any(n in s for n in never): return False
+        return any(k in s for k in reasons)
+    matched=0; by_reason={}
+    with _cand_lock:
+        cands=load_cands()
+        for c in cands:
+            if c.get('status')!='rejected': continue
+            rr=c.get('reject_reason') or c.get('note') or ''
+            if _hit(rr):
+                matched+=1
+                key=next((k for k in reasons if k in str(rr)),'기타')
+                by_reason[key]=by_reason.get(key,0)+1
+                if not dry:
+                    c['status']='ready'; c['screened']=False
+                    c.pop('reject_reason',None)
+                    c['revived_at']=datetime.now().strftime('%Y-%m-%d %H:%M')
+        if not dry and matched: save_cands(cands)
+    add_log(f'[탈락 회수] {"(미리보기)" if dry else ""} 재시도 가치 높은 {matched}곳 회수 → 재검수 대기','정리')
+    return jsonify({'ok':True,'dry_run':dry,'revived':matched,'by_reason':by_reason})
 
 @app.route('/api/candidates/rescreen-cafe24',methods=['POST'])
 def api_cand_rescreen_cafe24():
