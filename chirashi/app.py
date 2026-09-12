@@ -11297,7 +11297,7 @@ DASH_HTML=r'''<header><div class="logo" onclick="window.scrollTo({top:0,behavior
 
 <div style="margin-top:14px;font-weight:700;color:var(--p);font-size:12px">2) 키워드 종류 <span style="font-weight:400;color:var(--d)">(한 줄에 하나, 3개 이상)</span></div>
 <textarea id="wrBases" rows="3" placeholder="출장마사지&#10;마사지&#10;홍보게시판" style="margin-top:4px"></textarea>
-<div style="color:var(--d);font-size:10px;margin-top:4px">지역마다 위 키워드 중 서로 다른 3개를 랜덤 조합해 글 1건을 만듭니다. 첫 번째가 메인 키워드.</div>
+<div style="color:var(--d);font-size:10px;margin-top:4px">지역×업종 하나하나가 <b>메인키워드 1개=글 1건</b>이 됩니다 (예: 부평역노래방). 서브키워드는 발행 시 그 지역에 맞춰 자동 랜덤 생성.</div>
 
 <div style="margin-top:14px;font-weight:700;color:var(--p);font-size:12px">3) 생성 → 자동저장 → 발행</div>
 <div class="row" style="margin-top:4px">
@@ -11832,7 +11832,9 @@ async function loadRegionTool(){if(!_regionData){const r=await api('/regions','G
 //   특정 구 선택 시 그 구(와 하위 동)만 생성. 비우면 시·도 전체(기존 동작).
 async function fillGuSel(provId,guId){const data=await loadRegionTool();const gs=$(guId);if(!gs)return;const prov=$(provId).value;gs.innerHTML='<option value="">시·군·구 전체</option>';if(!prov||!data||!data[prov])return;Object.keys(data[prov]).forEach(dist=>{const o=document.createElement('option');o.value=dist;o.textContent=dist;gs.appendChild(o)})}
 function shortProvince(x){return x.replace(/특별자치시$|특별자치도$|특별시$|광역시$|자치도$|도$/,'')}
-function shortDistrict(x){const last=x.trim().split(/\s+/).pop();return last.replace(/시$|군$|구$/,'')}
+function shortDistrict(x){const last=x.trim().split(/\s+/).pop();
+  // ★1자로 줄면(남구→남, 서구→서, 동구→동, 중구→중) 뜻이 사라지므로 원형 유지(대표님 지시 2026-09-13).
+  const s=last.replace(/시$|군$|구$/,'');return s.length>=2? s : last}
 // ★동/읍/면 축약 규칙(대표님 지시 2026-09-12, 서버 normalize_region과 동일 규칙):
 //  - 동: 기본 제거(부평동→부평, 신림동→신림). 단 '떼면 딴 뜻/어색'한 동은 유지(_KEEP_DONG).
 //  - 읍/면: 기본 제거. 단 인구 많은 읍(통진읍 등)은 유지(_KEEP_EM).
@@ -11874,17 +11876,7 @@ const _stationsByProvince={
 "부산광역시":["부산역","서면역","남포역","자갈치역","중앙역","부산진역","동래역","연산역","교대역","부산대역","온천장역","명륜역","범어사역","노포역","사상역","하단역","괴정역","대티역","서대신역","동대신역","토성역","범내골역","범일역","좌천역","수정역","초량역","해운대역","장산역","중동역","벡스코역","센텀시티역","민락역","광안역","금련산역","남천역","경성대부경대역","대연역","못골역","지게골역","문현역","전포역","국제금융센터부산은행역","화명역","덕천역","구포역","수영역","망미역"],
 "대구광역시":["대구역","중앙로역","반월당역","동대구역","신천역","동구청역","아양교역","해안역","방촌역","용계역","율하역","안심역","성당못역","대명역","안지랑역","현충로역","영대병원역","교대역","명덕역","남산역","서문시장역","청라언덕역","반고개역","내당역","두류역","감삼역","죽전역","용산역","이곡역","성서산업단지역","계명대역","강창역","칠곡경대병원역","팔거역","동천역","화명역","수성구청역","범어역","만촌역","담티역","연호역","고산역"],
 "대전광역시":["대전역","중앙로역","중구청역","서대전네거리역","오룡역","용문역","탄방역","시청역","정부청사역","갈마역","월평역","갑천역","유성온천역","구암역","현충원역","월드컵경기장역","노은역","지족역","반석역","판암역","신흥역","대동역"],
-"광주광역시":["광주송정역","송정공원역","도산역","공항역","김대중컨벤션센터역","상무역","운천역","돌고개역","농성역","화정역","쌍촌역","금남로4가역","금남로5가역","문화전당역","남광주역","학동증심사입구역","소태역","녹동역","평동역"],
-// ★전국 역 데이터 보강(대표님 지시 2026-09-13). 수도권 外는 도시철도가 없는 곳이 많아 유흥·번화가 밀집 주요 철도역 중심.
-"울산광역시":["울산역","태화강역","남창역","덕하역","개운포역","망양역","선암역","울산항역"],
-"강원도":["춘천역","남춘천역","강촌역","원주역","만종역","서원주역","강릉역","동해역","묵호역","정동진역","속초역","평창역","진부역"],
-"충청북도":["청주역","오송역","조치원역","청주공항역","충주역","제천역","단양역","영동역","옥천역"],
-"충청남도":["천안역","천안아산역","아산역","온양온천역","배방역","탕정역","신창역","두정역","서정리역","성환역","직산역","공주역","서산역","당진역","논산역","서천역","보령역"],
-"전라북도":["전주역","익산역","군산역","정읍역","김제역","남원역","임실역","순창역"],
-"전라남도":["여수엑스포역","여천역","순천역","광양역","목포역","나주역","무안역","광주송정역","벌교역","보성역"],
-"경상북도":["포항역","동대구역","구미역","김천역","경주역","신경주역","안동역","영주역","상주역","문경역","경산역","하양역"],
-"경상남도":["창원역","창원중앙역","마산역","진주역","김해국제공항역","봉하역","부원역","봉황역","수로왕릉역","박물관역","연지공원역","장유역","진영역","밀양역","양산역","통도사역","물금역"],
-"제주특별자치도":[]
+"광주광역시":["광주송정역","송정공원역","도산역","공항역","김대중컨벤션센터역","상무역","운천역","돌고개역","농성역","화정역","쌍촌역","금남로4가역","금남로5가역","문화전당역","남광주역","학동증심사입구역","소태역","녹동역","평동역"]
 };
 let _workrooms=[];
 // ★작업실 조합 수 계산(대표님 '새 작업실 안 들어옴' 2026-09-09): 조합 0이면 발행풀에 안 잡힘 → 셀렉터에 표시.
@@ -11907,7 +11899,10 @@ async function saveWorkroom(){const id=$('wrSelect').value;if(!id){toast('먼저
 async function deleteWorkroom(){const id=$('wrSelect').value;if(!id)return;if(!confirm('선택한 작업실과 키워드 목록을 삭제할까요?'))return;await api('/workrooms','DELETE',{id:id});await loadWorkrooms();toast('작업실 삭제됨')}
 function workroomProvinceRank(p){const x=shortProvince(p);if(x==='인천')return 0;if(x==='경기')return 1;if(x==='서울')return 2;if(x==='충청남'||x==='충남'||x==='대전')return 3;if(x==='충청북'||x==='충북')return 4;if(x==='세종')return 5;if(x==='전북'||x==='전라북')return 6;if(x==='전남'||x==='전라남'||x==='광주')return 7;if(['부산','대구','울산','경남','경상남'].includes(x))return 8;if(x==='경북'||x==='경상북')return 9;if(x==='강원')return 10;if(x==='제주')return 11;return 99}
 function randomThree(items){const a=[...new Set(items)];for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]}return a.slice(0,3)}
-async function makeWorkroomRegional(){const data=await loadRegionTool();if(!data)return[];const bases=[...new Set($('wrBases').value.split(/\r?\n/).map(x=>x.trim()).filter(x=>x&&!x.startsWith('#')))];if(bases.length<3){toast('서로 다른 키워드를 한 줄에 하나씩 최소 3개 입력하세요','er');return[]}const only=$('wrProvince').value,onlyGu=($('wrGuSel')&&$('wrGuSel').value)||'',join=$('wrJoin').value,regions=[];Object.entries(data).sort((a,b)=>workroomProvinceRank(a[0])-workroomProvinceRank(b[0])).forEach(([province,districts])=>{if(only&&province!==only)return;if($('wrCity').checked&&!onlyGu)regions.push(shortProvince(province));Object.entries(districts||{}).forEach(([district,dongs])=>{if(onlyGu&&district!==onlyGu)return;if($('wrGu').checked)regions.push(shortDistrict(district));if($('wrDong').checked)(dongs||[]).forEach(d=>regions.push(shortDong(d)))})});if(!onlyGu&&$('wrStation')&&$('wrStation').checked){Object.entries(_stationsByProvince).forEach(([prov,sts])=>{if(only&&prov!==only)return;(sts||[]).forEach(st=>regions.push(st))})}const uniqReg=[...new Set(regions.filter(Boolean))];const out=[];uniqReg.forEach(region=>{const picked=randomThree(bases);out.push(picked.map(base=>region+join+base).join(','))});return out}
+async function makeWorkroomRegional(){const data=await loadRegionTool();if(!data)return[];const bases=[...new Set($('wrBases').value.split(/\r?\n/).map(x=>x.trim()).filter(x=>x&&!x.startsWith('#')))];if(bases.length<1){toast('업종 키워드를 한 줄에 하나씩 입력하세요(노래방·가라오케 …)','er');return[]}const only=$('wrProvince').value,onlyGu=($('wrGuSel')&&$('wrGuSel').value)||'',join=$('wrJoin').value,regions=[];Object.entries(data).sort((a,b)=>workroomProvinceRank(a[0])-workroomProvinceRank(b[0])).forEach(([province,districts])=>{if(only&&province!==only)return;if($('wrCity').checked&&!onlyGu)regions.push(shortProvince(province));Object.entries(districts||{}).forEach(([district,dongs])=>{if(onlyGu&&district!==onlyGu)return;if($('wrGu').checked)regions.push(shortDistrict(district));if($('wrDong').checked)(dongs||[]).forEach(d=>regions.push(shortDong(d)))})});if(!onlyGu&&$('wrStation')&&$('wrStation').checked){Object.entries(_stationsByProvince).forEach(([prov,sts])=>{if(only&&prov!==only)return;(sts||[]).forEach(st=>regions.push(st))})}const uniqReg=[...new Set(regions.filter(Boolean))];const out=[];const seen=new Set();
+  // ★대표님 지시(2026-09-13): 지역×업종 각각을 '메인키워드 1개=한 줄'로. 콤마조합 아님.
+  //   서브키워드는 발행 시 서버 _auto_subkeywords가 그 지역에 맞춰 랜덤 생성.
+  uniqReg.forEach(region=>{bases.forEach(base=>{const q=region+join+base;if(!seen.has(q)){seen.add(q);out.push(q)}})});return out}
 async function previewWorkroomRegional(){const rows=await makeWorkroomRegional();$('wrRegionCount').textContent=rows.length.toLocaleString()+'개 생성 예정'}
 async function applyWorkroomRegional(replace){const id=$('wrSelect').value;if(!id){toast('먼저 작업실을 추가/선택하세요','er');return}const rows=await makeWorkroomRegional();if(!rows.length)return;if(rows.length>50000){toast('5만 개를 초과합니다. 지역 범위를 줄여주세요','er');return}const current=replace?[]:$('wrKeywords').value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);const merged=[...new Set(current.concat(rows))];$('wrKeywords').value=merged.join('\n');$('wrRegionCount').textContent='저장 중...';const r=await api('/workrooms','POST',Object.assign({id:id,name:$('wrName').value.trim(),keyword_csv:merged.join('\n'),site_id:$('wrSite').value,bases:($('wrBases')?$('wrBases').value:''),writer_name:($('wrWriter')?$('wrWriter').value:'')},_wrScopePayload()));if(r&&r.ok){$('wrRegionCount').textContent=rows.length.toLocaleString()+'개 생성 · 자동저장됨 총 '+merged.length.toLocaleString()+'개';toast('생성+작업실 자동저장 완료 · '+merged.length.toLocaleString()+'개 조합','ok');await loadWorkrooms();$('wrSelect').value=id;showWorkroom()}else{$('wrRegionCount').textContent=rows.length.toLocaleString()+'개 생성(저장 실패)';toast((r&&r.error)||'자동저장 실패 — 작업실 저장 버튼을 눌러주세요','er')}}
 function copyWorkroomToBulk(){const rows=$('wrKeywords').value.trim();if(!rows){toast('작업실 키워드가 없습니다','er');return}const room=_workrooms.find(x=>x.id===$('wrSelect').value);$('kwlist').value=rows;$('kwlist').dataset.workroomId=room?room.id:'';$('kwlist').dataset.workroomName=room?room.name:'직접 입력';$('kwSiteFilter').value=$('wrSite').value;$('kwCount').textContent=(room?'['+room.name+'] ':'')+rows.split(/\r?\n/).filter(Boolean).length+'줄';toast((room?'['+room.name+'] ':'')+'발행 목록에 적용됨','ok');$('kwlist').scrollIntoView({behavior:'smooth',block:'center'})}
