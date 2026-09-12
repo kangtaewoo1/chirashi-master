@@ -2365,10 +2365,15 @@ def classify_fail(msg):
         return 'flood','도배방지 간격대기',True   # 일시적 → 학습된 간격 뒤 자동 재시도
     if '캡차' in ms or 'captcha' in low or '보안 인증' in ms:
         return 'captcha','캡차/보안인증 감지',False
+    # ★크롬/드라이버 크래시(2026-09-12 대표님 '발행가능 정체' 실측): 'Message:\nStacktrace' 셀레늄 예외는
+    #   크롬 크래시·요소 소실 등 일시적 오류. 기존엔 어느 분류에도 안 걸려 other(비일시적)→되는 사이트 영구탈락.
+    #   → 일시적으로 분류해 재시도하게 한다(크래시는 다음 시도에 대개 정상).
     if any(k in ms for k in ['타임아웃','시간 초과']) or any(k in low for k in
            ['timeout','timed out','renderer','chrome not reachable','disconnected','connection',
-            'session deleted','session not created','net::err','unreachable','max retries','read timed']):
-        return 'timeout','타임아웃/브라우저',True   # 일시적 → 자동 재시도
+            'session deleted','session not created','net::err','unreachable','max retries','read timed',
+            'stacktrace','no such window','target window already closed','tab crashed','chrome crash',
+            'invalid session','no such execution context','cannot determine loading status','winerror']):
+        return 'timeout','타임아웃/브라우저오류',True   # 일시적 → 자동 재시도
     if any(k in ms for k in ['로그인','아이디','비밀번호']) or any(k in low for k in
            ['login','mb_id','mb_password','password']):
         return 'login','로그인 실패',False
