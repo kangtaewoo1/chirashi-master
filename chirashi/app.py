@@ -10716,7 +10716,7 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 <div class="stats" id="live"><span>큐:<b id="q">0</b></span><span>성공:<b id="ok" style="color:var(--g)">0</b></span><span>실패:<b id="fl" style="color:var(--r)">0</b></span><span>스킵:<b id="sk" style="color:var(--y)">0</b></span><span>발행워커:<b id="ws" style="color:var(--d)">-</b></span><span style="margin-left:10px;padding-left:10px;border-left:1px solid var(--b)">🎯 발행가능 <b id="siteGoal" style="color:var(--p)">-</b></span></div>
 <a href="/logout" class="btn-xs" style="background:var(--b);color:var(--d);text-decoration:none">로그아웃</a></header>
 
-<div class="tabs"><button id="tab-gen" class="tab" onclick="T('gen')" style="display:none">글 생성</button><button class="tab on" onclick="T('kw')">키워드</button><button class="tab" onclick="T('wlog')">발행 현황</button><button class="tab" onclick="T('images')">이미지 저장</button><button class="tab" onclick="T('sites')">사이트 (<span id="siteTabCount">{{sites|length}}</span>)</button><button class="tab" onclick="T('disco')">발굴</button><button id="tab-mem" class="tab" onclick="T('mem')" style="display:none">회원·정산</button><button class="tab" onclick="T('stats')">통계</button><button class="tab" onclick="T('cost')">API 비용</button><button class="tab" onclick="T('set')">설정</button></div>
+<div class="tabs"><button id="tab-gen" class="tab" onclick="T('gen')" style="display:none">글 생성</button><button class="tab on" onclick="T('wlog')">발행 현황</button><button class="tab" onclick="T('kw')">키워드</button><button class="tab" onclick="T('images')">이미지 저장</button><button class="tab" onclick="T('sites')">사이트 (<span id="siteTabCount">{{sites|length}}</span>)</button><button class="tab" onclick="T('disco')">발굴</button><button id="tab-mem" class="tab" onclick="T('mem')" style="display:none">회원·정산</button><button class="tab" onclick="T('stats')">통계</button><button class="tab" onclick="T('cost')">API 비용</button><button class="tab" onclick="T('set')">설정</button></div>
 <div class="wrap"><div id="toasts"></div>
 <div id="pvOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:500;padding:20px" onclick="if(event.target===this)closePreview()">
 <div style="max-width:820px;margin:0 auto;background:#fff;color:#222;border-radius:10px;max-height:90vh;overflow:auto">
@@ -10739,7 +10739,7 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 <button class="btn btn-g" onclick="postSel()">선택 사이트 발행</button>
 <button class="btn btn-y" onclick="postAll()">전체 사이트 발행</button></div></div></div>
 
-<div id="p-kw" class="panel on">
+<div id="p-kw" class="panel">
 <div class="note">🗂 <b>작업실 하나 = 업종 하나</b>. 키워드 종류만 넣고 <b style="color:var(--p)">생성</b>만 누르면 24시간 자동 발행됩니다. 관리할 건 <b style="color:var(--p)">키워드</b>와 <b style="color:var(--p)">이미지</b>뿐.</div>
 <div class="card" style="border-color:#334155"><h3>🗂 키워드 작업실 — 업종별로 추가 (예: 노래방 · 마사지 · 셔츠룸)</h3>
 <div class="row">
@@ -10838,7 +10838,7 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 
 <!-- ★결과 탭(p-res) 제거 — 발행 현황(p-wlog) 탭에 병합됨(대표님 지시 2026-09-09). -->
 
-<div id="p-wlog" class="panel">
+<div id="p-wlog" class="panel on">
 <div class="note">작업실에서 시작한 글 생성 준비와 실제 워커 발행 상태를 작업실별로 확인합니다. 준비 완료 뒤에는 큐→발행 중→성공/실패→결과 URL 순서로 기록됩니다.</div>
 <div class="card"><h3>워커 실행로그</h3>
 <div class="row"><select id="wlogRoom" style="width:auto" onchange="renderWorkerLog()"><option value="">전체 작업실</option></select><button class="btn btn-d" onclick="renderWorkerLog()">새로고침</button><span style="flex:1"></span><span id="wlogWorker" style="color:var(--d);font-size:10px"></span></div>
@@ -11719,7 +11719,7 @@ if($('p-wlog')&&$('p-wlog').classList.contains('on')){renderWorkerLog();renderHi
   try{const g=$('gContent');if(g)g.addEventListener('input',function(){$('gLen').textContent=this.value.length.toLocaleString()+'자'})}catch(e){}
   try{const k=$('kwlist');if(k)k.addEventListener('input',function(){$('kwCount').textContent=parseList().length+'줄'})}catch(e){}
   // 활성 패널이 하나도 없으면 기본 탭 강제 활성화(빈화면 최후 방어).
-  try{if(!document.querySelector('.panel.on'))T('kw')}catch(e){console.error('기본탭 복구 실패',e)}
+  try{if(!document.querySelector('.panel.on'))T('wlog')}catch(e){console.error('기본탭 복구 실패',e)}
   [renderSites,poll,loadPool,loadImages,loadImageFiles,loadWorkrooms,loadImgWorkrooms,loadRegionTool].forEach(fn=>{try{fn()}catch(e){console.error('init',fn.name,e)}});
 })();
 setInterval(()=>{try{poll()}catch(e){}},2000);
