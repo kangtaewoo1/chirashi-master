@@ -339,8 +339,20 @@ def run(once=False, workers=None, idle=30):
                 for c in cands:
                     t = threading.Thread(target=_w, args=(c,), name=f"NODE-{str(c.get('id',''))[:6]}", daemon=True)
                     t.start(); threads.append(t)
+                # ★배치 전체 타임아웃(대표님 '발행가능 떴다 사라짐' 실측 중 노드 10분 hang 발견 2026-09-13):
+                #   워커 하나가 do_post/selenium에서 무한 hang하면 t.join()(무제한)이 노드 전체를 멈춰 세웠음.
+                #   사이트당 최대 300초 예산으로 배치 전체 데드라인을 두고, 넘긴 스레드는 daemon이라 버리고 진행.
+                #   버려진 후보는 서버 claim TTL 만료로 자동 회수돼 다음에 다시 잡힌다.
+                _batch_deadline = time.time() + max(300, 300 * len(cands) // max(1, n))
                 for t in threads:
-                    t.join()
+                    _left = _batch_deadline - time.time()
+                    if _left <= 0: break
+                    t.join(timeout=_left)
+                _alive = [t.name for t in threads if t.is_alive()]
+                if _alive:
+                    log(f"⚠ 배치 타임아웃 — hang 워커 {len(_alive)}개 버리고 진행({','.join(_alive)[:60]})")
+                    try: app.reset_driver()
+                    except Exception: pass
                 _report(results)
             if once:
                 log("배치 1회 완료 — 종료(--once)"); break
