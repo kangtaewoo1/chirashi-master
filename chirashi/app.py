@@ -8922,6 +8922,18 @@ def api_regions_normalize_existing():
     d=request.get_json(silent=True) or {}
     dry=bool(d.get('dry_run'))
     cfg=load_config()
+    # ★진단 모드(2026-09-12): 첫 정규화 폴백 버그로 손상됐을 수 있는 라인 수집(러아·입역·24출장 등).
+    if d.get('diagnose'):
+        import re as _re
+        pat=_re.compile(r'러아|입역|24출장|24안마|24맛사지|실아|시아출장')
+        hits=[]
+        for room in (load_json(WORKROOMS_FILE,[]) or []):
+            for ln in str(room.get('keyword_csv') or '').splitlines():
+                for p in ln.split(','):
+                    if pat.search(p): hits.append('작업실['+str(room.get('name',''))+']: '+p.strip()[:40])
+        for ln in str(cfg.get('discover_direct_queries','') or '').splitlines():
+            if pat.search(ln): hits.append('발굴: '+ln.strip()[:40])
+        return jsonify({'ok':True,'diagnose':True,'damaged_count':len(hits),'samples':hits[:40]})
     changed_rooms=0; changed_lines=0; samples=[]
     with _json_lock(WORKROOMS_FILE):
         rooms=load_json(WORKROOMS_FILE,[]) or []
