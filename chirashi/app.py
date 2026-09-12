@@ -3862,7 +3862,15 @@ def cafe24_post(site, title, content_html, skip_login=False):
             add_log(f"[Cafe24폼진단] inputs={_du.get('inputs')} textarea={_du.get('textareas')} iframe={_du.get('iframes')}")
         except Exception as _e:
             add_log(f"[Cafe24폼진단] 덤프실패 {str(_e)[:60]}")
-        return False,'Cafe24 글쓰기 페이지 못찾음 — Turnstile/로그인/게시판번호 확인'
+        # ★탈락 사유 정확화(대표님 지시 2026-09-13 '떴다 사라짐' 실측): 폼 못찾을 때 실제 원인을 현재 URL로 구분.
+        #   지금까지 Turnstile 챌린지에서 막혀도 '글쓰기 페이지 못찾음'으로 뭉뚱그려 기록돼 원인 파악이 어려웠음.
+        try: _cu=(d.current_url or '').lower()
+        except Exception: _cu=''
+        if 'veritas-hub' in _cu or 'challenge' in _cu or 'turnstile' in _cu:
+            return False,'Cafe24 Turnstile 챌린지 미통과 — 글쓰기 진입 차단(2captcha 해결 실패/미시도)'
+        if 'login' in _cu or 'member' in _cu:
+            return False,'Cafe24 글쓰기에 로그인 필요 — 로그인 세션 진입 실패(계정/세션 확인)'
+        return False,'Cafe24 글쓰기 페이지 못찾음 — 게시판번호(board_no)/스킨 셀렉터 확인'
     add_log(f"[Cafe24글쓰기폼] 진입 성공 — {(site.get('name') or base)[:24]}")
     # ★대표님 지시(2026-09-08): 진짜 글쓰기 진입 성공한 경로를 사이트에 저장 → 다음부터 최우선 재사용
     #   (매번 추측해 홈으로 튕기던 문제 해결). 현재 write 폼 URL을 write_entry_url로 저장.
@@ -7691,8 +7699,8 @@ def auto_pipeline_once(limit=5):
             # 검수는 비회원 글쓰기로 봤지만 실제 write.php가 로그인으로 튕기는 게시판이 있다.
             # 이 경우 자동가입 후 1회 재시도(gjsec처럼 login_required 오판된 케이스 구제).
             # ★Cafe24는 '글쓰기 페이지 못찾음'도 대개 로그인 필요 → 자동가입 트리거에 포함(대표님 지시 2026-09-11).
-            _need_su=re.search(r'(로그인이 필요|로그인 실패|로그인 화면|권한이 없|권한 없)',str(msg)) or \
-                     (tmp.get('platform')=='cafe24' and ('글쓰기 페이지 못찾음' in str(msg) or '게시판번호' in str(msg)))
+            _need_su=re.search(r'(로그인이? 필요|로그인 실패|로그인 화면|권한이 없|권한 없)',str(msg)) or \
+                     (tmp.get('platform')=='cafe24' and ('글쓰기 페이지 못찾음' in str(msg) or '게시판번호' in str(msg) or '로그인 필요' in str(msg)))
             if (not ok) and (not tmp.get('mb_id')) and _need_su:
                 reset_driver(); time.sleep(1)
                 add_log(f'[파이프라인] {name} 로그인필요 → 자동가입 시도')
