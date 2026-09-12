@@ -676,12 +676,10 @@ def _signup_form_measure(site):
         re.search(r'(?:인증\s*(?:메일|이메일)|인증\s*링크).{0,40}(?:발송|보냈|전송|클릭|확인)',text,re.I))
     # ★cafe24 실측(2026-09-12 대표님 '다른 카페24로'): join.html은 안내문 없이 hidden 플래그로 인증을 켠다.
     #   is_email_auth_use=T → 이메일 인증 필수(임시메일 거부·인증메일 못받아 가입실패). 텍스트 매칭만으론 놓쳐 False 오판했음.
-    if platform=='cafe24':
-        def _flag_true(nm):
-            m=re.search(r'name=["\']'+nm+r'["\'][^>]*value=["\']?\s*(T|1|true|Y)\b',html,re.I) \
-              or re.search(r'value=["\']?\s*(T|1|true|Y)\b[^>]*name=["\']'+nm+r'["\']',html,re.I)
-            return bool(m)
-        if _flag_true('is_email_auth_use'): email_verification=True
+    # ★cafe24는 is_email_auth_use=T여도 대부분 인증 없이 가입됨(대표님 실측 mereta·shudabang·kuspoon 2026-09-12).
+    #   email_verification_required를 강제로 켜지 않는다 → auto_signup이 '일단 인증 없이 제출' → 로그인 잡히면 성공(꿀사이트),
+    #   진짜 인증메일 와야만 하면 그때 IMAP으로 처리. 안내문에 명시적 '이메일 인증 필수' 문구가 있을 때만 위에서 True.
+    # (cafe24 hidden 플래그로 email_verification을 켜던 로직 제거 — 오판으로 되는 사이트 대량 제외했음)
     signature=[(f.get('role'),f.get('name'),f.get('id'),f.get('type'),f.get('minlength'),f.get('maxlength'),f.get('pattern')) for f in fields]
     fingerprint=hashlib.sha256(json.dumps(signature,ensure_ascii=False,sort_keys=True).encode()).hexdigest()
     return {'signup_url':url,'form_url':measured_url,'form_action':urllib.parse.urljoin(measured_url,form.get('action','')),
@@ -3306,6 +3304,28 @@ def cafe24_post(site, title, content_html, skip_login=False):
             time.sleep(0.5)
         return True
 
+    # ★skip_login=True(가입 직후)여도 cafe24는 세션이 실제 살아있는지 확인 → 죽었으면 로그인 수행(2026-09-12 mereta:
+    #   가입 직후 세션 재사용이 맞지만, 세션이 없으면 write가 로그인으로 튕김). myshop 접근으로 세션 판정.
+    if mid and skip_login and site.get('platform')=='cafe24':
+        try:
+            try: d.set_page_load_timeout(8)
+            except Exception: pass
+            try: d.get(base+'/myshop/index.html')
+            except Exception: pass
+            try: d.execute_script("try{window.stop();}catch(e){}")
+            except Exception: pass
+            _alive=False; _m0=time.time()
+            while time.time()-_m0<8:
+                try:
+                    if not d.find_elements(By.CSS_SELECTOR,"input[name='member_passwd']"): _alive=True; break
+                except Exception: pass
+                time.sleep(0.5)
+            try: d.set_page_load_timeout(25)
+            except Exception: pass
+            if not _alive:
+                skip_login=False   # 세션 죽음 → 아래 로그인 블록 수행
+                add_log(f"[Cafe24] 가입 직후 세션 만료 감지 — 재로그인 수행 {(site.get('name') or base)[:20]}")
+        except Exception: pass
     # 로그인 (skip_login=True면 가입 직후 로그인 세션 재사용 → 재로그인 건너뜀)
     if mid and not skip_login:
         # 원격은 로그인폼(member_passwd)이 뜰 때까지 폴링(CF 처리 대기). 로컬은 짧게.
@@ -5733,16 +5753,19 @@ def screen_candidate(url, cfg=None):
             sr=get(su)
             if not sr or sr.status_code>=400: continue
             sh=sr.text or ''
-            # ★cafe24 hidden 인증 플래그(2026-09-12): 안내문 없이 is_email_auth_use/is_mobile/name_auth_use=T로 인증을 켬.
+            # ★cafe24 hidden 인증 플래그(2026-09-12). ★대표님 실측(mereta-mall): 휴대전화는 그냥 '번호칸'이고 본인인증 아님인데
+            #   is_mobile_auth_use=T만 보고 '본인인증 필요'로 오판해 수백 곳 버렸음. is_mobile_auth_use는 '기능 존재'일 뿐이라 제외.
+            #   진짜 본인인증(가입 못 함) = member_name_cert_flag=T(실명인증 강제) 또는 아이핀. 이메일 인증은 is_email_auth_use=T.
+            # ★대표님 실측(mereta·shudabang·kuspoon 2026-09-12): cafe24 인증 플래그(is_email_auth_use·is_mobile_auth_use)는
+            #   '칸이 있다'는 것일 뿐 대부분 인증 없이 그냥 가입됨. 이걸로 선제외하면 되는 사이트를 대량으로 버림.
+            #   → cafe24는 이메일/폰 인증 선판정을 하지 않고 '일단 가입 시도'(auto_signup은 인증 없이 가입되면 성공, 진짜
+            #   인증메일 요구 시에만 IMAP으로 처리). 검수에선 아무것도 제외하지 않는다. 진짜 실명인증(NICE)만 아래 버튼감지로.
             if _is_cafe24:
-                def _f(nm):
-                    return bool(re.search(r'name=["\']'+nm+r'["\'][^>]*value=["\']?\s*(T|1|true|Y)\b',sh,re.I)
-                                or re.search(r'value=["\']?\s*(T|1|true|Y)\b[^>]*name=["\']'+nm+r'["\']',sh,re.I))
-                if _f('is_mobile_auth_use') or _f('is_name_auth_use') or _f('is_ipin_auth_use'): res['signup_phone_cert']=True
-                if _f('is_email_auth_use'): res['signup_email_verify']=True
-            # 본인인증(휴대폰/실명) 신호
-            if any(k in sh for k in ['win_hp_cert','nice본인인증','checkplus','휴대폰 본인인증','휴대폰본인인증',
-                                     'nice_ok','본인인증','실명인증','SMS 인증','아이핀','ipin']):
+                pass  # cafe24 hidden 인증 플래그로는 제외하지 않음(오판 방지) — 일단 가입 시도
+            # 본인인증(휴대폰/실명) 신호 — ★실제 인증 '버튼/스크립트'가 있을 때만(단순 '본인인증' 단어는 약관에도 있어 오판).
+            #   win_hp_cert(휴대폰인증 버튼)·NICE/checkplus 팝업 함수가 있어야 진짜 인증 게시판.
+            if any(k in sh for k in ['win_hp_cert','fnPopCertify','checkplus_main','nice본인인증','callNiceModule',
+                                     'openCertPopup','휴대폰 본인인증','실명인증 후']):
                 res['signup_phone_cert']=True
             # 이메일 인증 필수 신호(learn_signup의 강제 신호 패턴과 동일 기준 — 오탐 축소)
             if (re.search(r'(?:e-?mail|이메일)\s*(?:주소)?\s*(?:인증|확인)(?:을|를|이|가)?\s*(?:반드시|필수|해야|하셔야|완료해야|하여야)',sh,re.I)
