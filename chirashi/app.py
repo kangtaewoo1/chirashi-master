@@ -741,6 +741,7 @@ def load_config():
        'imap_email':'','imap_password':'','imap_host':'imap.gmail.com',
        'twocaptcha_api_key':'','twocaptcha_enabled':False,
        'http_publish_enabled':True,  # ★browserless(requests) 초고속발행(~2~3초) — CSRF token 전송 추가(2026-09-13)로 활성화. 실패 시 셀레늄 자동 폴백.
+       'allow_illegal_boards':True,  # ★대표님 지시 2026-09-13 '도박은 나랑 무관, 글만 써지면 발행': illegal(도박어 도배) 게시판도 탈락 안 시키고 발행. False로 되돌리면 원래대로 차단.
        'public_base_url':'https://google.twseo.kr',  # 업로드 이미지 절대 URL 기준 도메인(외부 게시판 로드용)
        'twocaptcha_price_recaptcha_usd':0.003,'twocaptcha_price_image_usd':0.0005,
        'brave_price_per_query_usd':0.005,  # Pro 플랜 기준 쿼리당 $0.005(설정 탭에서 변경 가능)
@@ -6409,7 +6410,7 @@ def add_candidates_from(items, cfg, source='search'):
                 form_check['screened']=True
                 form_check['score']=score_candidate(form_check)
                 if form_check.get('parked'): form_check['status']='rejected'; form_check['reject_reason']='주차/만료 도메인'
-                elif form_check.get('illegal'): form_check['status']='rejected'; form_check['reject_reason']='도박·불법 사이트'
+                elif form_check.get('illegal') and not cfg.get('allow_illegal_boards'): form_check['status']='rejected'; form_check['reject_reason']='도박·불법 사이트'
                 else: form_check['status']='ready'
             known_dom.add(dom)
             rec={'id':secrets.token_hex(6),'url':url,'domain':dom,
@@ -6451,7 +6452,7 @@ def screen_pending(limit=30):
         elif r.get('index_blocked'): r['status']='rejected'; r['reject_reason']=f'색인차단 — {r.get("index_blocked")}'
         elif r.get('corp_board'): r['status']='rejected'; r['reject_reason']=f'기업 소개 게시판({r.get("corp_board")}) — 홍보 부적합(삭제·신고 위험)'
         elif r.get('parked'): r['status']='rejected'; r['reject_reason']='주차/만료 도메인 (실제 게시판 아님)'
-        elif r.get('illegal'): r['status']='rejected'; r['reject_reason']='도박·불법 사이트 (제휴 부적합)'
+        elif r.get('illegal') and not cfg.get('allow_illegal_boards'): r['status']='rejected'; r['reject_reason']='도박·불법 사이트 (제휴 부적합)'
         elif r.get('ad_banned'): r['status']='rejected'; r['reject_reason']='광고 금지 명시'
         elif r.get('captcha'): r['status']='ready'; r['reject_reason']='캡차 있음 — 2captcha 자동해결 시도 예정'
         elif r.get('cafe24_challenge'):
@@ -6497,7 +6498,8 @@ def screen_pending(limit=30):
                     # ★영구 블랙리스트는 '재검토해도 절대 안 되는 것'만(2026-09-12 감사): 주차·불법·읽기제한·색인차단·광고금지.
                     #   빡센검수·기업게시판·글쓰기폼미확인 등 오탐 가능성 있는 탈락은 영구기록 제외 → 재검수/회수로 살릴 수 있게.
                     _reason=str(rr.get('reject_reason') or '')
-                    _permanent=bool(rr.get('parked') or rr.get('illegal') or rr.get('read_restricted')
+                    _illegal_perm=(rr.get('illegal') and not cfg.get('allow_illegal_boards'))  # 허용 시 illegal은 영구차단 안 함
+                    _permanent=bool(rr.get('parked') or _illegal_perm or rr.get('read_restricted')
                                     or rr.get('index_blocked') or rr.get('ad_banned'))
                     if _permanent:
                         rejected_now.append(c.get('domain') or _domain_of(c.get('url','')))
@@ -7548,7 +7550,7 @@ def auto_pipeline_once(limit=5):
             if (c.get('status')=='rejected' and '자동가입 실패' in rr
                     # 인증벽(본인인증·SMS·실명·성인 등)은 되살려도 무의미 → 영구탈락(전략5)
                     and not any(w in rr for w in ['본인인증','실명인증','휴대폰','SMS','문자인증','아이핀','성인인증','19금','인증필요'])
-                    and not c.get('illegal') and not c.get('parked')
+                    and (not c.get('illegal') or cfg.get('allow_illegal_boards')) and not c.get('parked')
                     and int(c.get('signup_retry',0) or 0) < 3
                     and str(c.get('signup_retry_date',''))!=today_s):
                 c['status']='ready'; c['signup_retry']=int(c.get('signup_retry',0) or 0)+1
@@ -7595,9 +7597,10 @@ def auto_pipeline_once(limit=5):
     _cool=time.time()-1200
     # ★status 'ready'뿐 아니라 'approved'(대표님이 UI에서 승인한 후보)도 전환 대상에 포함.
     #   (approved 후보 14곳이 파이프라인이 ready만 봐서 방치되던 문제 — 대표님 "사이트 안 늚")
+    _block_illegal=not cfg.get('allow_illegal_boards')   # 대표님 지시: 허용 시 도박판도 발행 대상에 포함
     pend=[c for c in cands
           if c.get('screened') and c.get('status') in ('ready','approved')
-          and not c.get('parked') and not c.get('illegal') and not c.get('ad_banned')
+          and not c.get('parked') and (not c.get('illegal') or not _block_illegal) and not c.get('ad_banned')
           and (c.get('domain') or '').lower() not in site_domains
           and c.get('reachable') and _has_write_path(c)
           and not _claim_active(c)   # ★PC 노드가 잡고 있는(만료 전) 후보는 서버가 건드리지 않음
@@ -9054,9 +9057,10 @@ def api_pipeline_claim():
         # ★이메일 인증(signup_email_verify)은 이제 임시메일(mail.tm)로 시도 가능(2026-09-12 urllib버그 수정)→ claim 허용.
         #   휴대폰 본인인증(signup_phone_cert)만 자동 불가라 제외 유지.
         #   ★수동 추가(source='manual')는 쿨다운(_cool) 면제 — 대표님이 넣자마자 즉시 처리.
+        _allow_ill=load_config().get('allow_illegal_boards')   # 대표님 지시: 허용 시 도박판도 노드에 claim 배정
         elig=[c for c in cands
               if c.get('screened') and c.get('status') in ('ready','approved')
-              and not c.get('parked') and not c.get('illegal') and not c.get('ad_banned')
+              and not c.get('parked') and (not c.get('illegal') or _allow_ill) and not c.get('ad_banned')
               and (c.get('domain') or '').lower() not in site_domains
               and c.get('reachable') and _has_write_path(c)
               and not _claim_active(c)
@@ -9301,29 +9305,42 @@ def api_cand_revive_rejected():
                      # ★cafe24 Turnstile 검수 병목(2026-09-12): 아래 사유로 탈락한 cafe24를 새 검수로직으로 회수
                      '글쓰기 폼 미확인','빡센검수','Turnstile','챌린지','Cloudflare']
     reasons=d.get('reasons') or default_reasons
+    # ★대표님 지시(2026-09-13): allow_illegal_boards면 도박·불법 탈락도 회수 대상에 포함(글만 써지면 발행).
+    _allow_ill=load_config().get('allow_illegal_boards')
     # 회수에서 '영구 제외'해야 할 것(되돌려도 소용없는 것)은 제외
-    never=['본인인증','휴대폰','도박','불법','읽기제한','색인차단','제외 도메인','주차','만료']
+    never=['본인인증','휴대폰','읽기제한','색인차단','제외 도메인','주차','만료']
+    if not _allow_ill: never+=['도박','불법']   # 허용이면 도박·불법을 never에서 빼 회수
+    if _allow_ill and '도박' not in reasons: reasons=list(reasons)+['도박','불법']   # 사유 텍스트로도 매칭
     def _hit(s,plat):
         s=str(s or '')
         # cafe24는 '기업 게시판'이어도 발행·색인 되므로 회수 대상. 그 외 platform은 기업게시판 제외.
         if plat!='cafe24' and '기업' in s: return False
         if any(n in s for n in never): return False
         return any(k in s for k in reasons)
-    matched=0; by_reason={}
+    matched=0; by_reason={}; revived_doms=[]
     with _cand_lock:
         cands=load_cands()
         for c in cands:
             if c.get('status')!='rejected': continue
             rr=c.get('reject_reason') or c.get('note') or ''
-            if _hit(rr,c.get('platform')):
+            # illegal 플래그로 탈락한 것도 허용 시 회수(사유 텍스트가 없어도)
+            _by_flag=(_allow_ill and c.get('illegal'))
+            if _by_flag or _hit(rr,c.get('platform')):
                 matched+=1
-                key=next((k for k in reasons if k in str(rr)),'기타')
+                key=('도박·불법(회수)' if _by_flag and not _hit(rr,c.get('platform')) else next((k for k in reasons if k in str(rr)),'기타'))
                 by_reason[key]=by_reason.get(key,0)+1
                 if not dry:
                     c['status']='ready'; c['screened']=False
                     c.pop('reject_reason',None)
                     c['revived_at']=datetime.now().strftime('%Y-%m-%d %H:%M')
+                    _dm=c.get('domain') or _domain_of(c.get('url',''))
+                    if _dm: revived_doms.append(_dm)
         if not dry and matched: save_cands(cands)
+    # 영구 블랙리스트에서도 제거(재검수·claim 가능하게) — 회수한 도메인만.
+    if not dry and revived_doms:
+        for _dm in set(revived_doms):
+            try: remove_rejected_domain(_dm)
+            except Exception: pass
     add_log(f'[탈락 회수] {"(미리보기)" if dry else ""} 재시도 가치 높은 {matched}곳 회수 → 재검수 대기','정리')
     return jsonify({'ok':True,'dry_run':dry,'revived':matched,'by_reason':by_reason})
 
