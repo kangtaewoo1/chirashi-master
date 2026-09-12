@@ -2629,6 +2629,12 @@ def get_driver(remote=False):
         opts.add_argument('--lang=ko-KR')
         opts.add_experimental_option('prefs',{'intl.accept_languages':'ko-KR,ko'})
         opts.page_load_strategy='eager'
+        # ★크롬 크래시 근본해결(2026-09-13 대표님 '다 해결' 실측): 그누보드 비회원 write.php가
+        #   alert('글을 쓸 권한이 없습니다')를 띄우면, 처리 안 된 alert이 열린 채 다음 selenium 명령(findElement)이
+        #   실행돼 UnexpectedAlert→세션 붕괴→크롬 급사(GetHandleVerifier·빈 Message)했다.
+        #   unhandledPromptBehavior='accept'로 selenium이 예기치 않은 alert을 자동 수락하고 명령을 계속하게 해
+        #   alert이 세션을 죽이는 일을 원천 차단한다.
+        opts.set_capability('unhandledPromptBehavior','accept')
         cb=os.environ.get('CHROME_BIN')  # 리눅스 VPS: chromium 경로 지정 가능
         if cb: opts.binary_location=cb
         # ★스레드별 독립 프로파일(WinError5·프로파일잠금 방지): 동시 크롬이 같은 기본 프로파일을 공유하면 충돌.
@@ -3241,14 +3247,38 @@ def gnuboard_post(site, title, content_html, skip_login=False):
     # 글쓰기 페이지
     d.get(f'{bbs}/write.php?bo_table={bo}'); time.sleep(2)
 
+    # ★크롬 크래시 근본원인(2026-09-13 대표님 '다 해결' 실측): 비회원이 write.php 열면 그누보드가
+    #   alert('글을 쓸 권한이 없습니다. 로그인 후 이용')을 띄운다. 이 alert이 열린 채로 아래 wr_subject를
+    #   findElement 하면 UnexpectedAlertPresentException→세션 붕괴→크롬 급사(GetHandleVerifier·빈 Message).
+    #   → 진입 직후 alert을 먼저 닫고, 그 문구가 '권한/로그인'이면 크래시 대신 '로그인 필요'로 정상 반환(파이프라인이 자동가입).
+    _wr_alert=' '.join(dismiss_alerts(d) or [])
+    if any(k in _wr_alert for k in ('권한이 없','권한 없','로그인','회원만','회원가입')):
+        return False,'로그인이 필요한 게시판입니다 — 비회원 글쓰기 불가(권한 alert)'
+
+    # ★리다이렉트 정착 대기(2026-09-13): 권한없음 alert 수락 후 login.php로 async 리다이렉트되는데,
+    #   바로 current_url을 보면 아직 write.php라 아래 로그인체크를 지나쳐 wr_subject 대기 중 크래시했다.
+    #   최대 3초간 login.php로 바뀌는지 폴링하고, 매번 남은 alert도 닫는다.
+    for _ in range(6):
+        dismiss_alerts(d)
+        try: _cu=(d.current_url or '').lower()
+        except Exception: _cu=''
+        if 'login' in _cu: break
+        time.sleep(0.5)
+
     # 글쓰기가 로그인으로 튕기는 게시판: wr_subject를 찾다가 드라이버가 꼬이기 전에
     # 여기서 깔끔히 중단하고 '로그인 필요'로 반환한다(파이프라인이 자동가입으로 재시도).
     try:
         cur=(d.current_url or '').lower()
     except Exception:
         cur=''
-    if ('login.php' in cur or 'login_check' in cur) or (not mid and _page_login_state(d)):
+    if ('login.php' in cur or 'login_check' in cur or 'login' in cur) or (not mid and _page_login_state(d)):
         return False,'로그인이 필요한 게시판입니다 — 비회원 글쓰기 불가'
+    # wr_subject 자체가 없으면(비회원 폼 미제공) 크래시 유발 wait 대신 조기 반환.
+    try:
+        if not d.find_elements(By.CSS_SELECTOR,"input[name='wr_subject'],input#wr_subject"):
+            return False,'글쓰기 폼(wr_subject) 없음 — 로그인 필요/비표준 스킨'
+    except Exception:
+        return False,'글쓰기 폼 확인 중 세션 오류 — 로그인 필요 추정'
 
     # 보안 차단은 즉시 중단한다. CAPTCHA는 내용을 채운 뒤 사람이 입력한다.
     if _page_is_blocked(d):
