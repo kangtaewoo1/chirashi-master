@@ -2368,6 +2368,11 @@ def _page_is_blocked(d):
 def classify_fail(msg):
     """발행 실패 메시지를 사람이 읽을 수 있는 원인으로 분류. (코드, 한글, 일시적여부)"""
     ms=str(msg or ''); low=ms.lower()
+    # ★cafe24 금지어/스팸 차단은 '영구 탈락'(대표님 지시 2026-09-13 재확인). 문구에 '일시적'이 들어가 아래 도배방지
+    #   temp 규칙에 오분류되던 것을 최상단에서 차단. '게시글 등록이 일시적으로 중단' 등은 게시판이 우리 콘텐츠를
+    #   거부하는 것이라 재시도·숙성 무의미 → non-temp(blocked). classify_fail은 전 경로 공통 choke point이라 여기서만 막으면 됨.
+    if any(k in ms for k in ['일시적으로 중단','게시글 등록이 일시적','일시적으로 차단','등록이 일시적으로','스팸/금지어 차단','콘텐츠 거부','금지어','불량어','등록이 제한','작성이 제한','게시글 등록이 중단']):
+        return 'blocked','게시판 금지어/스팸 차단(영구 제외)',False
     if '도배방지' in ms or '너무 빠' in ms:
         return 'flood','도배방지 간격대기',True   # 일시적 → 학습된 간격 뒤 자동 재시도
     if '캡차' in ms or 'captcha' in low or '보안 인증' in ms:
@@ -4108,6 +4113,9 @@ def cafe24_post(site, title, content_html, skip_login=False):
             add_log(f'[Cafe24등록] 목록재조회 실패 {str(_e)[:50]}')
     # 실패 원인 로그(제출 후 어디에 있는지·알림)
     add_log(f'[Cafe24등록] 확인불가 — url={curl[:40]} 알림={_al[:40]}')
+    # ★금지어/스팸 차단은 목록재조회 try가 예외로 튕겨 여기로 와도 반드시 '영구 제외' 문구로 반환(대표님 2026-09-13).
+    if any(k in blob for k in ['일시적으로 중단','일시적으로 차단','금지어','불량어','등록이 제한','작성이 제한']):
+        return False,'스팸/금지어 차단 — 이 게시판이 우리 콘텐츠 거부(영구 제외)'
     if any(k in blob for k in ['자동등록방지','보안문자','캡차','captcha','일치하지']):
         return False,'캡차 불일치 — 재시도 필요'
     if any(k in blob for k in ['로그인','권한이 없','권한 없','금지','차단','스팸']):
