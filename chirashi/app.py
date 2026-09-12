@@ -1026,11 +1026,118 @@ def build_title(r,s,b,cfg,raw=None):
        도배 방지는 전화번호 표기 변형(기호·O/I 랜덤)만으로 처리한다."""
     raw=raw or pick_phone(cfg)
     ph=format_phone_random(raw)   # 번호 표기만 매번 살짝 변형(순서·키워드는 고정)
+    # ★지역명 표기 정규화(대표님 지시 2026-09-12): 메인키워드(r)의 앞부분 지역명을 규칙대로.
+    #   서울시→서울, 부평동→부평(단 개포동/계산동/통진읍 등은 유지). 기존 데이터를 못 고쳤어도 발행 결과는 교정됨.
+    try: r=normalize_region_in_text(r,cfg)
+    except Exception: pass
     return f'{r} {ph} {s} {b}'.strip()[:140], raw
 
 # ==================== 키워드 풀 (엑셀/CSV 랜덤 치환) ====================
 REGION_ORDER=('인천','경기','서울','충남','충북','세종','전북','전남','경상','경북','강원','제주')
 _region_order_cache=None
+
+# ==================== 지역명 표기 정규화(대표님 지시 2026-09-12) ====================
+# 규칙(네이버 자동완성 실측 + 대표님 지정):
+#  - 시/특별시/광역시/도: 서울특별시→서울, 부산광역시→부산, 경기도→경기, 수원시→수원
+#  - 구: 구로구→구로, 강남구→강남
+#  - 동: 기본 제거(부평동→부평, 신림동→신림). 단 '떼면 다른 뜻이 되거나 어색한' 동은 유지(아래 KEEP_DONG).
+#  - 읍/면: 기본 제거. 단 인구 많은 읍(통진읍 등)은 유지(아래 KEEP_EUPMYEON).
+# ★KEEP_DONG: 대표님 지정(계산동·작전동은 동이 붙어야 안 어색) + 네이버 실측('떼면 딴 뜻':개포동·상수동·역삼동 등).
+#   설정(cfg['region_keep_dong'], 콤마구분)로 대표님이 계속 추가 가능.
+KEEP_DONG=set('''계산동 작전동 개포동 상수동 역삼동 논현동 신논현동 삼성동 대치동 압구정동 청담동
+연남동 성수동 서교동 합정동 이태원동 한남동 신사동 방배동'''.split())
+# ★KEEP_EUPMYEON: 인구 많아 지역명으로 통하는 읍(나무위키 읍 인구 실측 3만+ 및 대표님 지정 통진읍).
+#   설정(cfg['region_keep_eupmyeon'])로 추가 가능. 면은 원칙적으로 전부 제거(수요 거의 없음).
+KEEP_EUPMYEON=set('''통진읍 물금읍 봉담읍 화도읍 배방읍 진접읍 다사읍 향남읍 정관읍 공도읍 오창읍
+범서읍 남양읍 흥해읍 와부읍 곤지암읍 오포읍 백석읍 옥정읍 고덕읍 삼계읍'''.split())
+
+_region_norm_cache={}
+def normalize_region(name, cfg=None):
+    """지역명을 대표님 표기 규칙으로 정규화한다. (시/구 접미사 제거, 동/읍면은 예외만 유지)
+       - 조합 키워드('부평셔츠룸')는 건드리지 않는다: 순수 행정구역 토큰일 때만 정규화.
+       - 앞뒤 공백 제거 후 단일 토큰(공백 없는 한 낱말)에만 적용."""
+    s=str(name or '').strip()
+    if not s: return s
+    ck=s
+    if ck in _region_norm_cache: return _region_norm_cache[ck]
+    # 설정 예외 병합(대표님이 UI로 추가한 것)
+    keep_dong=set(KEEP_DONG)
+    keep_em=set(KEEP_EUPMYEON)
+    if cfg:
+        for w in re.split(r'[,\s]+',str(cfg.get('region_keep_dong','') or '')):
+            if w.strip(): keep_dong.add(w.strip())
+        for w in re.split(r'[,\s]+',str(cfg.get('region_keep_eupmyeon','') or '')):
+            if w.strip(): keep_em.add(w.strip())
+    out=s
+    # 공백 포함(조합 키워드 등)은 첫 토큰만 정규화하고 나머지는 유지
+    parts=out.split(' ',1); head=parts[0]; tail=(' '+parts[1]) if len(parts)>1 else ''
+    head=re.sub(r'(\d+)가$','',head)           # 종로3가→종로
+    head=re.sub(r'(\d+)(동|읍|면)$',r'\2',head) # 역삼1동→역삼동, 청운효자1동→청운효자동(예외판정은 원형으로)
+    h=head
+    # 1) 시도 풀네임 접미사
+    h=re.sub(r'(특별자치도|특별자치시|특별시|광역시)$','',h)
+    if h.endswith('도') and len(h)>=3 and h not in ('개포도',):  # 경기도→경기, 강원도→강원(단 '~도'가 지역명 일부인 경우 거의 없음)
+        # '도'로 끝나는 행정구역(경기도/강원도/충청도 등)만. 2글자 지명+'도'는 애매하니 3글자 이상만.
+        h=h[:-1]
+    # 2) 시/군/구 (계양구→계양, 김포시→김포, 달성군→달성)
+    if len(h)>=3 and h[-1] in '시군구':
+        h=h[:-1]
+    # 3) 동 (기본 제거, 예외 유지)
+    elif h.endswith('동') and len(h)>=3:
+        if head not in keep_dong: h=h[:-1]
+    # 4) 읍/면 (기본 제거, 읍 예외만 유지)
+    elif h.endswith('읍') and len(h)>=3:
+        if head not in keep_em: h=h[:-1]
+    elif h.endswith('면') and len(h)>=3:
+        if head not in keep_em: h=h[:-1]
+    out=h+tail
+    _region_norm_cache[ck]=out
+    return out
+
+_region_prefix_cache=None
+def _all_region_names():
+    """regions_full.json의 모든 행정구역 원형명을 길이 내림차순으로(긴 것 먼저 매칭)."""
+    global _region_prefix_cache
+    if _region_prefix_cache is not None: return _region_prefix_cache
+    names=set()
+    data=load_json(REGIONS_FILE,{})
+    for province,districts in (data.items() if isinstance(data,dict) else []):
+        names.add(province)
+        for district,dongs in ((districts or {}).items() if isinstance(districts,dict) else []):
+            names.add(district)
+            for dong in (dongs or []):
+                d=str(dong).strip()
+                if d: names.add(d)
+    _region_prefix_cache=sorted([n for n in names if n], key=len, reverse=True)
+    return _region_prefix_cache
+
+def normalize_region_in_text(text, cfg=None):
+    """조합 키워드('부평동셔츠룸', '부평동 셔츠룸')에서 '앞부분 지역명'만 정규화한다.
+       regions_full의 행정구역 원형으로 시작하면 그 접두어를 normalize_region으로 치환.
+       - 붙여쓰기/띄어쓰기 모두 대응. 지역명이 없으면 원문 그대로(오작동 방지)."""
+    s=str(text or '').strip()
+    if not s: return s
+    # 1) 띄어쓰기면 첫 토큰만 지역으로 보고 정규화
+    if ' ' in s:
+        head,rest=s.split(' ',1)
+        nh=normalize_region(head,cfg)
+        return (nh+' '+rest) if nh!=head else s
+    # 2) 붙여쓰기: regions_full 원형 접두어(긴 것 우선)로 지역 경계를 찾는다
+    for name in _all_region_names():
+        if len(name)>=2 and s.startswith(name) and len(s)>len(name):
+            nn=normalize_region(name,cfg)
+            return (nn+s[len(name):]) if nn!=name else s   # 예외면 원형 유지(개포동셔츠룸)
+    # 3) 접두어 매칭 실패 폴백: 앞에서부터 '지역명(시/구/동/읍/면 접미사) + 뒷부분' 경계를 정규식으로.
+    #    서울시노래방·역삼1동룸처럼 regions_full 원형에 없는 표기도 잡는다. 첫 접미사 위치까지를 지역으로 본다.
+    m=re.match(r'^(.{2,}?(?:특별자치도|특별자치시|특별시|광역시|시|군|구|\d*동|\d*읍|\d*면|\d+가))(.*)$', s)
+    if m:
+        reg,rest=m.group(1),m.group(2)
+        # rest가 비었으면(순수 지역 단독) 그냥 normalize_region
+        nr=normalize_region(reg,cfg)
+        if nr!=reg:
+            return nr+rest
+        return s
+    return s
 
 def _province_bucket(name):
     """시도명을 대표님 지정 12개 지역 그룹으로 정규화한다."""
@@ -8047,7 +8154,7 @@ def chk():
     #  /api/test/* = 발행 테스트 트리거(등록 사이트에 실제 글1건 발행해 검증).
     _p=request.path
     if _p=='/api/version': return  # 배포 SHA 확인 — 공개(민감정보 없음)
-    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/sites/unlock-cafe24','/api/sites/purge-fake-cafe24','/api/candidates/rescreen-cafe24','/api/imap/test','/api/openai/usage','/api/config/clear-key','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/report-site','/api/unlocker/test','/api/sbr/test') or _p.startswith('/api/test/'):
+    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/sites/unlock-cafe24','/api/sites/purge-fake-cafe24','/api/candidates/rescreen-cafe24','/api/regions/normalize-existing','/api/imap/test','/api/openai/usage','/api/config/clear-key','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/report-site','/api/unlocker/test','/api/sbr/test') or _p.startswith('/api/test/'):
         tok=(request.args.get('token') or '').strip()
         cfgtok=(load_config().get('log_token') or '').strip()
         if cfgtok and tok==cfgtok:
@@ -8780,6 +8887,55 @@ def api_cand_rescreen_cafe24():
         certd=[c for c in cands if c.get('platform')=='cafe24' and (c.get('signup_email_verify') or c.get('signup_phone_cert'))]
     add_log(f'[cafe24 재검수] {n}건 재검수 · 인증필수로 판정된 cafe24 {len(certd)}곳(claim 제외됨)','검수')
     return jsonify({'ok':True,'screened':n,'cert_required':len(certd)})
+
+@app.route('/api/regions/normalize-existing',methods=['POST'])
+def api_regions_normalize_existing():
+    """★기존 데이터 지역명 일괄 정규화(대표님 지시 2026-09-12, 토큰 허용).
+       모든 작업실 keyword_csv + config.discover_direct_queries의 각 줄에서 '앞부분 지역명'만
+       normalize_region_in_text로 정규화(서울시→서울, 부평동→부평, 개포동/통진읍은 유지).
+       body: {dry_run?} — dry_run=True면 바뀔 줄 수만 세고 저장 안 함."""
+    d=request.get_json(silent=True) or {}
+    dry=bool(d.get('dry_run'))
+    cfg=load_config()
+    changed_rooms=0; changed_lines=0; samples=[]
+    with _json_lock(WORKROOMS_FILE):
+        rooms=load_json(WORKROOMS_FILE,[]) or []
+        for room in rooms:
+            csv=str(room.get('keyword_csv') or '')
+            if not csv.strip(): continue
+            out=[]; room_changed=False
+            for line in csv.splitlines():
+                ln=line.rstrip('\n')
+                if not ln.strip() or ln.lstrip().startswith('#'): out.append(ln); continue
+                # 한 줄은 콤마로 여러 조합일 수 있음(applyWorkroomRegional이 ','로 묶음)
+                parts=ln.split(',')
+                newparts=[normalize_region_in_text(p.strip(),cfg) for p in parts]
+                nl=','.join(newparts)
+                if nl!=ln:
+                    room_changed=True; changed_lines+=1
+                    if len(samples)<12: samples.append(ln.split(',')[0][:20]+' → '+nl.split(',')[0][:20])
+                out.append(nl)
+            if room_changed:
+                changed_rooms+=1
+                if not dry: room['keyword_csv']='\n'.join(out)
+        if not dry and changed_rooms: save_json(WORKROOMS_FILE,rooms)
+    # 발굴 직접쿼리
+    dq=str(cfg.get('discover_direct_queries','') or ''); dq_changed=0
+    if dq.strip():
+        out=[]
+        for line in dq.splitlines():
+            ln=line.rstrip('\n')
+            if not ln.strip() or ln.lstrip().startswith('#'): out.append(ln); continue
+            nl=normalize_region_in_text(ln.strip(),cfg)
+            if nl!=ln:
+                dq_changed+=1
+                if len(samples)<12: samples.append(ln[:20]+' → '+nl[:20])
+            out.append(nl)
+        if not dry and dq_changed:
+            cfg['discover_direct_queries']='\n'.join(out); save_config(cfg)
+    add_log(f'[지역명 정규화] {"(미리보기)" if dry else ""} 작업실 {changed_rooms}곳·{changed_lines}줄 + 발굴쿼리 {dq_changed}줄 변경','정리')
+    return jsonify({'ok':True,'dry_run':dry,'rooms_changed':changed_rooms,'lines_changed':changed_lines,
+                    'discover_queries_changed':dq_changed,'samples':samples})
 
 @app.route('/api/candidates/screen',methods=['POST'])
 def api_cand_screen():
@@ -11047,9 +11203,39 @@ async function loadRegionTool(){if(!_regionData){const r=await api('/regions','G
 async function fillGuSel(provId,guId){const data=await loadRegionTool();const gs=$(guId);if(!gs)return;const prov=$(provId).value;gs.innerHTML='<option value="">시·군·구 전체</option>';if(!prov||!data||!data[prov])return;Object.keys(data[prov]).forEach(dist=>{const o=document.createElement('option');o.value=dist;o.textContent=dist;gs.appendChild(o)})}
 function shortProvince(x){return x.replace(/특별자치시$|특별자치도$|특별시$|광역시$|자치도$|도$/,'')}
 function shortDistrict(x){const last=x.trim().split(/\s+/).pop();return last.replace(/시$|군$|구$/,'')}
-// 읍·면·동 축약: 사람들이 실제로 검색하는 형태로(청라동→청라, 역삼1동→역삼).
-// 단 남는 글자가 1자면(명동→명) 어색하므로 원형 유지. 지하철'역'은 여기서 다루지 않음.
-function shortDong(x){const s=(x||'').trim().replace(/\d+가$/,'').replace(/\d*(동|읍|면)$/,'');return s.length>=2?s:(x||'').trim()}
+// ★동/읍/면 축약 규칙(대표님 지시 2026-09-12, 서버 normalize_region과 동일 규칙):
+//  - 동: 기본 제거(부평동→부평, 신림동→신림). 단 '떼면 딴 뜻/어색'한 동은 유지(_KEEP_DONG).
+//  - 읍/면: 기본 제거. 단 인구 많은 읍(통진읍 등)은 유지(_KEEP_EM).
+//  - '역삼1동'처럼 숫자 붙은 행정동은 숫자 떼고 판단(역삼1동→역삼동→(예외라)역삼동... 은 어색 → 역삼으로).
+//    실제로는 숫자·'가'를 먼저 벗기고 남은 원형(역삼동)이 예외면 그 원형을 쓴다.
+//  - 남는 글자 1자(명동→명)면 원형 유지. 지하철'역'은 여기서 다루지 않음.
+const _KEEP_DONG=new Set('계산동 작전동 개포동 상수동 역삼동 논현동 신논현동 삼성동 대치동 압구정동 청담동 연남동 성수동 서교동 합정동 이태원동 한남동 신사동 방배동'.split(' '));
+const _KEEP_EM=new Set('통진읍 물금읍 봉담읍 화도읍 배방읍 진접읍 다사읍 향남읍 정관읍 공도읍 오창읍 범서읍 남양읍 흥해읍 와부읍 곤지암읍 오포읍 백석읍 옥정읍 고덕읍 삼계읍'.split(' '));
+function shortDong(x){
+  let raw=(x||'').trim();
+  if(!raw) return raw;
+  // 숫자 행정동/가 정리: 역삼1동→역삼동, 종로3가→종로. (판단은 정리된 원형으로)
+  let base=raw.replace(/(\d+)가$/,'').replace(/(\d+)(동|읍|면)$/,'$2');
+  // 동
+  if(base.endsWith('동')){
+    if(_KEEP_DONG.has(base)) return base;            // 예외 → 동 유지(개포동/계산동…)
+    let s=base.slice(0,-1);
+    return s.length>=2? s : raw;                     // 부평동→부평, 명동→명동(1자면 원형)
+  }
+  // 읍
+  if(base.endsWith('읍')){
+    if(_KEEP_EM.has(base)) return base;              // 통진읍 등 유지
+    let s=base.slice(0,-1);
+    return s.length>=2? s : raw;                     // 대부분 제거(양촌읍→양촌)
+  }
+  // 면
+  if(base.endsWith('면')){
+    if(_KEEP_EM.has(base)) return base;
+    let s=base.slice(0,-1);
+    return s.length>=2? s : raw;
+  }
+  return base;
+}
 // 대한민국 지하철역(업소 밀집 주요역 중심, 시도 키는 regions_full.json과 일치). '역' 포함 표기.
 const _stationsByProvince={
 "서울특별시":["서울역","시청역","종각역","종로3가역","종로5가역","동대문역","청량리역","제기동역","신설동역","동묘앞역","회기역","을지로입구역","을지로3가역","을지로4가역","동대문역사문화공원역","신당역","왕십리역","한양대역","뚝섬역","성수역","건대입구역","구의역","강변역","잠실나루역","잠실역","잠실새내역","종합운동장역","삼성역","선릉역","역삼역","강남역","교대역","서초역","방배역","사당역","낙성대역","서울대입구역","봉천역","신림역","신대방역","구로디지털단지역","대림역","신도림역","문래역","영등포구청역","당산역","합정역","홍대입구역","신촌역","이대역","아현역","충정로역","구파발역","연신내역","불광역","홍제역","독립문역","경복궁역","안국역","충무로역","동대입구역","약수역","금호역","옥수역","압구정역","신사역","고속터미널역","남부터미널역","양재역","매봉역","도곡역","대치역","학여울역","일원역","수서역","가락시장역","오금역","노원역","창동역","쌍문역","수유역","미아역","미아사거리역","길음역","성신여대입구역","한성대입구역","혜화역","명동역","회현역","숙대입구역","삼각지역","신용산역","이촌역","동작역","이수역","김포공항역","발산역","화곡역","까치산역","목동역","오목교역","여의도역","여의나루역","마포역","공덕역","서대문역","광화문역","군자역","아차산역","광나루역","천호역","강동역","고덕역","상일동역","둔촌동역","올림픽공원역","방이역","마천역","응암역","디지털미디어시티역","월드컵경기장역","망원역","상수역","대흥역","효창공원앞역","녹사평역","이태원역","한강진역","보문역","안암역","고려대역","월곡역","석계역","태릉입구역","화랑대역","봉화산역","도봉산역","수락산역","마들역","중계역","하계역","공릉역","먹골역","중화역","상봉역","면목역","사가정역","용마산역","중곡역","어린이대공원역","청담역","강남구청역","학동역","논현역","반포역","내방역","남성역","숭실대입구역","상도역","장승배기역","보라매역","신풍역","남구로역","가산디지털단지역","온수역","암사역","석촌역","송파역","문정역","장지역","신논현역","언주역","선정릉역","삼성중앙역","봉은사역","노량진역","흑석역","신반포역","중앙보훈병원역","서울숲역","한티역","개포동역"],
@@ -11078,7 +11264,7 @@ async function makeWorkroomRegional(){const data=await loadRegionTool();if(!data
 async function previewWorkroomRegional(){const rows=await makeWorkroomRegional();$('wrRegionCount').textContent=rows.length.toLocaleString()+'개 생성 예정'}
 async function applyWorkroomRegional(replace){const id=$('wrSelect').value;if(!id){toast('먼저 작업실을 추가/선택하세요','er');return}const rows=await makeWorkroomRegional();if(!rows.length)return;if(rows.length>50000){toast('5만 개를 초과합니다. 지역 범위를 줄여주세요','er');return}const current=replace?[]:$('wrKeywords').value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);const merged=[...new Set(current.concat(rows))];$('wrKeywords').value=merged.join('\n');$('wrRegionCount').textContent='저장 중...';const r=await api('/workrooms','POST',{id:id,name:$('wrName').value.trim(),keyword_csv:merged.join('\n'),site_id:$('wrSite').value,bases:($('wrBases')?$('wrBases').value:''),writer_name:($('wrWriter')?$('wrWriter').value:'')});if(r&&r.ok){$('wrRegionCount').textContent=rows.length.toLocaleString()+'개 생성 · 자동저장됨 총 '+merged.length.toLocaleString()+'개';toast('생성+작업실 자동저장 완료 · '+merged.length.toLocaleString()+'개 조합','ok');await loadWorkrooms();$('wrSelect').value=id;showWorkroom()}else{$('wrRegionCount').textContent=rows.length.toLocaleString()+'개 생성(저장 실패)';toast((r&&r.error)||'자동저장 실패 — 작업실 저장 버튼을 눌러주세요','er')}}
 function copyWorkroomToBulk(){const rows=$('wrKeywords').value.trim();if(!rows){toast('작업실 키워드가 없습니다','er');return}const room=_workrooms.find(x=>x.id===$('wrSelect').value);$('kwlist').value=rows;$('kwlist').dataset.workroomId=room?room.id:'';$('kwlist').dataset.workroomName=room?room.name:'직접 입력';$('kwSiteFilter').value=$('wrSite').value;$('kwCount').textContent=(room?'['+room.name+'] ':'')+rows.split(/\r?\n/).filter(Boolean).length+'줄';toast((room?'['+room.name+'] ':'')+'발행 목록에 적용됨','ok');$('kwlist').scrollIntoView({behavior:'smooth',block:'center'})}
-async function makeRegionalKeywords(){const data=await loadRegionTool();if(!data)return[];const bases=$('rgKeywords').value.split(/\r?\n/).map(x=>x.trim()).filter(x=>x&&!x.startsWith('#'));if(!bases.length){toast('조합할 키워드를 한 줄에 하나씩 입력하세요','er');return[]}const only=$('rgProvince').value;const onlyGu=($('rgGuSel')&&$('rgGuSel').value)||'';const join=$('rgJoin').value;const regions=[];Object.entries(data).forEach(([province,districts])=>{if(only&&province!==only)return;if($('rgCity').checked&&!onlyGu)regions.push(shortProvince(province));Object.entries(districts||{}).forEach(([district,dongs])=>{if(onlyGu&&district!==onlyGu)return;if($('rgGu').checked)regions.push(shortDistrict(district));if($('rgDong').checked)(dongs||[]).forEach(d=>regions.push(d))})});const out=[];const seen=new Set();regions.forEach(region=>bases.forEach(base=>{const q=region+join+base;if(!seen.has(q)){seen.add(q);out.push(q)}}));return out}
+async function makeRegionalKeywords(){const data=await loadRegionTool();if(!data)return[];const bases=$('rgKeywords').value.split(/\r?\n/).map(x=>x.trim()).filter(x=>x&&!x.startsWith('#'));if(!bases.length){toast('조합할 키워드를 한 줄에 하나씩 입력하세요','er');return[]}const only=$('rgProvince').value;const onlyGu=($('rgGuSel')&&$('rgGuSel').value)||'';const join=$('rgJoin').value;const regions=[];Object.entries(data).forEach(([province,districts])=>{if(only&&province!==only)return;if($('rgCity').checked&&!onlyGu)regions.push(shortProvince(province));Object.entries(districts||{}).forEach(([district,dongs])=>{if(onlyGu&&district!==onlyGu)return;if($('rgGu').checked)regions.push(shortDistrict(district));if($('rgDong').checked)(dongs||[]).forEach(d=>regions.push(shortDong(d)))})});const out=[];const seen=new Set();regions.forEach(region=>bases.forEach(base=>{const q=region+join+base;if(!seen.has(q)){seen.add(q);out.push(q)}}));return out}
 async function previewRegionalKeywords(){const rows=await makeRegionalKeywords();$('rgCount').textContent=rows.length.toLocaleString()+'개 생성 예정'}
 async function applyRegionalKeywords(replace){const rows=await makeRegionalKeywords();if(!rows.length)return;if(rows.length>50000){toast('5만 개를 초과합니다. 지역 또는 단계를 줄여주세요','er');return}const current=replace?[]:$('cDDirect').value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);const merged=[...new Set(current.concat(rows))];$('cDDirect').value=merged.join('\n');$('rgCount').textContent=rows.length.toLocaleString()+'개 생성 · 전체 '+merged.length.toLocaleString()+'개';toast('목록에 반영됨 · 설정 저장을 눌러주세요','ok')}
 async function screenNow(){toast('검수 중...(최대 1분)');const r=await api('/candidates/screen','POST',{limit:20});if(r&&r.ok){toast(r.screened+'건 검수 완료');renderCands()}}
