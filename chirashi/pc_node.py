@@ -278,17 +278,21 @@ def _process_one(cand, cfg, pool):
 
 
 def _safe_workers(requested):
-    """동시 크롬 수 결정. --workers 지정 시 그대로(1~8). 미지정이면 기본 4에서 시작하되,
-       가용 메모리가 넉넉하면 최대 6까지. ★순간 저메모리로 1까지 떨어지지 않게 하한 4(대표님 강력PC·상시)."""
+    """동시 크롬 수 결정. --workers 지정 시 그대로(1~8). 미지정이면 메모리 여유 기반 보수적 산정.
+       ★크롬 크래시(GetHandleVerifier·빈 Message) 원인 규명(2026-09-13 대표님 '다 해결'): 사이트 자체는
+       정상 로드되는데 동시 4~6개 크롬이 가입/발행하며 메모리 압박→프로세스 급사. 크롬 1개 발행중 ~0.7~1GB.
+       여유 메모리에 맞춰 2~4개로 낮춰 크래시를 줄인다(처리량보다 안정성 우선 — hang/크래시로 0건 나던 것 방지)."""
     if requested:
         return max(1, min(8, int(requested)))
     try:
         import psutil
         avail_mb = psutil.virtual_memory().available // (1024 * 1024)
-        # 여유 많으면 6, 보통이면 4. 하한 4(강력PC 전제라 순간 저메모리에 과도축소 방지).
-        return 6 if avail_mb > 4000 else 4
+        # 크롬 1개당 ~1GB 여유 필요 가정. 여유가 6GB+면 4, 4GB+면 3, 그 이하면 2. 하한 2.
+        if avail_mb > 6000: return 4
+        if avail_mb > 4000: return 3
+        return 2
     except Exception:
-        return 4
+        return 2
 
 
 def _force_local_chrome():

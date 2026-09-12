@@ -2617,6 +2617,13 @@ def get_driver(remote=False):
         opts.add_argument('--no-sandbox')
         opts.add_argument('--disable-dev-shm-usage'); opts.add_argument('--disable-gpu')
         opts.add_argument('--window-size=1920,1080'); opts.add_argument('--log-level=3')
+        # ★메모리 절감(2026-09-13 크롬 크래시 원인 규명): 동시 크롬이 메모리 압박으로 급사(GetHandleVerifier)하던 것 완화.
+        #   확장·백그라운드·크래시리포터·불필요 기능 끄고 렌더러 메모리 상한을 둔다(발행엔 영향 없음).
+        for _a in ('--disable-extensions','--disable-background-networking','--disable-background-timer-throttling',
+                   '--disable-renderer-backgrounding','--disable-backgrounding-occluded-windows','--disable-crash-reporter',
+                   '--disable-breakpad','--no-first-run','--no-default-browser-check','--disable-features=Translate,MediaRouter',
+                   '--js-flags=--max-old-space-size=512'):
+            opts.add_argument(_a)
         # 정상 환경 일치(위조 아님): 서버가 한국(Seoul)에 있으므로 로케일/언어를 실제와 맞춤.
         # navigator.webdriver·Canvas·WebGL 등은 건드리지 않음(지문 위조·스텔스 미사용).
         opts.add_argument('--lang=ko-KR')
