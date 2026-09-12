@@ -5937,9 +5937,21 @@ def screen_candidate(url, cfg=None):
         wr=get(wu)
         if not wr or wr.status_code>=400: continue
         wh=wr.text or ''; wl=wh.lower()
+        _finu=str(getattr(wr,'url','') or '').lower()
+        # ★Cloudflare Turnstile 챌린지 감지(2026-09-12 대표님 'cafe24 왜 안 되냐' 실측):
+        #   신형 cafe24 상품Q&A는 write.html 접근 시 veritas-hub.cafe24.com/challenge(Turnstile)로 리다이렉트된다.
+        #   정적 검수는 챌린지 페이지(subject/content 없음)만 받아 write_form=False로 대량 탈락시켰다.
+        #   실제 발행은 노드가 2captcha로 Turnstile을 푸니 발행 가능 → 여기서 탈락시키지 말고 '챌린지 있음(발행시 해결)'으로 유지.
+        if ('veritas-hub' in _finu or '/challenge' in _finu or 'cf-turnstile' in wl or 'turnstile' in _finu
+             or 'cf-chl' in wl or 'challenges.cloudflare' in wl):
+            res['cafe24_challenge']=True; res['captcha']='turnstile'
+            # 챌린지라 폼 확인 불가 — 하지만 cafe24는 챌린지 통과 후 폼이 나오므로 write_url은 이 경로로 기록해 발행이 시도되게.
+            if not res.get('write_url'): res['write_url']=wu
+            continue
         has_subject=('wr_subject' in wl or 'name="subject"' in wl or "name='subject'" in wl)
         has_content=('wr_content' in wl or 'name="content"' in wl or "name='content'" in wl)
-        if has_subject and has_content:
+        # ★Froala 등 JS 에디터: content textarea가 정적 HTML에 안 뜰 수 있음 → subject만 있어도 cafe24는 폼으로 인정.
+        if has_subject and (has_content or res.get('platform')=='cafe24'):
             res['write_form']=True; res['write_url']=wr.url
         if any(k in wl for k in ['captcha_key','kcaptcha','g-recaptcha','h-captcha','cf-turnstile']) or '자동등록방지' in wh:
             res['captcha']='감지'
@@ -6187,6 +6199,9 @@ def screen_pending(limit=30):
         elif r.get('illegal'): r['status']='rejected'; r['reject_reason']='도박·불법 사이트 (제휴 부적합)'
         elif r.get('ad_banned'): r['status']='rejected'; r['reject_reason']='광고 금지 명시'
         elif r.get('captcha'): r['status']='ready'; r['reject_reason']='캡차 있음 — 2captcha 자동해결 시도 예정'
+        elif r.get('cafe24_challenge'):
+            # ★Cloudflare Turnstile 챌린지로 폼 확인 불가(2026-09-12): 정적 검수는 못 봐도 노드가 2captcha로 뚫어 발행 가능.
+            r['status']='ready'; r['reject_reason']='Cloudflare 챌린지 — 발행 시 2captcha 자동해결(후보 유지)'
         elif not r.get('write_form'):
             # 글쓰기 폼이 없다: 그누보드/카페24면 로그인 후 쓰기 가능성 있어 ready 유지(자동가입 대상).
             # 그 외(디렉토리·전화번호검색·경쟁업체 랜딩 등 게시판 아님)는 자동 탈락시켜 목록을 깨끗이.
@@ -6199,7 +6214,10 @@ def screen_pending(limit=30):
         #   ready로 통과하려던 후보도 '홍보 증거'가 없으면 탈락. 홍보 증거 = ①게시판에 전화번호 홍보글
         #   존재(promo_phone_count≥1: 업자들이 이미 쓰는 개방·방치 게시판) 또는 ②홍보허용 흔적(promo_hint).
         #   + 죽은 게시판(마지막글 180일+) 제외. (수동 추가 source=manual은 대표님 지정이라 예외 통과.)
-        if cfg.get('strict_screen',True) and r.get('status')=='ready' and c.get('source')!='manual':
+        # ★cafe24는 빡센검수 예외(2026-09-12): 상품Q&A는 기업게시판이라 홍보전화가 없지만 실제 발행·색인은 됨.
+        #   Turnstile 챌린지 사이트도 발행 가능하므로 홍보흔적 없다고 버리지 않는다.
+        _cafe24_exempt=(r.get('platform')=='cafe24' or r.get('cafe24_challenge'))
+        if cfg.get('strict_screen',True) and r.get('status')=='ready' and c.get('source')!='manual' and not _cafe24_exempt:
             _pc=int(r.get('promo_phone_count',0) or 0)
             _has_promo=(_pc>=1) or bool(r.get('promo_hint'))
             _lp=r.get('last_post_days')
