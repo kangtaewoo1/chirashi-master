@@ -812,6 +812,13 @@ def load_config():
         c['interval1_unlimited_migrated']=True
         try: save_json(CONFIG_FILE,c)
         except Exception: pass
+    # ★1회 마이그레이션(2026-09-13): HTTP 초고속발행 켜기. 기존 config가 False로 저장돼 병합에서 안 켜지던 것.
+    #   CSRF token 전송 추가로 이제 대부분 그누보드에서 됨(실패 시 셀레늄 폴백이라 안전). 대표님이 이후 끄면 존중.
+    if not c.get('http_publish_migrated'):
+        c['http_publish_enabled']=True
+        c['http_publish_migrated']=True
+        try: save_json(CONFIG_FILE,c)
+        except Exception: pass
     # 1회 마이그레이션: sbr_country='kr' 제거 — endpoint customer name 깨서 'Wrong customer name'
     #   오류로 SBR(Cafe24 로그인 발행) 전부 실패시킴(2026-09-09). Browser API 자동IP로 충분.
     if not c.get('sbr_country_cleared'):
