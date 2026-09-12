@@ -9957,6 +9957,7 @@ def api_cfg():
                   'google_api_key','google_cx','brave_api_key','search_provider','discover_enabled','discover_daily_target',
                   'discover_query_limit','discover_keywords','discover_direct_queries','excluded_domains','finder_ratio',
                   'workroom_workers','vps_reserve_mb','vps_mb_per_worker','site_goal',
+                  'daily_publish_goal','region_keep_dong','region_keep_eupmyeon',
                   'video_url','landing_url','post_email','guest_post_password',
                   'imap_email','imap_password','imap_host',
                   'twocaptcha_api_key','twocaptcha_enabled',
@@ -10562,6 +10563,87 @@ def api_sched_toggle():
 def api_stats():
     return jsonify(compute_stats())
 
+def compute_ops_dashboard(cfg=None):
+    """★운영 대시보드(대표님 지시 2026-09-12): 통계+API비용 통합 + 1분당 발행량 실측 + 목표 대비.
+       - throughput: 최근 60분 분당 발행(done) 건수 시계열 + 오늘 시간당. history 'time'(초단위)로 실측.
+       - daily: 최근 14일 [발행수·지출액·건당비용] 날짜 조인(compute_stats.by_day + API원장 일별).
+       - goal: cfg['daily_publish_goal'] 대비 오늘 발행수·진척률. 속도(분당 평균/최대) 요약."""
+    cfg=cfg or load_config()
+    h=load_json(HISTORY_FILE,[])
+    now=datetime.now().astimezone()
+    today=now.strftime('%Y-%m-%d')
+    # 'time' 파서: 'YYYY-MM-DD HH:MM:SS'(발행이력) 기준. done만 발행으로 집계.
+    def _dt(x):
+        t=str(x.get('time') or '')
+        for fmt in ('%Y-%m-%d %H:%M:%S','%Y-%m-%d %H:%M','%Y-%m-%dT%H:%M:%S'):
+            try: return datetime.strptime(t[:19],fmt)
+            except Exception: continue
+        return None
+    done=[x for x in h if x.get('status')=='done']
+    # --- 최근 60분 분당 발행량(실측) ---
+    from collections import Counter
+    cutoff=now.replace(tzinfo=None)-timedelta(minutes=60)
+    per_min=Counter()
+    for x in done:
+        dt=_dt(x)
+        if dt and dt>=cutoff: per_min[dt.strftime('%H:%M')]+=1
+    minutes=[]
+    for i in range(59,-1,-1):
+        mm=(now.replace(tzinfo=None)-timedelta(minutes=i)).strftime('%H:%M')
+        minutes.append({'minute':mm,'count':per_min.get(mm,0)})
+    # --- 오늘 시간당 발행량 ---
+    hourly=[]
+    for hh in range(24):
+        pref=f'{today} {hh:02d}:'
+        c=sum(1 for x in done if str(x.get('time') or '').startswith(pref))
+        hourly.append({'hour':hh,'count':c})
+    # --- 속도 요약(분당) ---
+    all_min=Counter()
+    for x in done:
+        dt=_dt(x)
+        if dt: all_min[dt.strftime('%Y-%m-%d %H:%M')]+=1
+    vals=sorted(all_min.values(),reverse=True) if all_min else [0]
+    active_min=len(all_min)
+    avg_per_min=round(sum(vals)/active_min,2) if active_min else 0.0
+    max_per_min=vals[0] if vals else 0
+    recent60_total=sum(m['count'] for m in minutes)
+    # --- 오늘 발행수 + 목표 대비 ---
+    today_done=sum(1 for x in done if str(x.get('time') or '').startswith(today))
+    goal=int(cfg.get('daily_publish_goal') or 0)
+    goal_pct=round(today_done/goal*100,1) if goal>0 else 0.0
+    # --- 일별 통합(발행수 + 지출액 + 건당비용) 14일 ---
+    st=compute_stats()
+    by_day={d['day']:d for d in st.get('by_day',[])}
+    # API 원장 일별 비용(3종 합산): openai/2captcha/brave의 _time_series daily를 날짜로 합침
+    day_cost=Counter()
+    try:
+        for rows,ck in [(load_json(AI_USAGE_FILE,[]),'estimated_cost_usd'),
+                        (load_json(CAPTCHA_USAGE_FILE,[]),'estimated_cost_usd'),
+                        (load_json(BRAVE_USAGE_FILE,[]),'estimated_cost_usd')]:
+            for it in _time_series(rows,ck,days=14)['daily']:
+                day_cost[it['date']]+=float(it.get('cost') or 0)
+    except Exception: pass
+    rate=_usd_krw(cfg); krw=(rate.get('rate') if isinstance(rate,dict) else rate) or 1350
+    daily=[]
+    for i in range(13,-1,-1):
+        dd=(now-timedelta(days=i)).strftime('%Y-%m-%d')
+        pub=int(by_day.get(dd,{}).get('done',0)); fail=int(by_day.get(dd,{}).get('failed',0))
+        cost=round(day_cost.get(dd,0.0),4)
+        cpp_krw=round(cost*krw/pub) if pub>0 else 0   # 건당 비용(원)
+        daily.append({'date':dd,'published':pub,'failed':fail,'cost_usd':cost,'cost_per_post_krw':cpp_krw})
+    return {'ok':True,
+            'throughput':{'minutes':minutes,'hourly':hourly,'recent60_total':recent60_total},
+            'speed':{'avg_per_min':avg_per_min,'max_per_min':max_per_min,'active_minutes':active_min},
+            'goal':{'daily_goal':goal,'today_done':today_done,'pct':goal_pct},
+            'daily':daily,
+            'totals':{'total':st.get('total'),'ok':st.get('ok'),'fail':st.get('fail'),
+                      'rate':st.get('rate'),'alive_rate':st.get('alive_rate')},
+            'usdkrw':krw}
+
+@app.route('/api/ops-dashboard',methods=['GET'])
+def api_ops_dashboard():
+    return jsonify(compute_ops_dashboard())
+
 # ---- 텔레그램 테스트 발송 ----
 @app.route('/api/telegram/test',methods=['POST'])
 def api_tg_test():
@@ -10724,11 +10806,11 @@ LOGIN_HTML=r'''<div style="display:flex;align-items:center;justify-content:cente
 <button type="submit" class="btn btn-p" style="width:100%">로그인</button>
 </form></div></div>'''
 
-DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
+DASH_HTML=r'''<header><div class="logo" onclick="window.scrollTo({top:0,behavior:'smooth'})" style="cursor:pointer" title="맨 위로">찌라시 <s>마스터 v6</s></div>
 <div class="stats" id="live"><span>큐:<b id="q">0</b></span><span>성공:<b id="ok" style="color:var(--g)">0</b></span><span>실패:<b id="fl" style="color:var(--r)">0</b></span><span>스킵:<b id="sk" style="color:var(--y)">0</b></span><span>발행워커:<b id="ws" style="color:var(--d)">-</b></span><span style="margin-left:10px;padding-left:10px;border-left:1px solid var(--b)">🎯 발행가능 <b id="siteGoal" style="color:var(--p)">-</b></span></div>
 <a href="/logout" class="btn-xs" style="background:var(--b);color:var(--d);text-decoration:none">로그아웃</a></header>
 
-<div class="tabs"><button id="tab-gen" class="tab" onclick="T('gen')" style="display:none">글 생성</button><button class="tab on" onclick="T('wlog')">발행 현황</button><button class="tab" onclick="T('kw')">키워드</button><button class="tab" onclick="T('images')">이미지 저장</button><button class="tab" onclick="T('sites')">사이트 (<span id="siteTabCount">{{sites|length}}</span>)</button><button class="tab" onclick="T('disco')">발굴</button><button id="tab-mem" class="tab" onclick="T('mem')" style="display:none">회원·정산</button><button class="tab" onclick="T('stats')">통계</button><button class="tab" onclick="T('cost')">API 비용</button><button class="tab" onclick="T('set')">설정</button></div>
+<div class="tabs"><button id="tab-gen" class="tab" onclick="T('gen')" style="display:none">글 생성</button><button class="tab on" onclick="T('wlog')">발행 현황</button><button class="tab" onclick="T('kw')">키워드</button><button class="tab" onclick="T('images')">이미지 저장</button><button class="tab" onclick="T('sites')">사이트 (<span id="siteTabCount">{{sites|length}}</span>)</button><button class="tab" onclick="T('disco')">발굴</button><button id="tab-mem" class="tab" onclick="T('mem')" style="display:none">회원·정산</button><button class="tab" onclick="T('ops')">운영 대시보드</button><button class="tab" onclick="T('set')">설정</button></div>
 <div class="wrap"><div id="toasts"></div>
 <div id="pvOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:500;padding:20px" onclick="if(event.target===this)closePreview()">
 <div style="max-width:820px;margin:0 auto;background:#fff;color:#222;border-radius:10px;max-height:90vh;overflow:auto">
@@ -10941,22 +11023,47 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 <div class="row" style="margin-bottom:6px"><button class="btn btn-g" onclick="location='/api/members/export'">엑셀 내보내기</button><button class="btn btn-d" onclick="renderMembers()">새로고침</button><span style="flex:1"></span><span style="color:var(--d);font-size:10px" id="memCount">0명</span></div>
 <div style="max-height:460px;overflow-y:auto" id="memList"></div></div></div>
 
-<div id="p-stats" class="panel">
+<!-- ★운영 대시보드(대표님 지시 2026-09-12): 통계+API비용 병합 + 1분당 발행량 그래프(목표 대비 올리는 맛). -->
+<div id="p-ops" class="panel">
+
+<!-- 1) 오늘 목표 진척 + 1분당 발행량 -->
+<div class="card">
+<div class="row" style="align-items:center"><h3 style="margin:0">🎯 오늘 발행 목표</h3><span style="flex:1"></span>
+<span style="font-size:11px;color:var(--d)">목표</span><input type="number" id="opsGoal" min="0" step="10" style="width:90px" onchange="saveOpsGoal()" title="하루 목표 발행량 — 설정하면 진척 막대·남은 수가 표시됩니다"><button class="btn btn-d btn-xs" onclick="loadOps()">새로고침</button></div>
+<div id="opsGoalWrap" style="margin-top:10px"></div>
+</div>
+
+<div class="card">
+<div class="row" style="align-items:center"><h3 style="margin:0">⏱ 1분당 발행량 (최근 60분·실측)</h3><span style="flex:1"></span><span id="opsSpeed" style="font-size:11px;color:var(--d)"></span></div>
+<div id="opsMinChart" style="margin-top:10px"></div>
+<div style="font-size:11px;color:var(--d);margin:14px 0 6px">오늘 시간당 발행량</div>
+<div id="opsHourChart"></div>
+</div>
+
+<!-- 2) 일별 통합: 발행수 · 지출 · 건당비용 -->
+<div class="card">
+<h3>📅 일별 발행 · 지출 (최근 14일)</h3>
+<div style="font-size:11px;color:var(--d);margin:4px 0 8px">지출 대비 얼마나 발행했는지 — <b>건당 비용</b>은 그날 API지출(글생성·캡차·검색)을 발행수로 나눈 값입니다.</div>
+<div id="opsDailyTable" style="overflow-x:auto"></div>
+</div>
+
+<!-- 3) 발행 통계(성공률·생존·사이트별) -->
 <div class="card"><h3>발행 통계</h3>
-<div class="row" style="margin-bottom:8px"><button class="btn btn-d btn-xs" onclick="renderStats()">새로고침</button><button class="btn btn-v btn-xs" onclick="api('/verify/now','POST').then(()=>toast('생존 확인 시작 (1~2분 후 갱신)'))">지금 생존확인</button></div>
+<div class="row" style="margin-bottom:8px"><button class="btn btn-v btn-xs" onclick="api('/verify/now','POST').then(()=>toast('생존 확인 시작 (1~2분 후 갱신)'))">지금 생존확인</button></div>
 <div id="statTop" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px"></div>
 <div id="statReasons"></div>
 <div id="statSurvival"></div>
 <div style="font-size:11px;color:var(--d);margin:6px 0">최근 14일 (초록=성공, 빨강=실패)</div>
 <div id="statDays"></div>
 <div style="font-size:11px;color:var(--d);margin:14px 0 6px">사이트별 (상위 12)</div>
-<div id="statSites"></div></div></div>
+<div id="statSites"></div></div>
 
-<div id="p-cost" class="panel">
-<div class="card"><div class="row" style="align-items:center"><h3 style="margin:0">API 실시간 비용 · 사용량</h3><span style="flex:1"></span><span id="costAutoInfo" style="font-size:10px;color:var(--d);margin-right:8px">30초마다 자동 새로고침</span><button class="btn btn-d btn-xs" onclick="loadUsageDashboard()">새로고침</button></div>
+<!-- 4) API 비용 상세 -->
+<div class="card"><div class="row" style="align-items:center"><h3 style="margin:0">💳 API 비용 · 사용량</h3><span style="flex:1"></span><span id="costAutoInfo" style="font-size:10px;color:var(--d);margin-right:8px">30초마다 자동 새로고침</span></div>
 <div style="font-size:11px;color:var(--d);margin-top:6px">이번 달 합계 <b id="costTotalMonth" style="color:var(--p)">-</b> · 오늘 <b id="costTotalToday" style="color:var(--g)">-</b> <span style="color:var(--y)">· AI 글 생성: OpenRouter는 응답의 <b>실측</b> 청구액 · NVIDIA는 무료($0) · 종료된 모델 행은 토큰 추정 | 2captcha·Brave는 설정 단가×횟수 <b>추정</b>(횟수는 정확).</span></div>
-</div>
 <div id="costCards" style="display:grid;grid-template-columns:1fr;gap:12px;margin-top:10px"></div>
+</div>
+
 </div>
 
 <div id="p-set" class="panel">
@@ -11079,7 +11186,7 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
 const $=id=>document.getElementById(id);
 // ★탭 전환 방어(대표님 제보 '빈페이지 뜸' 2026-09-09): 탭버튼/패널이 없거나 렌더 1개가 던져도
 //   페이지 전체가 하얗게 비지 않도록 null가드 + try/catch. 패널은 무조건 먼저 보이게 한 뒤 렌더 호출.
-function T(n){document.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));document.querySelectorAll('.panel').forEach(p=>p.classList.remove('on'));const _tb=document.querySelector(`[onclick="T('${n}')"]`);if(_tb)_tb.classList.add('on');const _pn=$('p-'+n);if(_pn)_pn.classList.add('on');try{if(n==='wlog'){renderWorkerLog();renderHistory();renderCaptchaTasks()}if(n==='stats')renderStats();if(n==='cost'){loadUsageDashboard();startUsageAuto()}else{stopUsageAuto()}if(n==='set'){loadCfgUI();loadRegionTool()}if(n==='gen'){loadPool();loadImages();loadRegionTool()}if(n==='kw'){loadWorkrooms();loadRegionTool()}if(n==='mem'){renderMembers();if(!document.querySelector('.mSite'))fillSiteBox([])}if(n==='disco')renderCands()}catch(e){console.error('탭 렌더 오류',n,e)}}
+function T(n){document.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));document.querySelectorAll('.panel').forEach(p=>p.classList.remove('on'));const _tb=document.querySelector(`[onclick="T('${n}')"]`);if(_tb)_tb.classList.add('on');const _pn=$('p-'+n);if(_pn)_pn.classList.add('on');try{if(n==='wlog'){renderWorkerLog();renderHistory();renderCaptchaTasks()}if(n==='ops'){loadOps();renderStats();loadUsageDashboard();startUsageAuto()}else{stopUsageAuto()}if(n==='set'){loadCfgUI();loadRegionTool()}if(n==='gen'){loadPool();loadImages();loadRegionTool()}if(n==='kw'){loadWorkrooms();loadRegionTool()}if(n==='mem'){renderMembers();if(!document.querySelector('.mSite'))fillSiteBox([])}if(n==='disco')renderCands()}catch(e){console.error('탭 렌더 오류',n,e)}}
 function toast(m,c='ok'){const d=$('toasts');const e=document.createElement('div');e.className='toast toast-'+c;e.textContent=m;d.appendChild(e);setTimeout(()=>e.remove(),2500)}
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
 async function api(p,m,b){try{const o={method:m,headers:{'Content-Type':'application/json'}};if(b)o.body=JSON.stringify(b);const r=await fetch('/api'+p,o);
@@ -11595,10 +11702,10 @@ let _usageTimer=null;
 function startUsageAuto(){
   stopUsageAuto();
   _usageTimer=setInterval(()=>{
-    // 비용 탭이 실제 표시 중이고, 브라우저 탭이 활성일 때만 갱신(불필요한 서버 호출 방지)
+    // 운영 대시보드가 실제 표시 중이고, 브라우저 탭이 활성일 때만 갱신(불필요한 서버 호출 방지)
     if(document.hidden)return;
-    const p=$('p-cost'); if(!p||!p.classList.contains('on')){stopUsageAuto();return}
-    loadUsageDashboard(true);
+    const p=$('p-ops'); if(!p||!p.classList.contains('on')){stopUsageAuto();return}
+    loadUsageDashboard(true); loadOps();   // 비용 + 1분당 발행량 함께 갱신(올라가는 맛)
   },30000);
 }
 function stopUsageAuto(){ if(_usageTimer){clearInterval(_usageTimer);_usageTimer=null} }
@@ -11643,6 +11750,64 @@ async function healthAll(){const ids=getSiteIds();if(!ids.length){toast('사이�
 // (예약 스케줄 UI 제거됨 — 회원별 스케줄러가 대체. 죽은 JS 정리)
 // ---- 통계 ----
 function tile(label,val,color){return `<div class="card" style="flex:1;min-width:110px;text-align:center;margin:0"><div style="font-size:22px;font-weight:700;color:${color}">${val}</div><div style="font-size:10px;color:var(--d)">${label}</div></div>`}
+
+// ==================== 운영 대시보드(대표님 2026-09-12) ====================
+// 세로 막대 그래프: series=[{label,count}], 최댓값 기준 상대높이. accent=막대색.
+function _opsBars(series,opts){
+  opts=opts||{}; const H=opts.h||90, accent=opts.accent||'var(--p)', goal=opts.goal||0;
+  const max=Math.max(1,goal,...series.map(x=>x.count||0));
+  const bw=series.length>40?'':'min-width:0';
+  const bars=series.map(x=>{const c=x.count||0; const h=Math.round(c/max*H);
+    const tip=(x.title||x.label||'')+': '+c+'건';
+    return `<div title="${esc(tip)}" style="flex:1;${bw};display:flex;flex-direction:column;justify-content:flex-end;align-items:center;height:${H}px">`
+      +`<div style="font-size:8px;color:var(--d);line-height:1;margin-bottom:1px">${c||''}</div>`
+      +`<div style="width:78%;min-width:2px;height:${h}px;background:${c?accent:'#2a2a3a'};border-radius:2px 2px 0 0"></div></div>`}).join('');
+  // 목표선(있으면)
+  const goalLine=goal>0?`<div style="position:absolute;left:0;right:0;bottom:${Math.round(goal/max*H)+14}px;border-top:1px dashed var(--y);"><span style="position:absolute;right:0;top:-12px;font-size:8px;color:var(--y)">목표 ${goal}</span></div>`:'';
+  const labels=opts.showLabels?('<div style="display:flex;gap:1px;margin-top:2px">'+series.map(x=>`<div style="flex:1;text-align:center;font-size:7.5px;color:var(--d);overflow:hidden;white-space:nowrap">${esc(x.label||'')}</div>`).join('')+'</div>'):'';
+  return `<div style="position:relative"><div style="display:flex;gap:1px;align-items:flex-end">${bars}</div>${goalLine}</div>${labels}`;
+}
+
+async function loadOps(){
+  const d=await api('/ops-dashboard','GET'); if(!d||!d.ok)return;
+  window._opsRate=d.usdkrw||1350;
+  // 목표 입력칸 초기값(설정과 동기화) — 비어있을 때만 채움
+  const gi=$('opsGoal'); if(gi && !gi.value && d.goal.daily_goal) gi.value=d.goal.daily_goal;
+  // 목표 진척 막대
+  const g=d.goal, done=g.today_done||0, goal=g.daily_goal||0, pct=g.pct||0;
+  const remain=goal>0?Math.max(0,goal-done):0;
+  const barW=goal>0?Math.min(100,pct):0;
+  const barColor=pct>=100?'var(--g)':pct>=60?'var(--p)':'var(--y)';
+  $('opsGoalWrap').innerHTML = goal>0
+    ? `<div style="display:flex;align-items:baseline;gap:8px;margin-bottom:6px"><span style="font-size:30px;font-weight:800;color:${barColor}">${done}</span><span style="color:var(--d)">/ ${goal}건 · ${pct}%</span>`
+      +`<span style="flex:1"></span><span style="font-size:12px;color:var(--d)">${pct>=100?'🎉 목표 달성!':'남은 '+remain+'건'}</span></div>`
+      +`<div style="height:22px;background:#20202e;border-radius:6px;overflow:hidden"><div style="height:100%;width:${barW}%;background:${barColor};border-radius:6px;transition:width .5s"></div></div>`
+    : `<div style="color:var(--d);font-size:12px;padding:8px 0">오늘 발행 <b style="color:var(--g);font-size:20px">${done}</b>건 · 위 <b>목표</b>칸에 하루 목표량을 넣으면 진척 막대가 표시됩니다</div>`;
+  // 속도 요약
+  const sp=d.speed, tp=d.throughput;
+  $('opsSpeed').textContent = `평균 ${sp.avg_per_min}건/분 · 최고 ${sp.max_per_min}건/분 · 최근60분 ${tp.recent60_total}건`;
+  // 1분당(최근60분) — 10분 간격 라벨만
+  const mins=tp.minutes.map((m,i)=>({count:m.count,title:m.minute,label:(i%10===0?m.minute:'')}));
+  $('opsMinChart').innerHTML=_opsBars(mins,{h:90,accent:'var(--p)',showLabels:true});
+  // 시간당(오늘)
+  const hrs=tp.hourly.map(x=>({count:x.count,title:x.hour+'시',label:(x.hour%3===0?x.hour+'시':'')}));
+  $('opsHourChart').innerHTML=_opsBars(hrs,{h:70,accent:'var(--v)',showLabels:true});
+  // 일별 통합표
+  const rate=window._opsRate;
+  const rows=d.daily.slice().reverse().map(x=>{
+    const cpp=x.cost_per_post_krw||0;
+    return `<tr><td style="white-space:nowrap">${x.date.slice(5)}</td>`
+      +`<td style="text-align:right;color:var(--g);font-weight:600">${x.published}</td>`
+      +`<td style="text-align:right;color:${x.failed?'var(--r)':'var(--d)'}">${x.failed||'-'}</td>`
+      +`<td style="text-align:right">$${(x.cost_usd||0).toFixed(3)}</td>`
+      +`<td style="text-align:right;color:var(--y)">${cpp?('₩'+cpp.toLocaleString()):'-'}</td></tr>`}).join('');
+  $('opsDailyTable').innerHTML=`<table style="width:100%;font-size:12px"><thead><tr style="color:var(--d);font-size:10px"><th style="text-align:left">날짜</th><th style="text-align:right">발행</th><th style="text-align:right">실패</th><th style="text-align:right">API지출</th><th style="text-align:right">건당(원)</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+async function saveOpsGoal(){
+  const v=parseInt($('opsGoal').value||'0',10)||0;
+  const r=await api('/config','POST',{daily_publish_goal:v});
+  if(r&&r.ok){toast('목표 '+v+'건 저장');loadOps()}else toast('저장 실패','er');
+}
 async function renderStats(){const s=await api('/stats','GET');if(!s)return;
 $('statTop').innerHTML=tile('전체',s.total,'var(--t)')+tile('성공',s.ok,'var(--g)')+tile('실패',s.fail,'var(--r)')+tile('스킵',s.skip,'var(--y)')+tile('성공률',s.rate+'%','var(--p)')+tile('생존율',(s.alive_rate||0)+'%','var(--v)');
 const rz=(s.reasons||[]);
