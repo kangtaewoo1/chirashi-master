@@ -8923,12 +8923,16 @@ def api_cand_revive_rejected():
     dry=bool(d.get('dry_run'))
     # 회수 대상 사유 키워드(reject_reason/note에 이 문자열이 있으면 회수)
     default_reasons=['Message:','Stacktrace','WinError','자동가입 실패','로그인 필요','로그인이 필요','로그인 필요할',
-                     '등록 확인 불가','타임아웃','일시적 실패','글쓰기 페이지 못찾']
+                     '등록 확인 불가','타임아웃','일시적 실패','글쓰기 페이지 못찾',
+                     # ★cafe24 Turnstile 검수 병목(2026-09-12): 아래 사유로 탈락한 cafe24를 새 검수로직으로 회수
+                     '글쓰기 폼 미확인','빡센검수','Turnstile','챌린지','Cloudflare']
     reasons=d.get('reasons') or default_reasons
     # 회수에서 '영구 제외'해야 할 것(되돌려도 소용없는 것)은 제외
-    never=['본인인증','휴대폰','도박','불법','읽기제한','색인차단','제외 도메인','주차','만료','기업']
-    def _hit(s):
+    never=['본인인증','휴대폰','도박','불법','읽기제한','색인차단','제외 도메인','주차','만료']
+    def _hit(s,plat):
         s=str(s or '')
+        # cafe24는 '기업 게시판'이어도 발행·색인 되므로 회수 대상. 그 외 platform은 기업게시판 제외.
+        if plat!='cafe24' and '기업' in s: return False
         if any(n in s for n in never): return False
         return any(k in s for k in reasons)
     matched=0; by_reason={}
@@ -8937,7 +8941,7 @@ def api_cand_revive_rejected():
         for c in cands:
             if c.get('status')!='rejected': continue
             rr=c.get('reject_reason') or c.get('note') or ''
-            if _hit(rr):
+            if _hit(rr,c.get('platform')):
                 matched+=1
                 key=next((k for k in reasons if k in str(rr)),'기타')
                 by_reason[key]=by_reason.get(key,0)+1
