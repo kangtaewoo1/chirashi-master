@@ -2571,6 +2571,30 @@ def dismiss_alerts(d):
         except Exception: pass
     return texts
 
+def _logged_in_strict(d):
+    """★로그인 상태 정밀 판정(2026-09-12 대표님 '왜 가입 못하냐·돈날림' 오탐 감사):
+       메뉴에 상존하는 '로그아웃/mypage/회원정보' 텍스트 부분일치는 오탐(비로그인 스킨에도 항상 있음).
+       → JS로 '로그인 폼(password 입력칸)이 화면에 보이면 아직 로그인 안 된 것'을 먼저 배제하고,
+         '로그아웃' 앵커(a href*=logout 또는 텍스트 로그아웃)가 실제로 존재할 때만 로그인으로 인정."""
+    try:
+        return bool(d.execute_script(r"""
+            // 1) 화면에 보이는 password 입력칸이 있으면 = 로그인/가입 폼 = 아직 로그인 안 됨
+            var pw=Array.from(document.querySelectorAll("input[type='password']")).some(function(e){return e.offsetParent!==null;});
+            if(pw) return false;
+            // 2) 로그아웃 앵커(실제 링크)가 있으면 로그인 상태
+            var a=Array.from(document.querySelectorAll("a")).some(function(e){
+                var h=(e.getAttribute('href')||'').toLowerCase(); var t=(e.textContent||'');
+                return h.indexOf('logout')>=0 || h.indexOf('/member/logout')>=0 || t.indexOf('로그아웃')>=0;
+            });
+            if(a) return true;
+            // 3) cafe24 로그인 후 URL 신호
+            var u=(location.href||'').toLowerCase();
+            if(u.indexOf('/myshop')>=0) return true;
+            return false;
+        """))
+    except Exception:
+        return False
+
 def _flood_wait_seconds(text):
     """도배방지/재작성 제한 알림 문구에서 대기 시간(초)을 추출. 도배 신호가 없으면 0.
        예: '너무 빠른 시간...', '도배방지...', '10초 후에 다시', '3분 후 작성 가능'."""
@@ -4173,18 +4197,29 @@ def discover_login(d, base):
     return None
 
 def _confirm_posted(d):
+    """★가짜 성공 차단(2026-09-12 감사): 목록 URL(board.php/list.html/article/uid)만으로 성공 처리하면
+       제출 실패로 목록에 튕겨도 성공 오판(가짜성공). gnuboard_post/cafe24_post와 동일하게
+       '개별 글 상세 URL'(wr_id=숫자>0 또는 read/view/board_view 또는 /article/명/bo/숫자{3,})일 때만 URL로 성공.
+       목록으로 튕긴 경우는 완료 문구가 있을 때만 성공, 그 외엔 확인 불가(호출부에서 제목 재조회로 확정)."""
     from selenium.webdriver.common.by import By
-    curl=d.current_url or ''
-    head=curl.split('?')[0]
-    if any(k in curl for k in ['wr_id=','board.php','read.html','list.html','view.html','article','board_no','mod=document','uid=']) and 'write' not in head and 'mod=editor' not in curl:
+    curl=d.current_url or ''; cl=curl.lower(); head=cl.split('?')[0]
+    _is_write=('write' in head or 'mod=editor' in cl)
+    # 그누보드: wr_id=<숫자>가 1 이상이어야 개별 글
+    _wr=re.search(r'wr_id=(\d+)',cl); _wr_ok=bool(_wr and int(_wr.group(1))>0 and 'write_update' not in cl)
+    # cafe24: 상세글 URL
+    _c24_detail=('read.html' in cl or 'view.html' in cl or 'board_view' in cl
+                 or re.search(r'/article/[^/]+/\d+/\d{3,}', cl) is not None)
+    if (not _is_write) and (_wr_ok or _c24_detail):
         return True,curl
     try: body=d.find_element(By.TAG_NAME,'body').text[:1500]
     except Exception: body=''
-    if any(k in body for k in ['등록되었습니다','작성되었습니다','등록 완료','승인 대기','승인대기','완료되었']):
+    if any(k in body for k in ['등록되었습니다','작성되었습니다','등록 완료','승인 대기','승인대기','정상적으로 등록']):
         return True,'등록됨'
-    if any(k in body for k in ['권한이 없','권한 없','로그인이 필요','로그인 필요','게시가 금지','차단','스팸']):
+    if any(k in body for k in ['권한이 없','권한 없','로그인이 필요','로그인 필요','게시가 금지','차단']):
         return False,'게시 권한 없음/로그인 필요'
-    return False,'등록 확인 불가 — 게시판 설정 확인'
+    if any(k in body for k in ['일시적으로 중단','스팸','금지어','불량어']):
+        return False,'스팸/금지어 차단 — 이 게시판이 우리 콘텐츠 거부'
+    return False,'등록 확인 불가 — 목록으로 튕김(제목 재조회 필요)'
 
 def _fill_recipe_fields(d, rec, title, content):
     """현재 write 페이지에 제목/본문 채우고 등록 클릭(네비게이션 없음)."""
@@ -5888,15 +5923,26 @@ def screen_candidate(url, cfg=None):
     tl=title.lower()
     # ★기업 소개성 게시판(CEO 인사말·회사소개·연혁·조직도…) 즉시 탈락 — 대표님 지시 2026-09-11.
     #   '가입인사' 같은 개방 게시판은 '인사말' 오탐 방지로 제외.
+    # ★corp_board 오탐 축소(2026-09-12 감사): bo_table='history/location/vision/ci'는 일반 게시판에도 흔해
+    #   단독으로 '기업게시판 탈락'시키면 되는 곳을 영구 차단. → 제네릭 토큰은 제외하고, title 신호(CEO인사말 등)
+    #   또는 강한 bo_table(ceo/greeting/aboutus/organization)일 때만 corp_board로 판정.
     try:
         _bt=(res.get('bo_table') or '').lower()
+        _CORP_STRONG={'ceo','greeting','greetings','aboutus','about_us','organization','org_chart','philosophy'}
         _corp_t=([w for w in CORP_BOARD_TITLE if w in tl] if '가입' not in tl else [])
-        if _corp_t or _bt in CORP_BOARD_TABLE:
+        if _corp_t or _bt in _CORP_STRONG:
             res['corp_board']=(_corp_t[0] if _corp_t else _bt)
     except Exception: pass
     res['parked']=(any(w in low or w in tl for w in PARKED_WORDS) or len(html)<800)
-    # 불법·도박 사이트 판별 (제휴 대상 부적합)
-    res['illegal']=any(w in low for w in ILLEGAL_WORDS)
+    # ★불법·도박 판별 정밀화(2026-09-12 감사): '슬롯/사설/casino/betting/베팅' 등 짧은 단어 전체 HTML 부분일치는
+    #   정상 게시판의 광고배너·사용자글·영어 템플릿에 걸려 오탐 → 정상 게시판을 영구 차단(add_rejected)했음.
+    #   → 강한 도박어 2개 이상 동시 OR title/도메인에 있을 때만 illegal. 짧은 오탐어(casino/betting/슬롯/사설)는 본문 단독 매칭 제외.
+    _STRONG_GAMBLE=['카지노','바카라','먹튀','토토','홀덤','파워볼','꽁머니']   # 이 단어들만으로도 강신호
+    _tl_dom=(tl+' '+(res.get('domain') or '')).lower()
+    _body_hits=[w for w in ILLEGAL_WORDS if w in low]
+    _title_hit=any(w in _tl_dom for w in _STRONG_GAMBLE)
+    _strong_body=sum(1 for w in _STRONG_GAMBLE if w in low)
+    res['illegal']=bool(_title_hit or _strong_body>=2 or len([w for w in _body_hits if w in _STRONG_GAMBLE])>=2)
     # 광고 금지 / 홍보 허용 흔적 (본문 + URL/게시판ID/타이틀까지 함께 판단)
     res['ad_banned']=any(w in html for w in AD_BAN_WORDS)
     hint_blob=html+' '+title+' '+(url or '')+' '+res['bo_table']
@@ -6257,7 +6303,10 @@ def screen_pending(limit=30):
         # ★cafe24는 빡센검수 예외(2026-09-12): 상품Q&A는 기업게시판이라 홍보전화가 없지만 실제 발행·색인은 됨.
         #   Turnstile 챌린지 사이트도 발행 가능하므로 홍보흔적 없다고 버리지 않는다.
         _cafe24_exempt=(r.get('platform')=='cafe24' or r.get('cafe24_challenge'))
-        if cfg.get('strict_screen',True) and r.get('status')=='ready' and c.get('source')!='manual' and not _cafe24_exempt:
+        # ★열린 글쓰기 게시판 예외(2026-09-12 감사): write_form 확인 + 로그인 불필요 + 캡차 없음이면
+        #   비회원이 바로 글 쓸 수 있는 열린 게시판 → 홍보 전화글이 아직 없어도 발행·색인 성공. 홍보흔적 강제 안 함.
+        _open_writable=(bool(r.get('write_form')) and not r.get('login_required') and not r.get('captcha'))
+        if cfg.get('strict_screen',True) and r.get('status')=='ready' and c.get('source')!='manual' and not _cafe24_exempt and not _open_writable:
             _pc=int(r.get('promo_phone_count',0) or 0)
             _has_promo=(_pc>=1) or bool(r.get('promo_hint'))
             _lp=r.get('last_post_days')
@@ -6274,11 +6323,18 @@ def screen_pending(limit=30):
         for c in cands:
             if c['id'] in results:
                 c.update(results[c['id']])
-                if results[c['id']].get('status')=='rejected':
-                    rejected_now.append(c.get('domain') or _domain_of(c.get('url','')))
+                rr=results[c['id']]
+                if rr.get('status')=='rejected':
+                    # ★영구 블랙리스트는 '재검토해도 절대 안 되는 것'만(2026-09-12 감사): 주차·불법·읽기제한·색인차단·광고금지.
+                    #   빡센검수·기업게시판·글쓰기폼미확인 등 오탐 가능성 있는 탈락은 영구기록 제외 → 재검수/회수로 살릴 수 있게.
+                    _reason=str(rr.get('reject_reason') or '')
+                    _permanent=bool(rr.get('parked') or rr.get('illegal') or rr.get('read_restricted')
+                                    or rr.get('index_blocked') or rr.get('ad_banned'))
+                    if _permanent:
+                        rejected_now.append(c.get('domain') or _domain_of(c.get('url','')))
         save_cands(cands)
-    if rejected_now:   # 검수에서 탈락한 도메인은 영구 목록에 기록(재수집 방지)
-        add_rejected_domains(rejected_now,'검수 탈락')
+    if rejected_now:   # '구조적으로 안 되는' 도메인만 영구 목록에 기록(재수집 방지)
+        add_rejected_domains(rejected_now,'검수 탈락(영구)')
     return len(results)
 
 def discover_once(cfg=None, max_queries=10):
@@ -7051,10 +7107,7 @@ def auto_signup(site, submit=True):
     # 5.5) 대표님 전략: 먼저 '인증 없이 바로 가입됐는지' 확인 → 됐으면 인증 스킵(꿀사이트).
     #      제출 직후 이미 로그인 상태(로그아웃/마이페이지 노출)면 이메일 인증 불필요 → 바로 성공 처리.
     def _quick_logged_in():
-        try: _b=d.find_element(By.TAG_NAME,'body').text[:2500]
-        except Exception: _b=''
-        _s=(d.page_source or '').lower()
-        return ('로그아웃' in _b) or ('logout' in _s) or ('mypage' in _s) or ('마이페이지' in _b) or ('회원정보' in _b)
+        return _logged_in_strict(d)
     _already=_quick_logged_in()
     if _already and need_email_verify:
         need_email_verify=False   # 인증 없이 가입 완료됨 → 인증 스킵(꿀사이트)
@@ -7084,10 +7137,7 @@ def auto_signup(site, submit=True):
     # 6) 가입 성공 검증 (다단계) — ① 제출 직후 신호 ② 가입 후 세션 ③ 로그인 재시도 순.
     raw=site.get('site_url',''); m=re.match(r'(https?://[^/]+)',raw); base=m.group(1) if m else raw
     def _logged_in():
-        try: body=d.find_element(By.TAG_NAME,'body').text[:2500]
-        except Exception: body=''
-        src=(d.page_source or '').lower()
-        return ('로그아웃' in body) or ('logout' in src) or ('mypage' in src) or ('회원정보수정' in body) or ('회원정보' in body) or ('마이페이지' in body)
+        return _logged_in_strict(d)
     def _mark_success(msg):
         # ★핵심: 가입한 계정을 넘겨받은 site dict에 직접 심는다. auto_pipeline은 임시 dict
         # (id='cand_...')를 넘기는데, set_site_flag는 저장된 사이트만 갱신하므로 이 대입이 없으면
@@ -7114,7 +7164,11 @@ def auto_signup(site, submit=True):
     #   실패(규칙 위반)는 '가입 폼이 아직 화면에 있을 때(=제출이 안 넘어감)'에만 판정한다.
     #   기존엔 가입 성공해서 홈으로 갔는데도 페이지의 '필수/다시입력'(메뉴·게시글)에 걸려 오탐 → 되는 사이트를 버렸음(2captcha 낭비).
     # (a) 성공 신호 먼저 — 완료 문구 or 이미 로그인 상태
-    if any(k in pt for k in ('가입을 환영','회원가입이 완료','가입이 완료','환영합니다','가입을 축하')) or 'register_result' in plow:
+    # ★register_result는 URL(실제 리다이렉트)로만 판정(2026-09-12 감사): plow(page_source 전체) 부분일치는
+    #   폼에 남은 링크/JS 함수명에도 걸려 가짜 성공 유발 → 결과 페이지로 실제 이동했을 때만 성공.
+    try: _cur_url=(d.current_url or '').lower()
+    except Exception: _cur_url=''
+    if any(k in pt for k in ('가입을 환영','회원가입이 완료','가입이 완료','환영합니다','가입을 축하')) or 'register_result' in _cur_url:
         return _mark_success('가입완료 페이지 확인')
     try:
         if _logged_in(): return _mark_success('가입 직후 로그인 상태')
