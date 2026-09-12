@@ -7110,20 +7110,34 @@ def auto_signup(site, submit=True):
         pt=d.find_element(By.TAG_NAME,'body').text[:3000]
     except Exception: pt=''
     plow=(d.page_source or '').lower()+' '+pt
-    # 실패(반려) 신호 — 이게 있으면 가입이 안 된 것. 정확히 사유를 반환.
-    if any(k in pt for k in ('이미 등록된','이미 사용중','이미 사용 중','중복된 아이디','사용중인 아이디','이미 가입')):
+    # ★판정 순서 개정(대표님 '왜 가입 제대로 못하냐·오탐' 2026-09-12 실측): 성공 신호를 먼저,
+    #   실패(규칙 위반)는 '가입 폼이 아직 화면에 있을 때(=제출이 안 넘어감)'에만 판정한다.
+    #   기존엔 가입 성공해서 홈으로 갔는데도 페이지의 '필수/다시입력'(메뉴·게시글)에 걸려 오탐 → 되는 사이트를 버렸음(2captcha 낭비).
+    # (a) 성공 신호 먼저 — 완료 문구 or 이미 로그인 상태
+    if any(k in pt for k in ('가입을 환영','회원가입이 완료','가입이 완료','환영합니다','가입을 축하')) or 'register_result' in plow:
+        return _mark_success('가입완료 페이지 확인')
+    try:
+        if _logged_in(): return _mark_success('가입 직후 로그인 상태')
+    except Exception: pass
+    # (b) 가입 폼이 아직 화면에 남아있나?(비번확인칸·회원가입 제출버튼) — 남아있으면 제출이 안 넘어간 것 = 진짜 반려
+    _form_still=False
+    try:
+        _form_still=bool(d.find_elements(By.CSS_SELECTOR,
+            "input[name='mb_password_re'],input[name='mb_password_confirm'],input[name='passwd_confirm'],#reg_mb_password_re"))
+    except Exception: pass
+    # (c) 중복 아이디는 문구 무관하게 항상 반려(다음 시도 다른 값)
+    if any(k in pt for k in ('이미 등록된','이미 사용중','이미 사용 중','중복된 아이디','사용중인 아이디','이미 가입','이미 존재')):
         return False,'가입 실패 — 아이디/이메일 중복(다음 시도 시 다른 값 사용)'
-    if any(k in pt for k in ('비밀번호는','아이디는','필수','올바르지 않','형식이 맞지','다시 입력')) and '가입' not in pt[:80]:
-        return False,f'가입 실패 — 입력값 규칙 위반 가능({pt[:60].strip()})'
     if any(k in pt for k in ('본인인증','휴대폰 인증','실명인증','SMS 인증')):
         return False,'가입 실패 — 본인인증 필요(자동가입 불가)'
     if any(k in pt for k in ('승인 후','관리자 승인','승인이 필요','가입 승인')):
         return False,'가입 보류 — 관리자 승인제 게시판(자동발행 불가)'
-    # 성공 신호 — 명시적 완료 문구
-    if any(k in pt for k in ('가입을 환영','회원가입이 완료','가입이 완료','환영합니다','가입을 축하','register_result')) or 'register_result' in plow:
-        return _mark_success('가입완료 페이지 확인')
+    # (d) 입력값 규칙 위반 — 가입 폼이 여전히 화면에 있을 때만(오탐 방지) + 더 구체적인 오류 문구.
+    if _form_still and any(k in pt for k in ('비밀번호가 일치','비밀번호를 확인','자 이상','자 이하','사용할 수 없는','다시 입력','형식이 맞지','올바르지 않은')):
+        _errline=next((ln.strip() for ln in pt.splitlines() if any(k in ln for k in ('비밀번호','아이디','일치','자 이상','형식','사용할 수'))),pt[:50])
+        return False,f'가입 실패 — 입력값 규칙 위반({_errline[:50]})'
 
-    # ② 가입 직후 세션이 이미 로그인 상태인지(그누보드는 가입 즉시 로그인되는 경우 많음)
+    # ② (완료문구·로그인 없이 홈으로 갔지만 폼도 안 남은 경우) 홈에서 로그인 상태 재확인
     try:
         d.get(base); time.sleep(1.5)
         if _logged_in(): return _mark_success('가입 직후 세션 로그인됨')
