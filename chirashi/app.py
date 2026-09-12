@@ -10676,16 +10676,18 @@ DASH_HTML=r'''<header><div class="logo">찌라시 <s>마스터 v6</s></div>
   </div>
   <!-- ★기기별 실시간 현황(대표님 지시 2026-09-11): PC/노트북 각각 마지막활동·발행·상태 카드 -->
   <div id="nodeStrip" style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px"></div>
-  <!-- 러너 세계(아래, PC발굴 포함) — 4구획을 좌우로 나눠 한눈에 -->
+  <!-- ★러너 세계(대표님 지시 2026-09-12): 4칸으로 나눴더니 뭐가 뭔지 헷갈린다 하여 '한 줄 통합 흐름'으로.
+       발굴·검수·가입·정리를 시간순 한 줄씩 쭉 흐르게 하고, 줄 앞의 색깔 배지로 어느 단계인지 표시. -->
   <div style="border:1px solid #4c1d95;border-radius:8px;overflow:hidden">
-    <div style="background:#1a0f2e;color:var(--v);padding:8px 12px;font-weight:700;font-size:13px">🏃 러너 세계 <span style="color:var(--d);font-weight:400">· 발굴(PC 연동)·검수·가입·정리</span></div>
-    <!-- minmax(0,1fr): 1fr만 쓰면 nowrap 로그 한 줄의 min-content가 열 최소폭이 돼 그리드가 화면 밖으로 넘침(대표님 2026-09-11 '오른쪽 짤림') -->
-    <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr)">
-      <div style="border-top:1px solid #33425f;border-right:1px solid #33425f;min-width:0"><div style="padding:6px 11px;font-size:12px;color:var(--p)">🔍 발굴(PC) <span id="cnt발굴" style="float:right;color:var(--d)"></span></div><div style="max-height:190px;overflow-y:auto" id="col발굴"></div></div>
-      <div style="border-top:1px solid #33425f;min-width:0"><div style="padding:6px 11px;font-size:12px;color:var(--v)">📋 검수 <span id="cnt검수" style="float:right;color:var(--d)"></span></div><div style="max-height:190px;overflow-y:auto" id="col검수"></div></div>
-      <div style="border-top:1px solid #33425f;border-right:1px solid #33425f;min-width:0"><div style="padding:6px 11px;font-size:12px;color:var(--y)">👤 가입 <span id="cnt가입" style="float:right;color:var(--d)"></span></div><div style="max-height:190px;overflow-y:auto" id="col가입"></div></div>
-      <div style="border-top:1px solid #33425f;min-width:0"><div style="padding:6px 11px;font-size:12px;color:var(--r)">🧹 정리 <span id="cnt정리" style="float:right;color:var(--d)"></span></div><div style="max-height:190px;overflow-y:auto" id="col정리"></div></div>
+    <div style="background:#1a0f2e;color:var(--v);padding:8px 12px;font-weight:700;font-size:13px">🏃 러너 세계 <span style="color:var(--d);font-weight:400">· 발행할 새 사이트를 찾아 가입까지 자동으로 준비</span> <span id="cnt러너" style="float:right;color:var(--d)"></span></div>
+    <!-- 쉬운 설명 안내줄: 각 단계가 뭔지 색배지로 -->
+    <div style="display:flex;flex-wrap:wrap;gap:6px 14px;padding:7px 12px;border-top:1px solid #33425f;background:#150c26;font-size:11px;line-height:1.4">
+      <span><span style="background:var(--p);color:#000;border-radius:4px;padding:1px 6px;font-weight:700">🔍 발굴</span> <span style="color:var(--d)">새 사이트 찾기</span></span>
+      <span><span style="background:var(--v);color:#000;border-radius:4px;padding:1px 6px;font-weight:700">📋 검수</span> <span style="color:var(--d)">진짜 글쓸 수 있는지 확인</span></span>
+      <span><span style="background:var(--y);color:#000;border-radius:4px;padding:1px 6px;font-weight:700">👤 가입</span> <span style="color:var(--d)">그 사이트에 회원가입</span></span>
+      <span><span style="background:var(--r);color:#fff;border-radius:4px;padding:1px 6px;font-weight:700">🧹 정리</span> <span style="color:var(--d)">안 되는 곳 걸러내기</span></span>
     </div>
+    <div style="max-height:300px;overflow-y:auto;min-width:0" id="col러너"></div>
   </div>
 </div>
 <!-- ★결과탭 병합(대표님 지시 2026-09-09): 관제실 아래에 발행이력 표를 함께(제목=링크·발행링크 클릭). -->
@@ -10950,21 +10952,35 @@ function linkifyLog(msg){
     return '<a href="'+u+'" target="_blank" rel="noopener" style="color:var(--p);word-break:break-all">'+u+'</a>';
   });
 }
-// ★관제실 렌더(대표님 지시): 워커(발행)+러너(발굴/검수/가입/정리) 각 구획에 동시에 쭉 흐르게.
-//  파이프라인·기타 카테고리는 러너 성격이라 검수 구획에 합류.
+// ★관제실 렌더(대표님 지시 2026-09-12): 워커(발행)는 그대로, 러너는 4칸→'한 줄 통합 흐름'으로.
+//  발굴/검수/가입/정리를 시간순 한 리스트로 합치고, 줄 앞 색배지로 단계를 구분한다.
+//  파이프라인·기타 카테고리는 러너 성격이라 검수로 합류.
 function renderActivity(){
   const logs=(window._actLog||[]);
   if(!$('col발행'))return;   // 관제 그리드 없으면(구버전) 스킵
-  const buckets={'발행':[],'발굴':[],'검수':[],'가입':[],'정리':[]};
+  // 발행(워커)만 따로, 나머지 러너 4단계는 하나로 통합
+  const pub=[]; const runner=[];
   logs.forEach(x=>{let c=x.cat||'기타';
     if(c==='파이프라인'||c==='기타')c='검수';
-    if(buckets[c])buckets[c].push(x);});
+    if(c==='발행'){pub.push(x);return;}
+    if(['발굴','검수','가입','정리'].indexOf(c)>=0) runner.push(Object.assign({_c:c},x));});
   const time=x=>esc((x.time||'').slice(-8));   // HH:MM:SS
-  function fill(cat){const el=$('col'+cat);if(!el)return;const arr=buckets[cat]||[];
-    const cn=$('cnt'+cat);if(cn)cn.textContent=arr.length?arr.length+'건':'';
-    el.innerHTML=arr.length?arr.map(x=>'<div title="'+esc(x.msg||'')+'" style="padding:4px 11px;border-bottom:1px solid #1c2740;font-size:12.5px;line-height:1.5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><span style="color:var(--d)">'+time(x)+'</span> '+linkifyLog(x.msg||'')+'</div>').join(''):'<div style="padding:16px;text-align:center;color:var(--d);font-size:12px">대기 중…</div>';}
-  ['발행','발굴','검수','가입','정리'].forEach(fill);
-  const cc=$('actCounts');if(cc)cc.textContent='발행 '+buckets['발행'].length+' · 발굴 '+buckets['발굴'].length+' · 검수 '+buckets['검수'].length+' · 가입 '+buckets['가입'].length+' · 정리 '+buckets['정리'].length;
+  // 워커(발행) 구획
+  (function(){const el=$('col발행');if(!el)return;const cn=$('cnt발행');if(cn)cn.textContent=pub.length?pub.length+'건':'';
+    el.innerHTML=pub.length?pub.map(x=>'<div title="'+esc(x.msg||'')+'" style="padding:4px 11px;border-bottom:1px solid #1c2740;font-size:12.5px;line-height:1.5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><span style="color:var(--d)">'+time(x)+'</span> '+linkifyLog(x.msg||'')+'</div>').join(''):'<div style="padding:16px;text-align:center;color:var(--d);font-size:12px">대기 중…</div>';})();
+  // 러너(발굴+검수+가입+정리) 통합 구획 — 단계별 색배지
+  const BADGE={'발굴':{t:'🔍 발굴',bg:'var(--p)',fg:'#000'},'검수':{t:'📋 검수',bg:'var(--v)',fg:'#000'},
+               '가입':{t:'👤 가입',bg:'var(--y)',fg:'#000'},'정리':{t:'🧹 정리',bg:'var(--r)',fg:'#fff'}};
+  (function(){const el=$('col러너');if(!el)return;
+    const cn=$('cnt러너');if(cn)cn.textContent=runner.length?runner.length+'건':'';
+    // window._actLog가 이미 최신순이므로 그대로(시간 필드로 다시 정렬하면 날짜 없는 항목이 섞임)
+    el.innerHTML=runner.length?runner.map(function(x){var b=BADGE[x._c]||{t:x._c,bg:'#334',fg:'#fff'};
+      return '<div title="'+esc(x.msg||'')+'" style="display:flex;align-items:center;gap:7px;padding:4px 11px;border-bottom:1px solid #1c2740;font-size:12.5px;line-height:1.5">'
+        +'<span style="flex:none;background:'+b.bg+';color:'+b.fg+';border-radius:4px;padding:1px 6px;font-size:10.5px;font-weight:700">'+b.t+'</span>'
+        +'<span style="flex:none;color:var(--d)">'+time(x)+'</span>'
+        +'<span style="flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+linkifyLog(x.msg||'')+'</span></div>';
+    }).join(''):'<div style="padding:16px;text-align:center;color:var(--d);font-size:12px">대기 중… 새 사이트를 찾고 있어요</div>';})();
+  const cc=$('actCounts');if(cc)cc.textContent='발행 '+pub.length+' · 러너 '+runner.length;
 }
 // ★기기별 실시간 현황판(대표님 지시 2026-09-11): PC/노트북 각각 마지막활동·발행·상태 카드.
 function _nodeLabel(id){id=(id||'').toLowerCase();
