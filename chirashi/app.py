@@ -4231,17 +4231,15 @@ def discover_login(d, base):
         return {'login_url':base+path,'id_sel':_css_for(texts[0]),'pw_sel':_css_for(pws[0]),'login_btn':discover_submit(d)}
     return None
 
-def _confirm_posted(d):
-    """★가짜 성공 차단(2026-09-12 감사): 목록 URL(board.php/list.html/article/uid)만으로 성공 처리하면
-       제출 실패로 목록에 튕겨도 성공 오판(가짜성공). gnuboard_post/cafe24_post와 동일하게
-       '개별 글 상세 URL'(wr_id=숫자>0 또는 read/view/board_view 또는 /article/명/bo/숫자{3,})일 때만 URL로 성공.
-       목록으로 튕긴 경우는 완료 문구가 있을 때만 성공, 그 외엔 확인 불가(호출부에서 제목 재조회로 확정)."""
+def _confirm_posted(d, title=None, base=None, bo=None):
+    """★가짜 성공 차단 + 제목 재조회 구제(2026-09-12 대표님 approved 정체 실측):
+       개별 글 상세 URL(wr_id>0·read/view·/article/명/bo/숫자{3,})이거나 완료문구면 성공.
+       그 외 '확인 불가'면 → 목록에서 방금 쓴 제목을 재조회(_verify_post_by_title)해 실제 등록됐으면 성공.
+       (그누보드가 발행 후 목록으로 가는데 wr_id가 URL에 없어 '확인 불가'로 놓치던 오탐 해소 — 실측: 목록에 우리 글 있었음.)"""
     from selenium.webdriver.common.by import By
     curl=d.current_url or ''; cl=curl.lower(); head=cl.split('?')[0]
     _is_write=('write' in head or 'mod=editor' in cl)
-    # 그누보드: wr_id=<숫자>가 1 이상이어야 개별 글
     _wr=re.search(r'wr_id=(\d+)',cl); _wr_ok=bool(_wr and int(_wr.group(1))>0 and 'write_update' not in cl)
-    # cafe24: 상세글 URL
     _c24_detail=('read.html' in cl or 'view.html' in cl or 'board_view' in cl
                  or re.search(r'/article/[^/]+/\d+/\d{3,}', cl) is not None)
     if (not _is_write) and (_wr_ok or _c24_detail):
@@ -4254,7 +4252,13 @@ def _confirm_posted(d):
         return False,'게시 권한 없음/로그인 필요'
     if any(k in body for k in ['일시적으로 중단','스팸','금지어','불량어']):
         return False,'스팸/금지어 차단 — 이 게시판이 우리 콘텐츠 거부'
-    return False,'등록 확인 불가 — 목록으로 튕김(제목 재조회 필요)'
+    # ★최후 구제: 목록에서 방금 쓴 제목 재조회(그누보드 오탐 해소). base/title 있으면 시도.
+    if title and base:
+        try:
+            _vu=_verify_post_by_title(d, base, bo or '', title)
+            if _vu: return True,(_vu if str(_vu).startswith('http') else '등록됨(제목 확인)')
+        except Exception: pass
+    return False,'등록 확인 불가 — 목록에 제목 없음(제출실패·승인대기 의심)'
 
 def _fill_recipe_fields(d, rec, title, content):
     """현재 write 페이지에 제목/본문 채우고 등록 클릭(네비게이션 없음)."""
@@ -4313,7 +4317,8 @@ def _apply_recipe(d, site, rec, title, content, skip_login=False):
     _,missing=fill_required_post_fields(d,site)
     if missing: return False,'필수항목 설정 필요: '+', '.join(missing[:6])
     _fill_recipe_fields(d, rec, title, content)
-    return _confirm_posted(d)
+    _cp_base=re.match(r'(https?://[^/]+)',site.get('site_url') or ''); _cp_base=_cp_base.group(1) if _cp_base else None
+    return _confirm_posted(d, title=title, base=_cp_base, bo=site.get('bo_table'))
 
 def _page_login_state(d):
     """현재 페이지가 로그인 화면인지(본문 에디터 없음 + 비번칸/로그인안내) 판별."""
@@ -4622,7 +4627,8 @@ def discover_and_post(site, title, content, skip_login=False):
         else:
             add_log(f'[2captcha] 자동 해결 실패: {msg} → 자동발행 불가')
             return False,f'캡차 감지({_cap}) — 2captcha 자동 해결 실패: {msg}',None
-    ok,msg=_confirm_posted(d)
+    _cp_base2=re.match(r'(https?://[^/]+)',site.get('site_url') or ''); _cp_base2=_cp_base2.group(1) if _cp_base2 else None
+    ok,msg=_confirm_posted(d, title=title, base=_cp_base2, bo=site.get('bo_table'))
     return ok,msg,(rec if ok else None)
 
 def dryrun_post(site, title, content_html):
