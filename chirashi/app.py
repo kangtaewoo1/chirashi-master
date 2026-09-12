@@ -8179,7 +8179,7 @@ def chk():
     #  /api/test/* = 발행 테스트 트리거(등록 사이트에 실제 글1건 발행해 검증).
     _p=request.path
     if _p=='/api/version': return  # 배포 SHA 확인 — 공개(민감정보 없음)
-    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/sites/unlock-cafe24','/api/sites/purge-fake-cafe24','/api/candidates/rescreen-cafe24','/api/candidates/revive-rejected','/api/regions/normalize-existing','/api/imap/test','/api/openai/usage','/api/config/clear-key','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/report-site','/api/unlocker/test','/api/sbr/test') or _p.startswith('/api/test/'):
+    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/sites/unlock-cafe24','/api/sites/purge-fake-cafe24','/api/candidates/rescreen-cafe24','/api/candidates/revive-rejected','/api/regions/normalize-existing','/api/site-board','/api/imap/test','/api/openai/usage','/api/config/clear-key','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/report-site','/api/unlocker/test','/api/sbr/test') or _p.startswith('/api/test/'):
         tok=(request.args.get('token') or '').strip()
         cfgtok=(load_config().get('log_token') or '').strip()
         if cfgtok and tok==cfgtok:
@@ -9689,6 +9689,57 @@ def api_sites():
         x.pop('mb_pass_enc',None); public.append(x)
     return jsonify(public)
 
+def _site_is_pub(s):
+    """renderSites의 isPub 예측을 서버에서 동일 계산(발행가능=진짜 발행처)."""
+    _adm=('manual_admin','admin_bulk','legacy_admin','candidate_registered','verified_test')
+    return bool(s.get('permission') and s.get('registration_source') in _adm
+                and s.get('status')!='rejected' and s.get('write_test_status')=='passed'
+                and re.match(r'^https?://', str(s.get('verified_post_url') or '')))
+
+@app.route('/api/site-board',methods=['GET'])
+def api_site_board():
+    """★사이트+발굴 통합 목록(대표님 지시 2026-09-12): 두 목록을 도메인 기준 dedup해 한 표로.
+       state: publishing(발행중)·registered(등록·테스트대기)·preparing(검수/가입중)·waiting(재검수대기)·rejected(탈락).
+       사이트(발행처)에 있는 도메인은 사이트 우선(후보 approved는 이미 승격됨)."""
+    sites=load_sites(); cands=load_cands()
+    seen=set(); rows=[]
+    # 1) 사이트(발행처) 먼저 — 발행중/등록됨
+    for s in sites:
+        dom=_domain_of(s.get('site_url') or '')
+        if not dom: continue
+        seen.add(dom)
+        pub=_site_is_pub(s)
+        dead=(s.get('status') in ('rejected','failed'))
+        state='publishing' if pub else ('rejected' if dead else 'registered')
+        rows.append({'kind':'site','id':s.get('id'),'domain':dom,'name':s.get('name') or dom,
+                     'url':s.get('site_url'),'platform':s.get('platform'),'bo_table':s.get('bo_table'),
+                     'state':state,'status':s.get('status'),'posted_today':s.get('posted_today',0),
+                     'signup_status':s.get('signup_status'),'login_saved':bool(s.get('mb_pass') or s.get('mb_pass_enc')),
+                     'block':s.get('technical_block_reason') or s.get('verification_fail_reason') or ''})
+    # 2) 후보 — 사이트에 없는 도메인만(중복 제거). approved인데 사이트에 없으면 등록대기로.
+    for c in cands:
+        dom=c.get('domain') or _domain_of(c.get('url') or '')
+        if not dom or dom in seen: continue
+        seen.add(dom)
+        st=c.get('status')
+        if st=='rejected': state='rejected'
+        elif st=='approved': state='registered'
+        elif not c.get('screened'): state='waiting'      # 미검수(재검수 대기 포함)
+        else: state='preparing'                          # 검수완료·가입/발행테스트 대기
+        rows.append({'kind':'cand','id':c.get('id'),'domain':dom,'name':c.get('domain') or dom,
+                     'url':c.get('url'),'platform':c.get('platform'),'bo_table':c.get('bo_table'),
+                     'state':state,'status':st,'score':c.get('score',0),
+                     'title':c.get('title',''),'reject_reason':c.get('reject_reason') or '',
+                     'write_form':bool(c.get('write_form')),'captcha':bool(c.get('captcha')),
+                     'login_required':bool(c.get('login_required')),'promo_hint':bool(c.get('promo_hint'))})
+    order={'publishing':0,'registered':1,'preparing':2,'waiting':3,'rejected':4}
+    rows.sort(key=lambda r:(order.get(r['state'],9), -int(r.get('score',0) or 0)))
+    counts={}
+    for r in rows: counts[r['state']]=counts.get(r['state'],0)+1
+    st=load_json(DISCO_FILE,{})
+    return jsonify({'ok':True,'rows':rows,'counts':counts,'total':len(rows),
+                    'today_queries':st.get('queries',0),'today_found':st.get('found',0)})
+
 @app.route('/api/sites/limits',methods=['POST'])
 def api_sites_limits():
     """사이트 목록에서 하루 발행 한도와 최소 간격만 안전하게 즉시 수정한다."""
@@ -10885,7 +10936,7 @@ DASH_HTML=r'''<header><div class="logo" onclick="window.scrollTo({top:0,behavior
 <div class="stats" id="live"><span>큐:<b id="q">0</b></span><span>성공:<b id="ok" style="color:var(--g)">0</b></span><span>실패:<b id="fl" style="color:var(--r)">0</b></span><span>스킵:<b id="sk" style="color:var(--y)">0</b></span><span>발행워커:<b id="ws" style="color:var(--d)">-</b></span><span style="margin-left:10px;padding-left:10px;border-left:1px solid var(--b)">🎯 발행가능 <b id="siteGoal" style="color:var(--p)">-</b></span></div>
 <a href="/logout" class="btn-xs" style="background:var(--b);color:var(--d);text-decoration:none">로그아웃</a></header>
 
-<div class="tabs"><button id="tab-gen" class="tab" onclick="T('gen')" style="display:none">글 생성</button><button class="tab on" onclick="T('wlog')">발행 현황</button><button class="tab" onclick="T('kw')">키워드</button><button class="tab" onclick="T('images')">이미지 저장</button><button class="tab" onclick="T('sites')">사이트 (<span id="siteTabCount">{{sites|length}}</span>)</button><button class="tab" onclick="T('disco')">발굴</button><button id="tab-mem" class="tab" onclick="T('mem')" style="display:none">회원·정산</button><button class="tab" onclick="T('ops')">운영 대시보드</button><button class="tab" onclick="T('set')">설정</button></div>
+<div class="tabs"><button id="tab-gen" class="tab" onclick="T('gen')" style="display:none">글 생성</button><button class="tab on" onclick="T('wlog')">발행 현황</button><button class="tab" onclick="T('kw')">키워드</button><button class="tab" onclick="T('images')">이미지 저장</button><button class="tab" onclick="T('sites')">사이트 (<span id="siteTabCount">{{sites|length}}</span>)</button><button id="tab-mem" class="tab" onclick="T('mem')" style="display:none">회원·정산</button><button class="tab" onclick="T('ops')">운영 대시보드</button><button class="tab" onclick="T('set')">설정</button></div>
 <div class="wrap"><div id="toasts"></div>
 <div id="pvOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:500;padding:20px" onclick="if(event.target===this)closePreview()">
 <div style="max-width:820px;margin:0 auto;background:#fff;color:#222;border-radius:10px;max-height:90vh;overflow:auto">
@@ -10987,23 +11038,41 @@ DASH_HTML=r'''<header><div class="logo" onclick="window.scrollTo({top:0,behavior
 <textarea id="imgUrls" rows="5" placeholder="https://내사이트.kr/img/room1.jpg&#10;https://내사이트.kr/img/room2.jpg"></textarea>
 <div class="row" style="margin-top:6px"><button class="btn btn-p" onclick="saveImages(false)">저장(덮어쓰기)</button><button class="btn btn-v" onclick="saveImages(true)">추가</button><span style="flex:1"></span><span style="color:var(--d);font-size:10px" id="imgCount">0개</span><button class="btn btn-r btn-xs" onclick="if(confirm('이미지 URL 전체 삭제?'))clearImages()">비우기</button></div></div></div>
 
+<!-- ★사이트+발굴 통합 탭(대표님 지시 2026-09-12 '링크만 딱 주면 알아서'): 맨 위 링크 입력 하나로 자동 처리,
+     아이디/비번 직접등록·CSV는 고급(접기), 목록은 사이트(발행중)+후보(준비중/대기/탈락) 통합 표(도메인 dedup). -->
 <div id="p-sites" class="panel">
-<div class="card"><h3>사이트 추가</h3>
+<div class="card">
+<h3>🔗 사이트 추가 <span style="font-size:11px;color:var(--g);font-weight:400">— 링크만 넣고 추가하면 끝. 가입·발행테스트까지 자동으로 합니다</span></h3>
+<textarea id="dcUrls" rows="3" placeholder="여기에 사이트 링크를 붙여넣으세요 (한 줄에 하나)&#10;https://example.kr/bbs/board.php?bo_table=promotion&#10;https://another-site.com" style="font-size:13px"></textarea>
+<div class="row" style="margin-top:8px"><button class="btn btn-v" style="font-size:14px;padding:9px 20px" onclick="addManual()">➕ 추가하고 자동 처리 시작</button>
+<span style="color:var(--d);font-size:11px">아이디·비밀번호 필요 없음 — 시스템이 알아서 검수→가입→발행테스트→발행처 등록</span></div>
+<details style="margin-top:12px"><summary style="cursor:pointer;color:var(--d);font-size:11px">⚙️ 고급 — 이미 가입한 계정을 직접 등록 / CSV 대량 등록</summary>
+<div style="margin-top:10px;padding:10px;border:1px solid var(--line);border-radius:6px">
+<div style="font-size:11px;color:var(--d);margin-bottom:6px">이미 <b>회원가입 해둔 계정</b>이 있는 사이트를 직접 넣을 때만 사용하세요.</div>
 <div class="row"><input type="text" id="sUrl" placeholder="https://사이트.com (또는 board.php URL)" style="flex:1"><select id="sPlat" style="width:110px"><option value="auto">자동감지</option><option value="gnuboard">그누보드</option><option value="cafe24">Cafe24</option></select></div>
 <div class="row"><input type="text" id="sName" placeholder="이름" style="flex:1"><input type="text" id="sBo" placeholder="게시판ID (bo_table) 예:free" style="width:170px"></div>
-<!-- ★하루한도/최소간격 입력칸 제거(대표님 지시 2026-09-09 '고정이라 없앰'): 항상 무제한(0)·1분 고정. addSite에서 하드코딩 전송. -->
-<div class="row"><input type="text" id="sId" placeholder="아이디" style="width:130px"><input type="password" id="sPw" placeholder="비밀번호" style="width:130px"><button class="btn btn-p" id="addBtn" onclick="addSite()">추가</button><button class="btn btn-d btn-xs" id="editCancel" style="display:none" onclick="cancelEdit()">취소</button></div>
-<!-- ★홍보허용 UI 제거(대표님 지시 '무조건 허용'): 자동 허용. 기존 JS 호환 위해 hidden 유지(항상 체크). -->
-<div class="row" style="background:#0b1a2e;border:1px solid #166534;border-radius:6px;padding:8px;color:var(--g);font-size:11px">✔ 자동 허용 — 발행 테스트를 통과하면 바로 발행됩니다(별도 허용 절차 없음)</div>
+<div class="row"><input type="text" id="sId" placeholder="아이디" style="width:130px"><input type="password" id="sPw" placeholder="비밀번호" style="width:130px"><button class="btn btn-p" id="addBtn" onclick="addSite()">계정으로 추가</button><button class="btn btn-d btn-xs" id="editCancel" style="display:none" onclick="cancelEdit()">취소</button></div>
 <input type="checkbox" id="sPerm" checked hidden><input type="hidden" id="sPermNote" value="자동 허용">
-<div style="font-size:10px;color:var(--d)">게시판ID(bo_table)는 글이 올라갈 게시판 식별자입니다. 예) 자유게시판 free, 홍보게시판 promotion · <b style="color:var(--y)">홍보 허용을 체크한 사이트만 발행/테스트됩니다.</b></div></div>
-<div class="card"><h3>CSV 대량 등록 (한 줄에 하나: URL,이름,게시판,아이디,비번,허용여부)</h3>
-<textarea id="bulkCsv" rows="4" placeholder="https://a.kr,에이,free,id1,pw1,1&#10;https://b.kr,비,promotion,id2,pw2,0"></textarea>
-<div class="row" style="margin-top:6px"><label style="display:flex;align-items:center;gap:6px;color:var(--g);font-size:11px"><input type="checkbox" id="bulkPerm" style="width:auto">허용여부 미기재 시 기본 허용</label><span style="flex:1"></span><button class="btn btn-p" onclick="bulkAdd()">대량 등록</button></div>
-<div style="font-size:10px;color:var(--d)">허용여부: 1/0 (마지막 칸). 미기재면 위 체크박스 기본값. 등록 후에도 목록에서 선택→허용 일괄 변경 가능.</div></div>
-<div class="card"><h3>사이트 목록 (실시간 갱신)</h3>
-<div class="row" style="margin-bottom:6px"><button class="btn btn-d btn-xs" onclick="healthAll()">선택 상태점검</button><span style="flex:1"></span><span style="color:var(--d);font-size:10px">발행테스트 통과 시 자동 허용 · 체크박스로 선택 후 상태점검</span></div>
-<div style="max-height:400px;overflow-y:auto" id="siteList"></div></div></div>
+<div style="margin-top:12px;font-size:11px;color:var(--d)">CSV 대량 등록 (한 줄에 하나: URL,이름,게시판,아이디,비번,허용여부)</div>
+<textarea id="bulkCsv" rows="3" placeholder="https://a.kr,에이,free,id1,pw1,1&#10;https://b.kr,비,promotion,id2,pw2,0" style="margin-top:4px"></textarea>
+<div class="row" style="margin-top:6px"><label style="display:flex;align-items:center;gap:6px;color:var(--g);font-size:11px"><input type="checkbox" id="bulkPerm" style="width:auto">허용여부 미기재 시 기본 허용</label><span style="flex:1"></span><button class="btn btn-p btn-xs" onclick="bulkAdd()">대량 등록</button></div>
+</div></details>
+</div>
+
+<div id="dcSummary" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px"></div>
+
+<div class="card"><div class="row" style="align-items:center"><h3 style="margin:0">📋 사이트 목록</h3>
+<span style="font-size:11px;color:var(--g);font-weight:400">🟢 완전자동 — 발굴·검수·가입·발행이 24시간 자동으로 돕니다</span>
+<span style="flex:1"></span>
+<select id="boardFilter" style="width:auto" onchange="renderBoard()"><option value="">전체</option><option value="publishing">🟢 발행중</option><option value="registered">🔵 등록됨</option><option value="preparing">🟡 준비중</option><option value="waiting">⚪ 대기</option><option value="rejected">🔴 탈락</option></select>
+<button class="btn btn-d btn-xs" onclick="renderBoard()">새로고침</button>
+<button class="btn btn-g btn-xs" onclick="location='/api/candidates/export'">엑셀</button>
+<button class="btn btn-r btn-xs" onclick="if(confirm('탈락 후보만 삭제할까요?'))clearRejected()">탈락 정리</button></div>
+<div style="font-size:10px;color:var(--d);margin:6px 0 4px" id="boardCount">0개</div>
+<div style="max-height:560px;overflow-y:auto" id="boardList"></div>
+<!-- 기존 JS 호환용 hidden 앵커(renderSites/renderCands가 참조) -->
+<div id="siteList" style="display:none"></div><div id="dcList" style="display:none"></div><select id="dcFilter" style="display:none"><option value=""></option></select>
+</div></div>
 
 <!-- ★결과 탭(p-res) 제거 — 발행 현황(p-wlog) 탭에 병합됨(대표님 지시 2026-09-09). -->
 
@@ -11049,20 +11118,7 @@ DASH_HTML=r'''<header><div class="logo" onclick="window.scrollTo({top:0,behavior
 <div style="max-height:520px;overflow-y:auto;margin-top:6px" id="histList"></div></div>
 </div></div>
 
-<div id="p-disco" class="panel">
-<div class="note">🔎 Brave 검색 → 접속 성공 → 오류/데모/웹빌더·영구탈락 제외 → 게시판 글쓰기 폼 확인까지 통과한 곳만 후보로 수집합니다. 그다음 자동가입·발행테스트로 <b style="color:var(--g)">실제 되는 곳만 자동 등록</b>, 안 되는 곳은 자동 탈락됩니다. (수동 URL은 최우선 처리)</div>
-<div id="dcSummary" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px"></div>
-<div class="card"><h3>후보 수집 <span style="font-size:11px;color:var(--g);font-weight:400">🟢 완전자동 작동 중 — 발굴·검수·가입·발행이 24시간 자동으로 돕니다</span></h3>
-<div class="row">
-<button class="btn btn-g" onclick="location='/api/candidates/export'">엑셀 내보내기</button>
-<span style="flex:1"></span>
-<button class="btn btn-r btn-xs" onclick="if(confirm('탈락 후보만 삭제할까요?'))clearRejected()">탈락 정리</button></div>
-<div style="font-size:10px;color:var(--d);margin:8px 0 4px">특정 사이트를 직접 넣고 싶을 때만 아래에 URL을 붙여넣으세요. 나머지는 자동입니다.</div>
-<textarea id="dcUrls" rows="3" placeholder="URL 직접 추가 (한 줄에 하나)&#10;https://example.kr/bbs/board.php?bo_table=promotion"></textarea>
-<div class="row" style="margin-top:6px"><button class="btn btn-v" onclick="addManual()">URL 추가 + 검수</button></div></div>
-<div class="card"><h3>후보 목록 (점수순 — 위에서부터 검토)</h3>
-<div class="row" style="margin-bottom:6px"><select id="dcFilter" style="width:auto" onchange="renderCands()"><option value="">전체</option><option value="ready">검수완료</option><option value="approved">사이트 등록됨</option><option value="rejected">제외</option><option value="new">미검수</option></select><span style="flex:1"></span><span style="color:var(--d);font-size:10px" id="dcCount">0개</span></div>
-<div style="max-height:520px;overflow-y:auto" id="dcList"></div></div></div>
+<!-- ★발굴 탭(p-disco) 제거 — 사이트 탭(p-sites)에 통합됨(대표님 지시 2026-09-12). -->
 
 <div id="p-mem" class="panel">
 <div class="note">👥 회원·정산 + ⏰ 계정당 개별 자동발행 — 회원마다 <b style="color:var(--p)">원하는 시간대</b>를 지정하면 서버가 24시간 그 시간에 자동 실행합니다(PC 불필요). 회원별 전용 키워드·담당 사이트를 따로 배정할 수 있고, 시간분산으로 동시 폭주를 막습니다. 월 청구 = 기본료 + (추가 광고수 × 추가단가).</div>
@@ -11261,7 +11317,7 @@ DASH_HTML=r'''<header><div class="logo" onclick="window.scrollTo({top:0,behavior
 const $=id=>document.getElementById(id);
 // ★탭 전환 방어(대표님 제보 '빈페이지 뜸' 2026-09-09): 탭버튼/패널이 없거나 렌더 1개가 던져도
 //   페이지 전체가 하얗게 비지 않도록 null가드 + try/catch. 패널은 무조건 먼저 보이게 한 뒤 렌더 호출.
-function T(n){document.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));document.querySelectorAll('.panel').forEach(p=>p.classList.remove('on'));const _tb=document.querySelector(`[onclick="T('${n}')"]`);if(_tb)_tb.classList.add('on');const _pn=$('p-'+n);if(_pn)_pn.classList.add('on');try{if(n==='wlog'){renderWorkerLog();renderHistory();renderCaptchaTasks()}if(n==='ops'){loadOps();renderStats();loadUsageDashboard();startUsageAuto()}else{stopUsageAuto()}if(n==='set'){loadCfgUI();loadRegionTool()}if(n==='gen'){loadPool();loadImages();loadRegionTool()}if(n==='kw'){loadWorkrooms();loadRegionTool()}if(n==='mem'){renderMembers();if(!document.querySelector('.mSite'))fillSiteBox([])}if(n==='disco')renderCands()}catch(e){console.error('탭 렌더 오류',n,e)}}
+function T(n){document.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));document.querySelectorAll('.panel').forEach(p=>p.classList.remove('on'));const _tb=document.querySelector(`[onclick="T('${n}')"]`);if(_tb)_tb.classList.add('on');const _pn=$('p-'+n);if(_pn)_pn.classList.add('on');try{if(n==='wlog'){renderWorkerLog();renderHistory();renderCaptchaTasks()}if(n==='ops'){loadOps();renderStats();loadUsageDashboard();startUsageAuto()}else{stopUsageAuto()}if(n==='set'){loadCfgUI();loadRegionTool()}if(n==='gen'){loadPool();loadImages();loadRegionTool()}if(n==='kw'){loadWorkrooms();loadRegionTool()}if(n==='mem'){renderMembers();if(!document.querySelector('.mSite'))fillSiteBox([])}if(n==='sites'){renderBoard();renderSites()}}catch(e){console.error('탭 렌더 오류',n,e)}}
 function toast(m,c='ok'){const d=$('toasts');const e=document.createElement('div');e.className='toast toast-'+c;e.textContent=m;d.appendChild(e);setTimeout(()=>e.remove(),2500)}
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
 async function api(p,m,b){try{const o={method:m,headers:{'Content-Type':'application/json'}};if(b)o.body=JSON.stringify(b);const r=await fetch('/api'+p,o);
@@ -11388,6 +11444,47 @@ const hdr=r.ok?'<span style="color:var(--g)">✅ 발행 가능 — 크롬 정상
 $('diagOut').innerHTML=`<div style="margin-bottom:8px;font-weight:700">${hdr}</div><table>${rows}</table><div style="font-size:10px;color:var(--d);margin-top:8px">${esc(r.platform||'')} · Python ${esc(r.python||'')}</div>`}
 // ---- 도메인 발굴 ----
 let _cands=[];
+// ★사이트+발굴 통합 목록(대표님 2026-09-12): /api/site-board를 도메인 dedup 상태별로 한 표에.
+const _BOARD_STATE={publishing:{t:'🟢 발행중',c:'st-ok'},registered:{t:'🔵 등록됨',c:'st-ok'},
+  preparing:{t:'🟡 준비중',c:'st-y'},waiting:{t:'⚪ 대기',c:'st-i'},rejected:{t:'🔴 탈락',c:'st-f'}};
+async function renderBoard(){
+  const el=$('boardList'); if(!el)return;
+  const r=await api('/site-board','GET'); if(!r||!r.ok)return;
+  const c=r.counts||{};
+  // 요약 타일
+  const sm=$('dcSummary'); if(sm) sm.innerHTML=
+    tile('전체',r.total||0,'var(--t)')+tile('🟢 발행중',c.publishing||0,'var(--g)')
+    +tile('🔵 등록됨',c.registered||0,'var(--p)')+tile('🟡 준비중',c.preparing||0,'var(--y)')
+    +tile('⚪ 대기',c.waiting||0,'var(--d)')+tile('🔴 탈락',c.rejected||0,'var(--r)')
+    +tile('오늘 발굴',(r.today_found||0),'var(--v)');
+  const f=($('boardFilter')||{}).value||'';
+  const rows=f?r.rows.filter(x=>x.state===f):r.rows;
+  if($('boardCount'))$('boardCount').textContent=rows.length.toLocaleString()+'개'+(f?' ('+(_BOARD_STATE[f]||{}).t+')':'');
+  if(!rows.length){el.innerHTML='<p style="color:var(--d);padding:24px;text-align:center">표시할 사이트가 없습니다</p>';return}
+  const head='<table style="width:100%;font-size:12px"><thead><tr style="color:var(--d);font-size:10px"><th style="text-align:left">상태</th><th style="text-align:left">이름/도메인</th><th style="text-align:left">게시판</th><th style="text-align:left">정보</th><th style="text-align:right">동작</th></tr></thead><tbody>';
+  const body=rows.map(function(x){
+    const b=_BOARD_STATE[x.state]||{t:x.state,c:'st-i'};
+    const plat=x.platform==='cafe24'?'Cafe24':x.platform==='gnuboard'?'그누보드':'';
+    // 정보 칸: 사이트면 오늘발행/가입, 후보면 점수/제목/사유
+    let info='';
+    if(x.kind==='site'){
+      info='오늘 '+(x.posted_today||0)+'건'+(x.signup_status==='complete'?' · 가입완료':'')+(x.block?(' · <span style="color:var(--r)">'+esc(x.block.slice(0,24))+'</span>'):'');
+    }else{
+      const chips=[]; if(x.promo_hint)chips.push('홍보흔적'); if(x.write_form)chips.push('글쓰기폼'); if(x.captcha)chips.push('🧩캡차'); if(x.login_required)chips.push('로그인');
+      info=(x.score?('<b>'+x.score+'점</b> '):'')+chips.join('·')+(x.state==='rejected'&&x.reject_reason?(' · <span style="color:var(--r)">'+esc(String(x.reject_reason).slice(0,28))+'</span>'):'');
+    }
+    // 동작: 사이트는 삭제, 후보는 자동처리중 표시(수동버튼 최소화 — 대표님 '알아서')
+    const act=x.kind==='site'
+      ? '<button class="btn btn-r btn-xs" onclick="delSite(\''+esc(x.id)+'\')">삭제</button>'
+      : (x.state==='rejected'?'<span style="color:var(--d);font-size:10px">자동 제외</span>':'<span style="color:var(--v);font-size:10px">자동 진행중</span>');
+    return '<tr><td><span class="st '+b.c+'" style="white-space:nowrap">'+b.t+'</span></td>'
+      +'<td style="max-width:260px"><b>'+esc(x.name||x.domain)+'</b><br><a href="'+esc(x.url||'#')+'" target="_blank" rel="noopener" style="color:var(--p);word-break:break-all;font-size:11px">'+esc((x.url||'').slice(0,60))+'</a></td>'
+      +'<td style="color:var(--p)">'+esc(x.bo_table||'')+(plat?'<br><span style="color:var(--d);font-size:10px">'+plat+'</span>':'')+'</td>'
+      +'<td style="color:var(--d);font-size:11px">'+info+'</td>'
+      +'<td style="text-align:right;white-space:nowrap">'+act+'</td></tr>';
+  }).join('');
+  el.innerHTML=head+body+'</tbody></table>';
+}
 async function renderCands(){const r=await api('/candidates','GET');if(!r||!r.candidates)return;_cands=r.candidates;const s=r.summary||{};
 $('dcSummary').innerHTML=tile('전체',s.total||0,'var(--t)')+tile('검수완료',s.ready||0,'var(--g)')+tile('사이트 등록',s.approved||0,'var(--p)')+tile('제외',s.rejected||0,'var(--r)')+tile('오늘 쿼리',(s.today_queries||0)+'/100','var(--v)');
 const f=$('dcFilter').value;const list=f?_cands.filter(c=>c.status===f):_cands;
@@ -11600,7 +11697,7 @@ async function pipelineRun(){
   }finally{ restore(); }
 }
 async function rescreenAll(){toast('전체 재검수 중...(최대 2분)');const r=await api('/candidates/screen','POST',{rescreen:true,limit:40});if(r&&r.ok){toast(r.screened+'건 재검수 완료');renderCands()}}
-async function addManual(){const u=$('dcUrls').value;if(!u.trim()){toast('URL 입력','er');return}const r=await api('/candidates/manual','POST',{urls:u});if(r&&r.ok){toast(r.added+'개 추가 · 검수→발행테스트 바로 시작(1~2분 후 결과탭 확인)','ok');$('dcUrls').value='';setTimeout(renderCands,3000);renderCands()}else toast((r&&r.error)||'실패','er')}
+async function addManual(){const u=$('dcUrls').value;if(!u.trim()){toast('링크를 입력하세요','er');return}const r=await api('/candidates/manual','POST',{urls:u});if(r&&r.ok){toast(r.added+'개 추가 · 자동으로 검수→가입→발행테스트 시작(1~2분 후 목록에서 상태 확인)','ok');$('dcUrls').value='';setTimeout(renderBoard,3000);renderBoard()}else toast((r&&r.error)||'실패','er')}
 async function setCand(id,st){await api('/candidates/status','POST',{id:id,status:st});renderCands()}
 async function clearRejected(){await api('/candidates','DELETE',{clear:'rejected'});renderCands()}
 async function approveCand(id){const c=_cands.find(x=>x.id===id);if(!c)return;
@@ -11977,7 +12074,7 @@ if($('p-wlog')&&$('p-wlog').classList.contains('on')){renderWorkerLog();renderHi
   [renderSites,poll,loadPool,loadImages,loadImageFiles,loadWorkrooms,loadImgWorkrooms,loadRegionTool].forEach(fn=>{try{fn()}catch(e){console.error('init',fn.name,e)}});
 })();
 setInterval(()=>{try{poll()}catch(e){}},2000);
-setInterval(()=>{try{renderSites()}catch(e){}},4000);
+setInterval(()=>{try{renderSites();var p=$('p-sites');if(p&&p.classList.contains('on'))renderBoard();}catch(e){}},4000);
 </script>
 </body></html>'''
 
