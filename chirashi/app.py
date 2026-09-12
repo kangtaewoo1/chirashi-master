@@ -2110,17 +2110,41 @@ def _captcha_image_data(d):
 
     return ''  # 로그: 여기 도달 시 캡차 미필요(로그인/관리자·비활성)이거나 iframe 내부일 수 있음
 
-def solve_captcha_with_2captcha(d,site,cap_type,cfg,timeout=300):
-    """2captcha API를 사용해 CAPTCHA를 자동으로 해결한다."""
-    api_key=(cfg.get('twocaptcha_api_key') or '').strip()
-    if not api_key or not cfg.get('twocaptcha_enabled'):
-        return False,'2captcha 설정 없음','',{}
-    
+# ★kcaptcha 자체 OCR(대표님 지시 2026-09-12 '2captcha 돈 아깝다·자체개발'): ddddocr(캡차 특화 로컬 OCR)로
+#   그누보드 kcaptcha(전체 캡차의 ~95%, 단순 숫자/영문 이미지)를 무료·로컬로 해결. 실패 시에만 2captcha 폴백.
+_DDDD_OCR=None; _DDDD_TRIED=False
+def _ocr_kcaptcha(image_bytes):
+    """kcaptcha 이미지(bytes) → OCR 텍스트. ddddocr 없거나 실패면 ''. 결과는 영숫자만 남겨 정규화."""
+    global _DDDD_OCR,_DDDD_TRIED
+    if _DDDD_OCR is None:
+        if _DDDD_TRIED: return ''
+        _DDDD_TRIED=True
+        try:
+            import ddddocr; _DDDD_OCR=ddddocr.DdddOcr(show_ad=False)
+        except Exception as e:
+            add_log(f'[kcaptcha OCR] ddddocr 미설치/로드실패 → 2captcha 사용: {str(e)[:50]}'); return ''
     try:
-        from twocaptcha import TwoCaptcha
+        raw=_DDDD_OCR.classification(image_bytes)
+        s=re.sub(r'[^0-9A-Za-z가-힣]','',str(raw or ''))
+        return s
+    except Exception:
+        return ''
+
+def solve_captcha_with_2captcha(d,site,cap_type,cfg,timeout=300):
+    """CAPTCHA 자동 해결. ★kcaptcha는 자체 OCR(ddddocr) 우선이라 2captcha 미설정이어도 시도(2026-09-12)."""
+    api_key=(cfg.get('twocaptcha_api_key') or '').strip()
+    _2c_on=bool(api_key and cfg.get('twocaptcha_enabled'))
+    # kcaptcha는 OCR로 무료 해결 가능하므로 2captcha 없어도 진행. 그 외(recaptcha/turnstile)는 2captcha 필수.
+    if not _2c_on and cap_type!='kcaptcha':
+        return False,'2captcha 설정 없음','',{}
+
+    try:
         from selenium.webdriver.common.by import By
-        solver=TwoCaptcha(api_key)
-        
+        solver=None
+        if _2c_on:
+            from twocaptcha import TwoCaptcha
+            solver=TwoCaptcha(api_key)
+
         # recaptcha 처리
         if cap_type=='recaptcha':
             # sitekey는 여러 위치에 있을 수 있다: data-sitekey 속성 / g-recaptcha 클래스 /
@@ -2161,24 +2185,30 @@ def solve_captcha_with_2captcha(d,site,cap_type,cfg,timeout=300):
             except Exception as e:
                 return False,f'recaptcha 해결 실패: {str(e)[:80]}','',{}
         
-        # kcaptcha (이미지) 처리
+        # kcaptcha (이미지) 처리 — ★자체 OCR 우선(2026-09-12): ddddocr로 무료 해결, 실패 시에만 2captcha.
         elif cap_type=='kcaptcha':
             image_data=_captcha_image_data(d)
             if not image_data:
                 return False,'captcha 이미지를 찾을 수 없음','',{}
-            
             import base64, tempfile
             base64_str=image_data.split(',')[1] if ',' in image_data else image_data
             image_bytes=base64.b64decode(base64_str)
-            
+            # ① 자체 OCR(ddddocr) 우선 — 비용 0. 결과가 3~8자 영숫자면 채택.
+            _ocr=_ocr_kcaptcha(image_bytes)
+            if _ocr and 3<=len(_ocr)<=8:
+                _record_captcha_usage('kcaptcha_ocr',True,cfg)   # OCR 성공 원장(2captcha 비용 0)
+                add_log(f'[kcaptcha OCR] 자체해결 "{_ocr}" (2captcha 미사용)')
+                return True,'kcaptcha OCR 해결',_ocr,{'type':'kcaptcha','answer':_ocr,'ocr':True}
+            # ② OCR 실패/불확실 → 2captcha 폴백(설정돼 있을 때만)
+            if not _2c_on or solver is None:
+                return False,f'kcaptcha OCR 불확실("{_ocr}")·2captcha 미설정','',{}
             with tempfile.NamedTemporaryFile(suffix='.png',delete=False) as f:
                 f.write(image_bytes); temp_path=f.name
-            
             try:
                 result=solver.normal(temp_path)
                 answer=result.get('code') or str(result)
                 _record_captcha_usage('kcaptcha',True,cfg)
-                return True,'kcaptcha 해결 완료',answer,{'type':'kcaptcha','answer':answer}
+                return True,'kcaptcha 해결 완료(2captcha)',answer,{'type':'kcaptcha','answer':answer}
             except Exception as e:
                 return False,f'kcaptcha 해결 실패: {str(e)[:80]}','',{}
             finally:
