@@ -56,6 +56,7 @@ SERVER_TOKEN= os.environ.get("CHIRASHI_TOKEN") or "cae3aaa53d6f3576a1c1f6a258f79
 #  DuckDuckGo 무료 검색이 서버보다 훨씬 덜 차단됨 → 키 없이 발굴 가능(대표님 지시 '키없이 무료').
 SEARCH_PROVIDER = os.environ.get("PC_SEARCH_PROVIDER", "ddg")
 BRAVE_KEY   = os.environ.get("BRAVE_KEY", "")        # brave 사용 시(선택)
+_BRAVE_402  = False   # ★Brave 크레딧 소진 감지 시 True → 그 실행 남은 쿼리를 DDG로 전환(2026-09-12)
 GOOGLE_KEY  = os.environ.get("GOOGLE_KEY", "")       # google 사용 시(선택)
 GOOGLE_CX   = os.environ.get("GOOGLE_CX", "")        # google 사용 시(검색엔진 ID)
 # ──────────────────────────────────────────────────────
@@ -106,7 +107,9 @@ def brave_search(query, count=10):
                                   "X-Subscription-Token": BRAVE_KEY},
                          timeout=25)
         if r.status_code == 402:
-            log("  Brave 402 — 쿼터 초과(잠시 후/내일 재시도)"); return []
+            global _BRAVE_402
+            _BRAVE_402 = True   # ★크레딧 소진 신호 — run_once가 이번 실행 남은 쿼리를 DDG로 전환(2026-09-12 대표님 실측)
+            log("  Brave 402 — 크레딧 소진 → 무료 발굴(DDG)로 전환"); return []
         if r.status_code >= 400:
             log(f"  Brave {r.status_code}: {r.text[:80]}"); return []
         data = r.json()
@@ -286,7 +289,11 @@ def run_once(max_queries):
     log(f"검색어 {len(queries)}개(전체 {total}개 중 {cur+1}~{cur+len(queries)}) · 스킵 {len(skip)}개 · {prov}")
 
     found = {}     # domain → url (도메인당 1개만; 서버가 게시판 축약)
+    global _BRAVE_402; _BRAVE_402=False
     for i, q in enumerate(queries, 1):
+        # ★Brave 크레딧 소진(402) 감지되면 즉시 DDG로 전환해 이번 실행을 살린다(대표님 실측 2026-09-12).
+        if prov == "brave" and _BRAVE_402:
+            prov = "ddg"; log("  → Brave 크레딧 소진 감지: 이번 실행 DDG(무료)로 전환")
         urls = do_search(q, prov)
         new_here = 0
         for u in urls:

@@ -6611,7 +6611,12 @@ def auto_signup_guarded(site, submit=True, timeout=100):
         try:
             box['ret']=auto_signup(site,submit=submit)
         except Exception as e:
-            box['ret']=(False,f'가입 처리 예외: {str(e)[:80]}')
+            _em=str(e)
+            # ★가입 중 alert이 '휴대폰/본인/실명 인증'이면 진짜 인증필수 사이트 → 예외 아닌 '인증필수'로 분류(재시도 안 함).
+            if any(k in _em for k in ('휴대폰','본인인증','실명','인증해주','핸드폰')):
+                box['ret']=(False,'본인인증(휴대폰) 필요 — 자동가입 불가(영구 제외)')
+            else:
+                box['ret']=(False,f'가입 처리 예외: {_em[:80]}')
         finally:
             box['done']=True
     t=_th.Thread(target=_work,name=f'SUWORK-{secrets.token_hex(3)}',daemon=True)
@@ -7360,7 +7365,10 @@ def auto_pipeline_once(limit=5):
                     with _pipe_lock: signed+=1
                     _just_signed=True
                 else:
-                    _cand_set(c['id'],status='rejected',reject_reason=f'자동가입 실패: {msg_su[:80]}')
+                    # ★본인인증(휴대폰) 필수 사이트는 phone_cert 마킹 → 앞으로 자동가입 시도 자체를 안 함(7261 manual_signup 분류).
+                    _pc=any(k in str(msg_su) for k in ('본인인증','휴대폰','실명','인증해주'))
+                    _cand_set(c['id'],status='rejected',reject_reason=f'자동가입 실패: {msg_su[:80]}',
+                              **({'signup_phone_cert':True} if _pc else {}))
                     with _pipe_lock: results.append({'name':name,'stage':'signup','ok':False,'msg':msg_su})
                     add_log(f'[자동가입 실패] {name} — {str(msg_su)[:90]}')
                     return   # (병렬 처리: continue → return)
