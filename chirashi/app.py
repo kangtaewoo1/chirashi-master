@@ -7551,9 +7551,17 @@ def auto_pipeline_once(limit=5):
                     results.append({'name':name,'stage':'post','ok':True,'url':result_url})
                 add_log(f'[발행가능 등록] {name} — 검증 통과 → 발행가능 {result_url}'.rstrip())  # URL 포함 → 클릭 가능
             elif ok:
-                _cand_set(c['id'],status='rejected',reject_reason='발행됨(결과 URL 확인 불가)')
-                with _pipe_lock: results.append({'name':name,'stage':'post','ok':False,'msg':'결과 URL 없음'})
-                add_log(f'[탈락] {name} — 발행됐으나 결과 URL 확인 불가')
+                # ★발행 성공했는데 결과가 URL이 아닌 텍스트('등록됨' 등)여도 발행은 된 것 → 탈락 아닌 승격(2026-09-12 대표님 approved 정체 실측).
+                #   기존엔 result_url이 http가 아니면 되는 사이트를 버려 approved가 안 늘었음. 후보 URL을 대체 result_url로 써서 발행처 등록.
+                _alt_url=c.get('url') or tmp.get('write_entry_url') or tmp.get('site_url') or ''
+                _promote_candidate_to_site(c,_alt_url,write_url=tmp.get('learned',{}).get('write_url','') if isinstance(tmp.get('learned'),dict) else '',
+                                           bo=tmp.get('bo_table'),permission=True)
+                if tmp.get('mb_id'):
+                    set_site_flag(_promoted_site_id(c),mb_id=tmp.get('mb_id'),mb_pass=tmp.get('mb_pass'))
+                with _pipe_lock:
+                    registered+=1
+                    results.append({'name':name,'stage':'post','ok':True,'url':_alt_url})
+                add_log(f'[발행가능 등록] {name} — 발행 성공(결과 텍스트: {str(msg)[:30]}) → 발행가능')
             else:
                 reason,_,is_temp=classify_fail(msg)
                 # ★스팸/금지어 차단·본인인증 등 '구조적으로 안 되는 곳'은 재시도 무의미 → 즉시 영구 제외(2026-09-12).
@@ -8941,8 +8949,15 @@ def api_pipeline_report():
                 registered+=1
                 add_log(f'[발행가능 등록] {name} — PC노드 검증 통과 → 발행가능 {result_url}'.rstrip())
             elif ok:
-                _cand_set(cid,status='rejected',reject_reason='발행됨(결과 URL 확인 불가)',claimed_by='',claim_expire=0)
-                add_log(f'[탈락] {name} — PC노드 발행됐으나 결과 URL 확인 불가')
+                # ★발행 성공(ok)인데 결과 URL이 텍스트여도 발행은 된 것 → 탈락 아닌 승격(2026-09-12 approved 정체 실측).
+                #   cafe24 가짜성공은 위 8941에서 이미 ok=False로 걸러졌으므로 여기 오는 ok는 진짜 발행. 후보 URL로 승격.
+                _alt=c.get('url') or c.get('base') or ''
+                _promote_candidate_to_site(c,_alt,bo=r.get('bo_table') or c.get('bo_table'),permission=True)
+                if r.get('mb_id'):
+                    sid=_promoted_site_id(c)
+                    if sid: set_site_flag(sid,mb_id=r.get('mb_id'),mb_pass=r.get('mb_pass',''))
+                registered+=1
+                add_log(f'[발행가능 등록] {name} — PC노드 발행 성공(결과: {str(r.get("msg") or "등록됨")[:24]}) → 발행가능')
             else:
                 msg=str(r.get('msg') or '')[:90]; is_temp=bool(r.get('is_temp'))
                 att=int(c.get('pipeline_attempts',0) or 0)+1
