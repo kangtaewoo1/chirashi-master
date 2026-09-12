@@ -9344,6 +9344,31 @@ def api_cand_revive_rejected():
     add_log(f'[탈락 회수] {"(미리보기)" if dry else ""} 재시도 가치 높은 {matched}곳 회수 → 재검수 대기','정리')
     return jsonify({'ok':True,'dry_run':dry,'revived':matched,'by_reason':by_reason})
 
+@app.route('/api/candidates/unrevive-nonillegal',methods=['POST'])
+def api_cand_unrevive_nonillegal():
+    """★부활 롤백(대표님 지시 2026-09-13): revive-rejected가 도박판 외 부실 후보(가입실패·크래시·빡센검수)까지
+       706개 되살려 발행 큐를 막고 노드 hang을 유발. illegal(도박판)로 부활한 것만 남기고, 나머지 revived는
+       다시 rejected로 되돌린다. body: {dry_run?}."""
+    d=request.get_json(silent=True) or {}
+    dry=bool(d.get('dry_run'))
+    n=0; kept_ill=0
+    with _cand_lock:
+        cands=load_cands()
+        for c in cands:
+            if not c.get('revived_at'): continue
+            if c.get('illegal'):
+                kept_ill+=1; continue   # 도박판 부활 유지
+            # 나머지(부실 후보)만 되돌림 — 아직 발행처로 등록 안 됐고 claim 안 된 것
+            if c.get('status') in ('ready','approved') and not c.get('claimed_by'):
+                n+=1
+                if not dry:
+                    c['status']='rejected'
+                    c['reject_reason']='부활 롤백(도박판만 유지) — 원래 부실 후보'
+                    c.pop('revived_at',None)
+        if not dry and n: save_cands(cands)
+    add_log(f'[부활 롤백] {"(미리보기)" if dry else ""} 부실 {n}곳 rejected 복귀 · 도박판 {kept_ill}곳 유지','정리')
+    return jsonify({'ok':True,'dry_run':dry,'reverted':n,'kept_illegal':kept_ill})
+
 @app.route('/api/candidates/rescreen-cafe24',methods=['POST'])
 def api_cand_rescreen_cafe24():
     """★cafe24 후보만 재검수(토큰 허용, 2026-09-12): 인증 판정 로직 개선 후 기존 후보의 signup_email_verify/phone_cert를
