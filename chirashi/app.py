@@ -211,7 +211,7 @@ def _local_openai_usage_summary(cfg):
     _pk=(cfg.get('nvidia_api_key') if _pv=='nvidia' else (cfg.get('openrouter_api_key') if _pv=='openrouter' else cfg.get('openai_key')))
     # 모델명은 generate_post_gpt가 원장에 기록하는 것과 같은 기본값·strip을 적용해야 '현재 엔진' 집계가 어긋나지 않음(검토 지적)
     _pm=(((cfg.get('nvidia_model') or 'nvidia/nemotron-3-ultra-550b-a55b') if _pv=='nvidia'
-          else ((cfg.get('openrouter_model') or 'nvidia/nemotron-3-ultra-550b-a55b:free') if _pv=='openrouter' else (cfg.get('model') or 'gpt-4o-mini')))).strip()
+          else ((cfg.get('openrouter_model') or 'google/gemma-4-31b-it:free') if _pv=='openrouter' else (cfg.get('model') or 'gpt-4o-mini')))).strip()
     # ★현재 엔진(모델)만 따로 집계(대표님 2026-09-11 'OpenAI 화면에서 제거·실측으로'): OpenRouter는 응답 usage.cost 실비용,
     #   NVIDIA는 무료($0)라 둘 다 '실측'. 과거 gpt-4o-mini 행은 토큰 추정치라 by_model 표에서만 '추정·종료'로 보임.
     cur_rows=[x for x in rows if str(x.get('model') or '')==str(_pm or '')]
@@ -721,7 +721,7 @@ def load_config():
        'openai_admin_key':'','openai_monthly_budget_usd':20.0,
        # ★글 생성 엔진 제공자(대표님 2026-09-11 '비용 아끼고 싶다'): openai(유료) / nvidia(build.nvidia.com 무료 엔드포인트, OpenAI 호환)
        'llm_provider':'openrouter','nvidia_api_key':'','nvidia_model':'nvidia/nemotron-3-ultra-550b-a55b',
-       'openrouter_api_key':'','openrouter_model':'nvidia/nemotron-3-ultra-550b-a55b:free',   # openrouter.ai (저가·OpenAI 호환·실비용 응답)
+       'openrouter_api_key':'','openrouter_model':'google/gemma-4-31b-it:free',   # openrouter.ai (저가·OpenAI 호환·실비용 응답)
        'openai_input_price_per_million':0.15,'openai_cached_input_price_per_million':0.075,
        'openai_output_price_per_million':0.60,
        'workers':4,'password':'admin1234','post_delay':30,'daily_limit':0,
@@ -1569,7 +1569,7 @@ def generate_post_gpt(keywords, cfg, workroom_id=None):
         key=(cfg.get('nvidia_api_key') or '').strip(); model=(cfg.get('nvidia_model') or 'nvidia/nemotron-3-ultra-550b-a55b').strip()
         if not key: raise RuntimeError('nvidia_api_key 없음 — 설정 탭에 NVIDIA 키(nvapi-…) 입력')
     elif _prov=='openrouter':
-        key=(cfg.get('openrouter_api_key') or '').strip(); model=(cfg.get('openrouter_model') or 'nvidia/nemotron-3-ultra-550b-a55b:free').strip()
+        key=(cfg.get('openrouter_api_key') or '').strip(); model=(cfg.get('openrouter_model') or 'google/gemma-4-31b-it:free').strip()
         if not key: raise RuntimeError('openrouter_api_key 없음 — 설정 탭에 OpenRouter 키(sk-or-…) 입력')
     else:
         key=cfg.get('openai_key',''); model=cfg.get('model') or 'gpt-4o-mini'
@@ -11316,7 +11316,7 @@ DASH_HTML=r'''<header><div class="logo" onclick="window.scrollTo({top:0,behavior
 <label class="chk" style="color:var(--g)"><input type="checkbox" id="cUseGpt">AI로 본문 생성 (끄면 템플릿만)</label>
 <div class="f"><small>엔진</small><select id="cLlmProvider"><option value="openrouter">OpenRouter · 저가 (deepseek 등)</option><option value="nvidia">NVIDIA · 무료 (build.nvidia.com)</option></select></div>
 <div class="f"><small>OpenRouter 키 <a href="#" onclick="clearKey('openrouter_api_key');return false" title="서버에서 키 삭제">🗑</a></small><input type="password" id="cOpenrouterKey" placeholder="sk-or-v1-... (변경시만)"></div>
-<div class="f"><small>OpenRouter 모델</small><input id="cOpenrouterModel" placeholder="nvidia/nemotron-3-ultra-550b-a55b:free"></div>
+<div class="f"><small>OpenRouter 모델</small><input id="cOpenrouterModel" placeholder="google/gemma-4-31b-it:free"></div>
 <div class="f"><small>NVIDIA 키 <a href="#" onclick="clearKey('nvidia_api_key');return false" title="서버에서 키 삭제">🗑</a></small><input type="password" id="cNvidiaKey" placeholder="nvapi-... (변경시만)"></div>
 <div class="f"><small>NVIDIA 모델</small><input id="cNvidiaModel" placeholder="nvidia/nemotron-3-ultra-550b-a55b"></div>
 <div class="row" style="margin:4px 0 0;gap:5px"><button class="btn btn-g btn-xs" onclick="window.open('https://openrouter.ai','_blank')">OpenRouter 사이트 ↗</button><button class="btn btn-d btn-xs" onclick="window.open('https://openrouter.ai/settings/credits','_blank')">크레딧 충전 ↗</button><button class="btn btn-d btn-xs" onclick="loadOpenAIUsage()">사용량 새로고침</button></div>
