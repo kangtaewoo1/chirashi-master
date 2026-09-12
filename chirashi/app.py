@@ -6907,7 +6907,12 @@ def _llm_for_nodes():
             'nvidia_api_key':(c.get('nvidia_api_key') or '').strip(),
             'nvidia_model':(c.get('nvidia_model') or '').strip(),
             'openrouter_api_key':(c.get('openrouter_api_key') or '').strip(),
-            'openrouter_model':(c.get('openrouter_model') or '').strip()}
+            'openrouter_model':(c.get('openrouter_model') or '').strip(),
+            # ★IMAP도 노드에 내려줌(2026-09-12): 대표님이 관제실 한 곳에 지메일 앱비번 넣으면 노드가 cafe24 이메일인증을
+            #   그 지메일로 자동처리. 노드 로컬 config에 따로 안 넣어도 됨(LLM·Brave와 같은 단일기준 패턴).
+            'imap_email':(c.get('imap_email') or '').strip(),
+            'imap_password':(c.get('imap_password') or '').strip(),
+            'imap_host':(c.get('imap_host') or 'imap.gmail.com').strip()}
 
 def _has_write_path(c):
     """게시판형(글쓰기 가능성) 후보인지 — auto_pipeline_once와 /api/pipeline/claim 공통 판정(DRY)."""

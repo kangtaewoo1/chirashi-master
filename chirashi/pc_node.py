@@ -79,7 +79,7 @@ except Exception as e:
 _SERVER_LLM = {}
 
 def _apply_llm(cfg):
-    """서버 LLM 설정을 cfg에 반영. 서버가 안 주면(옛 서버) 로컬 값 유지."""
+    """서버 LLM·IMAP 설정을 cfg에 반영. 서버가 안 주면(옛 서버) 로컬 값 유지."""
     try:
         s = _SERVER_LLM
         if s.get("provider"): cfg["llm_provider"] = s["provider"]
@@ -87,6 +87,10 @@ def _apply_llm(cfg):
         if s.get("nvidia_model"): cfg["nvidia_model"] = s["nvidia_model"]
         if s.get("openrouter_api_key"): cfg["openrouter_api_key"] = s["openrouter_api_key"]
         if s.get("openrouter_model"): cfg["openrouter_model"] = s["openrouter_model"]
+        # ★IMAP(2026-09-12): 서버가 내려준 지메일 앱비번을 노드 cfg에 반영 → cafe24 이메일인증 자동처리.
+        if s.get("imap_email"): cfg["imap_email"] = s["imap_email"]
+        if s.get("imap_password"): cfg["imap_password"] = s["imap_password"]
+        if s.get("imap_host"): cfg["imap_host"] = s["imap_host"]
     except Exception:
         pass
     return cfg
@@ -101,10 +105,25 @@ def _claim(n):
         if r.status_code != 200:
             log(f"claim 실패 HTTP {r.status_code}"); return []
         d = r.json()
-        if isinstance(d.get("llm"), dict): _SERVER_LLM.update(d["llm"])   # 서버 LLM 설정 보관
+        if isinstance(d.get("llm"), dict): _SERVER_LLM.update(d["llm"]); _sync_imap_to_local(d["llm"])   # 서버 LLM·IMAP 보관
         return d.get("candidates") or []
     except Exception as e:
         log(f"claim 오류: {e}"); return []
+
+def _sync_imap_to_local(s):
+    """서버가 내려준 IMAP을 노드 로컬 config.json에 저장(2026-09-12). ★_imap_wait_verify/learn_signup_profile이
+       load_config()로 IMAP을 직접 읽으므로, cfg 인자 반영만으론 안 되고 로컬 파일에 박아야 함. 값이 바뀔 때만 저장."""
+    try:
+        em=(s.get("imap_email") or "").strip(); pw=(s.get("imap_password") or "").strip()
+        if not em or not pw: return
+        c = app.load_config()
+        if c.get("imap_email")==em and c.get("imap_password")==pw: return   # 이미 최신
+        c["imap_email"]=em; c["imap_password"]=pw
+        if s.get("imap_host"): c["imap_host"]=s["imap_host"]
+        app.save_config(c)
+        log("서버 IMAP(지메일) 로컬 반영 — cafe24 이메일인증 자동처리 활성")
+    except Exception as e:
+        log(f"IMAP 로컬반영 실패(무시): {str(e)[:60]}")
 
 
 def _report(results):
