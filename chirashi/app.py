@@ -5129,9 +5129,14 @@ def reconcile_sites():
                     s['auto_dropped_at']=now; locked+=1
                 kept.append(s); continue
             # 검증된 사이트는 오류/데모가 아닌 한 보호(일시 실패로 삭제 안 함)
+            # ★잠금 완화(대표님 '발행가능 41 며칠째 그대로' 2026-09-12): 실게시 검증된 사이트가 일시적 실패
+            #   몇 번에 잠기면 발행가능 수가 안 늠. 일시적 실패로는 절대 안 잠그고, 비일시적 실패도 30회 넘어야 잠금.
             if verified and not edr:
-                if int(s.get('fail_streak',0) or 0)>=FAIL_STREAK_DROP+2 and s.get('permission'):
-                    s['permission']=False; s['auto_drop_reason']=f'검증됨이나 연속 실패 {s.get("fail_streak")}회 — 발행 잠금'
+                _fsv=int(s.get('fail_streak',0) or 0)
+                try: _tmpv=classify_fail(str(s.get('last_fail_reason') or ''))[2]
+                except Exception: _tmpv=False
+                if (not _tmpv) and _fsv>=30 and s.get('permission'):
+                    s['permission']=False; s['auto_drop_reason']=f'검증됨이나 연속 실패 {_fsv}회(비일시적) — 발행 잠금'
                     s['auto_dropped_at']=now; locked+=1
                 kept.append(s); continue
             # 안 되는 사이트(오류/데모·기존 rejected·영구차단) → 목록에서 삭제
@@ -8347,7 +8352,7 @@ def chk():
     #  /api/test/* = 발행 테스트 트리거(등록 사이트에 실제 글1건 발행해 검증).
     _p=request.path
     if _p=='/api/version': return  # 배포 SHA 확인 — 공개(민감정보 없음)
-    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/sites/unlock-cafe24','/api/sites/purge-fake-cafe24','/api/candidates/rescreen-cafe24','/api/candidates/revive-rejected','/api/regions/normalize-existing','/api/site-board','/api/imap/test','/api/openai/usage','/api/config/clear-key','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/report-site','/api/unlocker/test','/api/sbr/test') or _p.startswith('/api/test/'):
+    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/sites/unlock-cafe24','/api/sites/unlock-verified','/api/sites/purge-fake-cafe24','/api/candidates/rescreen-cafe24','/api/candidates/revive-rejected','/api/regions/normalize-existing','/api/site-board','/api/imap/test','/api/openai/usage','/api/config/clear-key','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/report-site','/api/unlocker/test','/api/sbr/test') or _p.startswith('/api/test/'):
         tok=(request.args.get('token') or '').strip()
         cfgtok=(load_config().get('log_token') or '').strip()
         if cfgtok and tok==cfgtok:
@@ -8810,6 +8815,31 @@ def api_sites_unlock_cafe24():
         if unlocked: save_sites(sites)
     add_log(f'[Cafe24 잠금해제] {len(unlocked)}곳 발행 재개(로컬크롬) — {dom or "전체 SBR실패분"}','파이프라인')
     return jsonify({'ok':True,'unlocked':len(unlocked),'sites':unlocked})
+
+@app.route('/api/sites/unlock-verified',methods=['POST'])
+def api_sites_unlock_verified():
+    """★실게시 검증된(verified_post_url·write_test passed) 사이트가 이후 연속실패로 잠긴(permission=False) 것을
+       일괄 재허용(대표님 '발행가능 41 며칠째 그대로' 2026-09-12). 플랫폼 무관. 오탐 수정 후 다시 될 수 있으므로 재개.
+       fail_streak·auto_drop 리셋 + permission=True + status idle. body: {dry_run?}"""
+    d=request.get_json(silent=True) or {}
+    dry=bool(d.get('dry_run'))
+    unlocked=[]
+    with POST_LOCK:
+        sites=load_sites()
+        for s in sites:
+            _verified=str(s.get('verified_post_url') or '')[:4]=='http'
+            _passed=(s.get('write_test_status')=='passed')
+            _locked=(not s.get('permission')) or (s.get('status')=='failed') or bool(s.get('auto_dropped_at'))
+            if (_verified or _passed) and _locked:
+                unlocked.append((s.get('name') or s.get('site_url') or '')[:34])
+                if not dry:
+                    s['permission']=True; s['fail_streak']=0
+                    s.pop('last_fail_reason',None); s.pop('auto_drop_reason',None); s.pop('auto_dropped_at',None)
+                    s['pc_claim_by']=''; s['pc_claim_expire']=0
+                    if s.get('status')=='failed': s['status']='idle'
+        if unlocked and not dry: save_sites(sites)
+    add_log(f'[발행 잠금해제] {"(미리보기)" if dry else ""} 검증됐던 {len(unlocked)}곳 발행 재개','파이프라인')
+    return jsonify({'ok':True,'dry_run':dry,'unlocked':len(unlocked),'sites':unlocked[:30]})
 
 @app.route('/api/pipeline/claim',methods=['POST'])
 def api_pipeline_claim():
