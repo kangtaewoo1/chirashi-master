@@ -740,7 +740,7 @@ def load_config():
        # 유니크 발급하고 IMAP으로 인증메일을 읽는다(일회용 도메인 차단 게시판도 통과). App Password 사용.
        'imap_email':'','imap_password':'','imap_host':'imap.gmail.com',
        'twocaptcha_api_key':'','twocaptcha_enabled':False,
-       'http_publish_enabled':False,  # browserless(requests) — gnuboard5 anti-CSRF(token)로 대부분 게시판이 거부. 보류.
+       'http_publish_enabled':True,  # ★browserless(requests) 초고속발행(~2~3초) — CSRF token 전송 추가(2026-09-13)로 활성화. 실패 시 셀레늄 자동 폴백.
        'public_base_url':'https://google.twseo.kr',  # 업로드 이미지 절대 URL 기준 도메인(외부 게시판 로드용)
        'twocaptcha_price_recaptcha_usd':0.003,'twocaptcha_price_image_usd':0.0005,
        'brave_price_per_query_usd':0.005,  # Pro 플랜 기준 쿼리당 $0.005(설정 탭에서 변경 가능)
@@ -3006,6 +3006,10 @@ def gnuboard_post_http(site, title, content_html):
         'wr_subject':_strip_non_bmp(title),
         'wr_content':_strip_non_bmp(content_html),
     }
+    # ★gnuboard5 CSRF 토큰(2026-09-13 최적화): get_token()이 심는 hidden token을 함께 보내야 write_update.php가
+    #   거부 안 함(이게 빠져서 HTTP 발행이 대부분 거부됐던 원인 — 원저자 '보류' 사유). 있으면 전달.
+    _tok=_hidden('token','')
+    if _tok: data['token']=_tok
     # w_time(스팸방지 타임스탬프)이 폼에 있으면 그대로 전달
     wt=_hidden('w_time','');
     if wt: data['w_time']=wt
@@ -3046,7 +3050,7 @@ def gnuboard_post_http(site, title, content_html):
                 try:
                     rr=s.get(f'{bbs}/write.php',params={'bo_table':bo},timeout=12,verify=False)
                     h2=rr.text or ''
-                    for fld in ('uid','w_time','w','wr_id'):
+                    for fld in ('uid','w_time','w','wr_id','token'):
                         m2=re.search(r'<input[^>]*name=["\']'+fld+r'["\'][^>]*value=["\']([^"\']*)["\']',h2,re.I)
                         if m2: data[fld]=m2.group(1)
                 except Exception: pass
@@ -3994,7 +3998,7 @@ def cafe24_post(site, title, content_html, skip_login=False):
     except Exception: pass
     dismiss_alerts(d)
     curl=''
-    for _ in range(30):
+    for _ in range(20):   # ★15s→10s(2026-09-13 속도최적화): 성공 상세URL 이동 시 즉시 break라 성공엔 영향 없음. 실패 상한만 축소.
         try: curl=d.current_url or ''
         except Exception: curl=''
         _cl=curl.lower()
@@ -5809,9 +5813,73 @@ def brave_search(cfg, query, start=1, num=10):
     return [{'url':it.get('url',''),'title':it.get('title',''),'snippet':it.get('description','')}
             for it in rows if it.get('url')]
 
+# ★DDG 무료 검색(2026-09-13 대표님 '발굴 더 잘되게'): 서버 Brave 402(크레딧 소진) 시 무료 폴백.
+#   pc_discovery의 ddg_search를 서버로 이식. 키 불필요·무료. 403이면 lite 엔드포인트로 1회 재시도.
+_DDG_UAS_SRV=['Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36',
+              'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15']
+def ddg_search(cfg, query, start=1, num=10, _retry=0):
+    import requests as _rq, urllib.parse as _up
+    ua=_DDG_UAS_SRV[_retry % len(_DDG_UAS_SRV)]
+    endpoint="https://lite.duckduckgo.com/lite/" if _retry>=1 else "https://html.duckduckgo.com/html/"
+    try:
+        r=_rq.post(endpoint,data={'q':query,'kl':'kr-kr'},
+                   headers={'User-Agent':ua,'Accept-Language':'ko-KR,ko;q=0.9','Referer':'https://duckduckgo.com/','Accept':'text/html'},
+                   timeout=12,verify=False)
+        if r.status_code==403 and _retry<1:
+            time.sleep(2); return ddg_search(cfg,query,start,num,_retry+1)
+        if r.status_code>=400: return []
+        html=r.text or ''; out=[]
+        for u in re.findall(r'href="([^"]*uddg=[^"]+)"',html):
+            m=re.search(r'uddg=([^&]+)',u)
+            if m: out.append(_up.unquote(m.group(1)))
+        if not out:
+            for u in re.findall(r'<a[^>]+class="result__a"[^>]+href="([^"]+)"',html):
+                m=re.search(r'uddg=([^&]+)',u); out.append(_up.unquote(m.group(1)) if m else u)
+        return [{'url':u,'title':'','snippet':''} for u in out if u.startswith('http')]
+    except Exception:
+        return []
+
+def naver_web_search(cfg, query, start=1, num=10):
+    """네이버 통합검색(무료·키불필요). DDG IP차단 시 폴백. 네이버 내부링크는 제외."""
+    import requests as _rq
+    _SKIP=('naver.com','naver.net','pstatic.net','nid.naver','shopping.naver','dict.naver','map.naver','blog.naver','cafe.naver','search.naver')
+    try:
+        r=_rq.get('https://search.naver.com/search.naver',params={'query':query},
+                  headers={'User-Agent':_DDG_UAS_SRV[0],'Accept-Language':'ko-KR,ko;q=0.9'},timeout=15,verify=False)
+        if r.status_code>=400: return []
+        urls=re.findall(r'href="(https?://[^"]+)"',r.text or '')
+        seen=set(); out=[]
+        for u in urls:
+            if any(s in u for s in _SKIP): continue
+            d=_domain_of(u)
+            if d in seen: continue
+            seen.add(d); out.append({'url':u,'title':'','snippet':''})
+        return out[:num*2]
+    except Exception:
+        return []
+
+def _free_search(cfg, query, start, num):
+    """무료 검색 다단 폴백: DDG → 네이버. 둘 다 막히면 빈 결과(발굴 스킵)."""
+    r=ddg_search(cfg,query,start,num)
+    if r: return r
+    return naver_web_search(cfg,query,start,num)
+
 def web_search(cfg, query, start=1, num=10):
     provider=(cfg.get('search_provider') or 'brave').lower()
-    return google_search(cfg,query,start,num) if provider=='google' else brave_search(cfg,query,start,num)
+    if provider=='ddg':
+        return _free_search(cfg,query,start,num)
+    if provider=='google':
+        try:
+            r=google_search(cfg,query,start,num)
+            return r if r else _free_search(cfg,query,start,num)
+        except Exception: return _free_search(cfg,query,start,num)
+    # brave(기본): 실패(402 크레딧소진·429·키오류 등)면 무료(DDG→네이버)로 폴백 → 발굴 안 멈춤.
+    try:
+        r=brave_search(cfg,query,start,num)
+        return r if r else _free_search(cfg,query,start,num)
+    except Exception as e:
+        add_log(f'[발굴] Brave 실패({str(e)[:36]}) → 무료 검색(DDG/네이버)','발굴')
+        return _free_search(cfg,query,start,num)
 
 def _post_read_block_reason(url):
     """발행된 글 URL을 '비로그인'으로 열어 실제 본문이 읽히는지 확인. 읽기 차단이면 사유 문자열,
