@@ -742,6 +742,7 @@ def load_config():
        'twocaptcha_api_key':'','twocaptcha_enabled':False,
        'http_publish_enabled':True,  # ★browserless(requests) 초고속발행(~2~3초) — CSRF token 전송 추가(2026-09-13)로 활성화. 실패 시 셀레늄 자동 폴백.
        'allow_illegal_boards':True,  # ★대표님 지시 2026-09-13 '도박은 나랑 무관, 글만 써지면 발행': illegal(도박어 도배) 게시판도 탈락 안 시키고 발행. False로 되돌리면 원래대로 차단.
+       'cafe24_max_per_claim':1,     # ★대표님 지시 2026-09-13 'cafe24 동시처리 줄이기': 한 claim 배치당 cafe24 최대 개수(Turnstile로 무겁고 hang 잦아 슬롯 독점 방지). 나머지 슬롯은 그누보드 등으로 채움.
        'public_base_url':'https://google.twseo.kr',  # 업로드 이미지 절대 URL 기준 도메인(외부 게시판 로드용)
        'twocaptcha_price_recaptcha_usd':0.003,'twocaptcha_price_image_usd':0.0005,
        'brave_price_per_query_usd':0.005,  # Pro 플랜 기준 쿼리당 $0.005(설정 탭에서 변경 가능)
@@ -9101,17 +9102,26 @@ def api_pipeline_claim():
               and (c.get('source')=='manual' or float(c.get('last_pipeline_at',0) or 0) < _cool)]
         # 비회원(바로발행) 우선 → 그다음 로그인. (서버 파이프라인과 동일한 우선순위 감각)
         def _prio(c):
-            # ★수동 추가(source='manual') 최우선(2026-09-12 대표님 '내가 링크 주면 우선순위로 올려서'): 대표님이 직접 넣은
-            #   URL은 다른 무엇보다 먼저 claim해 노드가 즉시 처리. 스크린샷 '수동 URL은 최우선 처리'와 일치.
+            # ★수동 추가(source='manual') 최우선(2026-09-12 대표님 '내가 링크 주면 우선순위로 올려서').
             manual=1 if (c.get('source')=='manual') else 0
-            is24=c.get('platform')=='cafe24'   # ★PC만 할 수 있는 cafe24를 최우선(서버는 이제 안 건드림)
+            is24=c.get('platform')=='cafe24'
             direct=c.get('write_form') and not c.get('login_required')
-            # ★게시판 유형 우선순위(2026-09-12 대표님 '다른 카페24로'): 상품Q&A는 승인/상품연결/스팸필터로 글이 안 남는
-            #   경우가 많아 뒤로 미루고, 자유게시판·후기·공지형(비회원 바로쓰기 잘 됨)을 먼저 태운다.
+            # ★cafe24 우선순위 강등(2026-09-13 대표님 지시 실측): cafe24가 최우선이라 매 배치 4슬롯을 다 차지→Turnstile/hang으로 처리량 0.
+            #   그누보드 등 잘 되는 비회원 바로쓰기를 먼저 태우고, cafe24는 뒤로(아래 배치당 개수 상한과 함께).
             board_ok=1 if (is24 and not _cafe24_is_qa_board(c.get('url'))) else 0
-            return (manual, 1 if is24 else 0, board_ok, 1 if direct else 0, 1 if not c.get('captcha') else 0, c.get('score',0))
+            return (manual, 1 if direct else 0, 1 if not is24 else 0, board_ok, 1 if not c.get('captcha') else 0, c.get('score',0))
         elig.sort(key=_prio,reverse=True)
-        for c in elig[:n]:
+        # ★cafe24 배치당 상한(2026-09-13 대표님 'cafe24 동시처리 줄이기'): Turnstile로 무겁고 hang 잦아
+        #   한 배치에서 cafe24가 n슬롯을 독점하면 그누보드가 밀려 처리량 0. 배치당 cafe24 최대 _c24max개만.
+        _c24max=max(1,int(load_config().get('cafe24_max_per_claim',1) or 1))
+        _c24n=0; _sel=[]
+        for c in elig:
+            if len(_sel)>=n: break
+            if c.get('platform')=='cafe24':
+                if _c24n>=_c24max: continue   # 이 배치 cafe24 상한 초과 → 건너뛰고 다른 플랫폼 채움
+                _c24n+=1
+            _sel.append(c)
+        for c in _sel:
             c['claimed_by']=node_id; c['claim_expire']=now+ttl
             c['last_pipeline_at']=now   # 쿨다운도 찍어 서버가 곧바로 다시 후보로 안 봄
             # PC가 발행에 필요로 하는 필드만 추려 전달(민감정보 최소화).
