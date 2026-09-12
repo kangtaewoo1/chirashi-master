@@ -8934,6 +8934,37 @@ def api_regions_normalize_existing():
         for ln in str(cfg.get('discover_direct_queries','') or '').splitlines():
             if pat.search(ln): hits.append('발굴: '+ln.strip()[:40])
         return jsonify({'ok':True,'diagnose':True,'damaged_count':len(hits),'samples':hits[:40]})
+    # ★복구 모드(2026-09-12): 첫 정규화 폴백 버그의 손상을 역변환으로 되돌린다.
+    #   러아→러시아, 24출장/24안마/24맛사지/24마사지→24시…. (러시아·24시가 실제 서비스어라 안전 역변환)
+    if d.get('restore'):
+        import re as _re
+        rdry=bool(d.get('dry_run'))
+        def _fix(t):
+            t=_re.sub(r'러아','러시아',t)
+            t=_re.sub(r'(?<!시)24(출장|안마|맛사지|마사지|타이|스웨디시|아로마)',r'24시\1',t)
+            return t
+        r_rooms=0; r_lines=0; smp=[]
+        with _json_lock(WORKROOMS_FILE):
+            rooms=load_json(WORKROOMS_FILE,[]) or []
+            for room in rooms:
+                csv=str(room.get('keyword_csv') or '')
+                if not csv.strip(): continue
+                nl=_fix(csv)
+                if nl!=csv:
+                    r_rooms+=1
+                    # 바뀐 라인 수 대략 집계
+                    for a,b in zip(csv.splitlines(),nl.splitlines()):
+                        if a!=b:
+                            r_lines+=1
+                            if len(smp)<15: smp.append(a.split(',')[0][:24]+' → '+b.split(',')[0][:24])
+                    if not rdry: room['keyword_csv']=nl
+            if not rdry and r_rooms: save_json(WORKROOMS_FILE,rooms)
+        dq=str(cfg.get('discover_direct_queries','') or ''); dqn=_fix(dq); dq_fixed=0
+        if dqn!=dq:
+            dq_fixed=sum(1 for a,b in zip(dq.splitlines(),dqn.splitlines()) if a!=b)
+            if not rdry: cfg['discover_direct_queries']=dqn; save_config(cfg)
+        add_log(f'[지역명 복구] {"(미리보기)" if rdry else ""} 작업실 {r_rooms}곳·{r_lines}줄 + 발굴 {dq_fixed}줄 러시아/24시 복원','정리')
+        return jsonify({'ok':True,'restore':True,'dry_run':rdry,'rooms_fixed':r_rooms,'lines_fixed':r_lines,'discover_fixed':dq_fixed,'samples':smp})
     changed_rooms=0; changed_lines=0; samples=[]
     with _json_lock(WORKROOMS_FILE):
         rooms=load_json(WORKROOMS_FILE,[]) or []
