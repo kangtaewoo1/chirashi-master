@@ -2884,7 +2884,12 @@ def _verify_post_by_title(d, bbs, bo, title):
         return None
     # 목록은 긴 제목을 잘라 보여주므로(행 텍스트가 제목의 접두어) 행⊆제목으로 매칭한다.
     # 또한 브랜드/전화 등 '이 글에만 있는' 특징 조각으로도 본문 전체를 대조한다.
-    frag=key[-12:] if len(key)>=12 else key   # 제목 뒤쪽(브랜드/전화)이 가장 변별적
+    # ★매칭 조각 다양화(2026-09-13 대표님 approved 정체 실측): 제목 뒤쪽(frag)만 보면 목록이 제목을 잘라
+    #   뒤쪽(브랜드/전화)이 안 보일 때 놓친다(실측: 목록엔 앞·중간 '셔츠룸/노래방'만 보임). 앞·중간 조각도 함께 본다.
+    #   단 남의 글 오탐 방지 위해 각 조각은 8자+ 핵심부만.
+    frags=[key[:12],key[-12:]] if len(key)>=12 else [key]
+    if len(key)>=20: frags.append(key[6:18])   # 중간 조각
+    frags=[f for f in dict.fromkeys(frags) if len(f)>=8]
     list_url=f'{bbs}/board.php?bo_table={bo}'
     for _ in range(3):
         try:
@@ -2900,7 +2905,7 @@ def _verify_post_by_title(d, bbs, bo, title):
         for a in anchors:
             try:
                 txt=norm(a.text)
-                if len(txt) >= 8 and (txt in key or key in txt):
+                if len(txt) >= 8 and (txt in key or key in txt or any(fr in txt for fr in frags)):
                     href=a.get_attribute('href') or ''
                     if 'wr_id=' in href:
                         return href
@@ -2909,7 +2914,7 @@ def _verify_post_by_title(d, bbs, bo, title):
         # 2) 목록 전체 텍스트에서 변별적 조각으로 확인(스킨이 제목을 잘라 a.text가 짧을 때)
         try:
             page=norm(d.find_element(By.TAG_NAME,'body').text)
-            if frag and frag in page:
+            if any(fr and fr in page for fr in frags):
                 # 가능하면 가장 최근(가장 큰) wr_id 를 붙여 뷰 URL을 만든다
                 try:
                     ids=[int(x) for x in re.findall(r'wr_id=(\d+)', d.page_source or '')]
