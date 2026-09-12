@@ -1095,21 +1095,30 @@ def normalize_region(name, cfg=None):
     return out
 
 _region_prefix_cache=None
+_region_si_set=None   # regions_full의 '시' 이름 집합(수원시·성남시 등, district가 '수원시 장안구'라 앞 토큰에서 추출)
 def _all_region_names():
     """regions_full.json의 모든 행정구역 원형명을 길이 내림차순으로(긴 것 먼저 매칭)."""
-    global _region_prefix_cache
+    global _region_prefix_cache,_region_si_set
     if _region_prefix_cache is not None: return _region_prefix_cache
-    names=set()
+    names=set(); sis=set()
     data=load_json(REGIONS_FILE,{})
     for province,districts in (data.items() if isinstance(data,dict) else []):
         names.add(province)
         for district,dongs in ((districts or {}).items() if isinstance(districts,dict) else []):
             names.add(district)
+            # 'OO시 XX구' 형태면 앞 토큰(OO시)을 시 집합에 + 단독 시명도 이름집합에
+            first=str(district).split(' ',1)[0]
+            if first.endswith('시'): sis.add(first); names.add(first)
+            elif district.endswith('시'): sis.add(district)
             for dong in (dongs or []):
                 d=str(dong).strip()
                 if d: names.add(d)
+    _region_si_set=sis
     _region_prefix_cache=sorted([n for n in names if n], key=len, reverse=True)
     return _region_prefix_cache
+def _region_sis():
+    if _region_si_set is None: _all_region_names()
+    return _region_si_set or set()
 
 def normalize_region_in_text(text, cfg=None):
     """조합 키워드('부평동셔츠룸', '부평동 셔츠룸')에서 '앞부분 지역명'만 정규화한다.
@@ -1122,21 +1131,37 @@ def normalize_region_in_text(text, cfg=None):
         head,rest=s.split(' ',1)
         nh=normalize_region(head,cfg)
         return (nh+' '+rest) if nh!=head else s
-    # 2) 붙여쓰기: regions_full 원형 접두어(긴 것 우선)로 지역 경계를 찾는다
+    # 2) 붙여쓰기: regions_full 원형 접두어(긴 것 우선)로 지역 경계를 찾는다(가장 신뢰).
     for name in _all_region_names():
         if len(name)>=2 and s.startswith(name) and len(s)>len(name):
             nn=normalize_region(name,cfg)
             return (nn+s[len(name):]) if nn!=name else s   # 예외면 원형 유지(개포동셔츠룸)
-    # 3) 접두어 매칭 실패 폴백: 앞에서부터 '지역명(시/구/동/읍/면 접미사) + 뒷부분' 경계를 정규식으로.
-    #    서울시노래방·역삼1동룸처럼 regions_full 원형에 없는 표기도 잡는다. 첫 접미사 위치까지를 지역으로 본다.
-    m=re.match(r'^(.{2,}?(?:특별자치도|특별자치시|특별시|광역시|시|군|구|\d*동|\d*읍|\d*면|\d+가))(.*)$', s)
-    if m:
-        reg,rest=m.group(1),m.group(2)
-        # rest가 비었으면(순수 지역 단독) 그냥 normalize_region
-        nr=normalize_region(reg,cfg)
-        if nr!=reg:
-            return nr+rest
-        return s
+    # 2-b) 원형에 숫자 행정동이 없어서(역삼1동≠역삼동) 매칭 실패한 경우: 숫자 정리한 접두어로 재매칭.
+    #     '역삼1동룸' → 접두어 '역삼1동'(정규식)만 숫자정리→'역삼동'이 원형이면 그 규칙 적용.
+    m2=re.match(r'^([가-힣]{2,}?\d+(?:동|읍|면|가))(.+)$', s)
+    if m2:
+        pref,rest=m2.group(1),m2.group(2)
+        base=re.sub(r'(\d+)가$','',pref); base=re.sub(r'(\d+)(동|읍|면)$',r'\2',base)
+        if base in _all_region_names() or True:
+            nn=normalize_region(pref,cfg)
+            if nn!=pref: return nn+rest
+    # 3) 폴백은 '시도 풀네임 접미사'와 '명백한 ~시'만 안전하게 처리.
+    #    ⚠️ 구/동/읍/면 단독 폴백은 금지(러시아→러아, 24시→24, 건대입구역→건대입역 등 오작동).
+    #    ⚠️ '역'이 들어간 문자열(지하철역명)은 절대 건드리지 않는다.
+    if '역' not in s:
+        m=re.match(r'^([가-힣]{2,4}(?:특별자치도|특별자치시|특별시|광역시))(.+)$', s)
+        if m:
+            nr=normalize_region(m.group(1),cfg)
+            if nr!=m.group(1): return nr+m.group(2)
+        # 광역시도 구어 축약: 서울시·부산시·인천시 등(원형은 서울특별시라 위 매칭 실패). _province_bucket으로 확인.
+        m=re.match(r'^([가-힣]{2,3}시)([가-힣].*)$', s)
+        if m and _province_bucket(m.group(1)[:-1]):
+            return m.group(1)[:-1]+m.group(2)   # 서울시노래방→서울노래방
+        # 명확한 ~시(시·군): regions_full의 실제 '시' 집합에 있을 때만(러시아·24시 같은 오인 방지).
+        m=re.match(r'^([가-힣]{2,4}시)([가-힣].*)$', s)
+        if m and m.group(1) in _region_sis():
+            nr=normalize_region(m.group(1),cfg)
+            if nr!=m.group(1): return nr+m.group(2)
     return s
 
 def _province_bucket(name):
