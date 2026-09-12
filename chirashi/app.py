@@ -8382,8 +8382,9 @@ def api_candidates():
              'rejected':sum(1 for c in cands if c.get('status')=='rejected'),
              'today_queries':st.get('queries',0),'today_found':st.get('found',0),
              'date':st.get('date','')}
-    # 후보 표시 상한 상향(대표님 '무제한'): 발굴이 쌓여도 다 보이게. summary는 전체 기준 집계.
-    return jsonify({'candidates':cands[:2000],'summary':summary})
+    # ★후보 표시 상한(대표님 '왜 2000 이상 안 느냐' 2026-09-12): 실제 후보가 2000 초과인데 UI가 2000에서
+    #   잘려 '최대 2000'처럼 보였다. 상한을 크게(20000) 올려 쌓인 후보를 다 보이게. summary.total은 전체 기준.
+    return jsonify({'candidates':cands[:20000],'summary':summary})
 
 @app.route('/api/candidates/discover',methods=['POST'])
 def api_cand_discover():
