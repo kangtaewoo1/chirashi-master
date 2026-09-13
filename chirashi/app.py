@@ -2135,6 +2135,15 @@ def _ocr_kcaptcha(image_bytes):
     try:
         raw=_DDDD_OCR.classification(image_bytes)
         s=re.sub(r'[^0-9A-Za-z가-힣]','',str(raw or ''))
+        # ★그누보드 kcaptcha는 표준이 '숫자 5자리'(2026-09-14 대표님 무료화 실측: OCR이 숫자에 o/l/m 등을
+        #   섞어 읽어 오답 다발). 결과가 숫자+소수 헷갈림글자로만 되어 있으면 닮은꼴 글자를 숫자로 교정해 숫자화.
+        #   (한글 포함이면 비표준 캡차라 원문 유지)
+        if s and not re.search(r'[가-힣]',s):
+            _map=str.maketrans({'o':'0','O':'0','l':'1','I':'1','i':'1','z':'2','Z':'2','s':'5','S':'5',
+                                'b':'6','B':'8','g':'9','q':'9','D':'0','Q':'0','A':'4','t':'7','T':'7','G':'6'})
+            d2=re.sub(r'\D','',s.translate(_map))
+            # 숫자만 남긴 게 kcaptcha 표준 길이(4~6)면 그걸 채택
+            if 4<=len(d2)<=6: return d2
         return s
     except Exception:
         return ''
