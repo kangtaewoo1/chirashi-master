@@ -3129,7 +3129,19 @@ def _verify_post_by_title(d, bbs, bo, title):
 _HTTP_UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
 
 def _solve_kcaptcha_bytes(img_bytes, cfg):
-    """kcaptcha 이미지 바이트를 2captcha로 풀어 답(숫자)을 반환. 실패 시 ''."""
+    """kcaptcha 이미지 바이트 → 답(숫자). ★무료 OCR(ddddocr) 우선(2026-09-14 대표님 '돈 없음·무료화').
+       HTTP 초고속발행 경로가 여태 2captcha만 써서 잔액0→'2captcha 풀이 실패' 791건의 주범이었다.
+       셀레늄 경로의 _ocr_kcaptcha와 동일하게 ddddocr로 무료 해결, 실패 시에만 2captcha(설정·잔액 있을 때)."""
+    # ① 무료 자체 OCR(ddddocr) — 비용 0
+    try:
+        _ocr=_ocr_kcaptcha(img_bytes)
+        if _ocr and 3<=len(_ocr)<=8:
+            _record_captcha_usage('kcaptcha_ocr',True,cfg)
+            _save_captcha_sample(img_bytes,_ocr,verified=False)   # 학습데이터(성공 시 verified 승격)
+            return _ocr
+    except Exception:
+        pass
+    # ② 폴백: 2captcha (설정·잔액 있을 때만)
     api_key=(cfg.get('twocaptcha_api_key') or '').strip()
     if not api_key or not cfg.get('twocaptcha_enabled'): return ''
     import tempfile
@@ -3143,8 +3155,9 @@ def _solve_kcaptcha_bytes(img_bytes, cfg):
             f.write(img_bytes); tp=f.name
         res=TwoCaptcha(api_key).normal(tp)
         ans=(res.get('code') if isinstance(res,dict) else str(res)) or ''
-        # 2captcha는 답을 반환하면(맞든 틀리든) 과금되므로 비용은 여기서 기록한다.
-        if ans: _record_captcha_usage('kcaptcha',True,cfg)
+        if ans:
+            _record_captcha_usage('kcaptcha',True,cfg)
+            _save_captcha_sample(img_bytes,re.sub(r'[^0-9A-Za-z가-힣]','',str(ans)),verified=True)
         return ans
     except Exception:
         return ''
@@ -3224,7 +3237,7 @@ def gnuboard_post_http(site, title, content_html):
             if not (ci.status_code<400 and ci.content and len(ci.content)>200):
                 return '','캡차 이미지 수신 실패'
             ans=_solve_kcaptcha_bytes(ci.content,cfg)
-            return (ans,'') if ans else ('','2captcha 풀이 실패')
+            return (ans,'') if ans else ('','kcaptcha OCR 불확실(무료) — 재시도')
         except Exception as e:
             return '',f'캡차 처리 오류({str(e)[:30]})'
     # ── 캡차 오답 시 새 이미지로 재시도(최대 3회) — 한 번 OCR 오답으로 글 날리지 않게(리뷰 지시) ──
