@@ -7,3 +7,5 @@ requests>=2.31
 cryptography>=42.0
 2captcha-python>=1.2.0
 ddddocr>=1.4
+SpeechRecognition>=3.10
+pydub>=0.25

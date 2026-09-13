@@ -2161,12 +2161,123 @@ def _save_captcha_sample(image_bytes, answer, verified=False):
     except Exception:
         pass   # 데이터 수집 실패가 가입/발행을 막으면 안 됨
 
+# ★recaptcha v2 오디오 자체풀이(대표님 지시 2026-09-14 '2captcha 잔액0·자체개발'): 오디오 challenge의
+#   mp3를 받아 무료 음성인식(SpeechRecognition→Google Web Speech, 실패 시 로컬 whisper)으로 텍스트 변환해 입력.
+#   2captcha 비용 0. kcaptcha OCR(ddddocr)과 같은 취지의 무료 캡차 해결.
+_SR_REC=None
+def _speech_to_text(wav_path):
+    """wav → 텍스트. Google Web Speech(무료·키불필요) 우선, 실패 시 로컬 whisper(있으면)."""
+    global _SR_REC
+    txt=''
+    try:
+        import speech_recognition as sr
+        if _SR_REC is None: _SR_REC=sr.Recognizer()
+        with sr.AudioFile(wav_path) as src:
+            audio=_SR_REC.record(src)
+        try:
+            txt=_SR_REC.recognize_google(audio, language='en-US')   # 무료 Google Web Speech
+        except Exception:
+            txt=''
+    except Exception:
+        txt=''
+    if not txt:
+        # 폴백: 로컬 whisper(설치돼 있으면). 완전 오프라인·무료.
+        try:
+            from faster_whisper import WhisperModel
+            _m=WhisperModel('base', device='cpu', compute_type='int8')
+            segs,_=_m.transcribe(wav_path, language='en')
+            txt=' '.join(s.text for s in segs)
+        except Exception:
+            pass
+    return re.sub(r'[^0-9a-zA-Z ]','',str(txt or '')).strip()
+
+def _solve_recaptcha_audio(d, cfg, max_try=2):
+    """recaptcha v2 오디오 challenge를 무료 음성인식으로 푼다. 성공 시 True.
+       흐름: 체크박스 iframe 클릭 → challenge iframe에서 오디오 버튼 → mp3 다운로드 → wav 변환 → STT → 입력 → 확인."""
+    from selenium.webdriver.common.by import By
+    import tempfile, urllib.request, subprocess, shutil
+    _ff=shutil.which('ffmpeg') or r'C:\Users\aveyd\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-8.1.1-full_build\bin\ffmpeg.exe'
+    def _frames(): return d.find_elements(By.CSS_SELECTOR,"iframe")
+    try:
+        # 1) 체크박스 iframe 클릭('로봇이 아닙니다')
+        anchor=None
+        for fr in _frames():
+            if 'api2/anchor' in (fr.get_attribute('src') or '') or 'recaptcha/api2/anchor' in (fr.get_attribute('src') or ''):
+                anchor=fr; break
+        if anchor:
+            d.switch_to.frame(anchor)
+            try:
+                cb=d.find_element(By.CSS_SELECTOR,"#recaptcha-anchor,.recaptcha-checkbox")
+                d.execute_script('arguments[0].click()',cb); time.sleep(2)
+            except Exception: pass
+            d.switch_to.default_content()
+        # 2) challenge(bframe) iframe에서 오디오 버튼
+        for _t in range(max_try):
+            bframe=None
+            for fr in _frames():
+                if 'api2/bframe' in (fr.get_attribute('src') or ''): bframe=fr; break
+            if not bframe: d.switch_to.default_content(); return False
+            d.switch_to.frame(bframe); time.sleep(1)
+            # 오디오 버튼(헤드폰) 클릭
+            try:
+                ab=d.find_element(By.CSS_SELECTOR,"#recaptcha-audio-button,button#recaptcha-audio-button")
+                d.execute_script('arguments[0].click()',ab); time.sleep(2)
+            except Exception:
+                pass
+            # 오디오 소스 URL
+            src=''
+            for sel in ("audio#audio-source","#audio-source","audio source","a.rc-audiochallenge-tdownload-link"):
+                try:
+                    el=d.find_element(By.CSS_SELECTOR,sel)
+                    src=el.get_attribute('src') or el.get_attribute('href') or ''
+                    if src: break
+                except Exception: pass
+            if not src:
+                d.switch_to.default_content(); return False
+            # 3) mp3 다운로드 → wav 변환 → STT
+            try:
+                tmpd=tempfile.mkdtemp(prefix='rc_')
+                mp3=os.path.join(tmpd,'a.mp3'); wav=os.path.join(tmpd,'a.wav')
+                req=urllib.request.Request(src,headers={'User-Agent':'Mozilla/5.0'})
+                with urllib.request.urlopen(req,timeout=20) as r, open(mp3,'wb') as f: f.write(r.read())
+                subprocess.run([_ff,'-y','-i',mp3,'-ar','16000','-ac','1',wav],capture_output=True,timeout=30)
+                answer=_speech_to_text(wav)
+            except Exception:
+                answer=''
+            finally:
+                try: shutil.rmtree(tmpd,ignore_errors=True)
+                except Exception: pass
+            if not answer:
+                # 새 challenge로 재시도(reload 버튼)
+                try:
+                    rl=d.find_element(By.CSS_SELECTOR,"#recaptcha-reload-button"); d.execute_script('arguments[0].click()',rl); time.sleep(2)
+                except Exception: pass
+                d.switch_to.default_content(); continue
+            # 4) 입력 + 검증
+            try:
+                inp=d.find_element(By.CSS_SELECTOR,"#audio-response,input#audio-response")
+                inp.clear(); inp.send_keys(answer); time.sleep(0.5)
+                vb=d.find_element(By.CSS_SELECTOR,"#recaptcha-verify-button"); d.execute_script('arguments[0].click()',vb); time.sleep(2.5)
+            except Exception:
+                d.switch_to.default_content(); continue
+            d.switch_to.default_content()
+            # 토큰 생겼는지(성공 판정): g-recaptcha-response 값
+            try:
+                tok=d.execute_script("var t=document.getElementById('g-recaptcha-response')||document.querySelector('textarea[name=\"g-recaptcha-response\"]');return t?t.value:'';")
+                if tok and len(tok)>20: return True
+            except Exception: pass
+        d.switch_to.default_content(); return False
+    except Exception:
+        try: d.switch_to.default_content()
+        except Exception: pass
+        return False
+
 def solve_captcha_with_2captcha(d,site,cap_type,cfg,timeout=300):
     """CAPTCHA 자동 해결. ★kcaptcha는 자체 OCR(ddddocr) 우선이라 2captcha 미설정이어도 시도(2026-09-12)."""
     api_key=(cfg.get('twocaptcha_api_key') or '').strip()
     _2c_on=bool(api_key and cfg.get('twocaptcha_enabled'))
-    # kcaptcha는 OCR로 무료 해결 가능하므로 2captcha 없어도 진행. 그 외(recaptcha/turnstile)는 2captcha 필수.
-    if not _2c_on and cap_type!='kcaptcha':
+    # kcaptcha=OCR 무료, recaptcha=오디오 음성인식 무료 → 2captcha 없어도 시도. turnstile만 2captcha 필수.
+    if not _2c_on and cap_type not in ('kcaptcha','recaptcha'):
         return False,'2captcha 설정 없음','',{}
 
     try:
@@ -2178,6 +2289,21 @@ def solve_captcha_with_2captcha(d,site,cap_type,cfg,timeout=300):
 
         # recaptcha 처리
         if cap_type=='recaptcha':
+            # ★무료 오디오 음성인식 우선(2026-09-14 대표님 '2captcha 잔액0·자체개발'): 비용 0.
+            #   성공하면 g-recaptcha-response 토큰이 페이지에 이미 심겨 있으므로 그대로 반환.
+            try:
+                if _solve_recaptcha_audio(d, cfg):
+                    _record_captcha_usage('recaptcha_audio',True,cfg)   # 무료(비용0) 원장
+                    add_log('[recaptcha] 오디오 음성인식 자체해결(2captcha 미사용)')
+                    _tok=''
+                    try: _tok=d.execute_script("var t=document.getElementById('g-recaptcha-response')||document.querySelector('textarea[name=\"g-recaptcha-response\"]');return t?t.value:'';")
+                    except Exception: pass
+                    return True,'recaptcha 오디오 해결',_tok,{'type':'recaptcha','token':_tok,'audio':True}
+            except Exception as _ae:
+                add_log(f'[recaptcha] 오디오 풀이 예외→2captcha 폴백: {str(_ae)[:50]}')
+            # 오디오 실패 → 2captcha 폴백(설정·잔액 있을 때만)
+            if not _2c_on or solver is None:
+                return False,'recaptcha 오디오 해결 실패·2captcha 미설정','',{}
             # sitekey는 여러 위치에 있을 수 있다: data-sitekey 속성 / g-recaptcha 클래스 /
             # reCAPTCHA iframe src의 ?k= 파라미터 / 페이지 소스 정규식.
             sitekey=None
