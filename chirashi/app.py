@@ -2122,6 +2122,17 @@ def _captcha_image_data(d):
 # ★kcaptcha 자체 OCR(대표님 지시 2026-09-12 '2captcha 돈 아깝다·자체개발'): ddddocr(캡차 특화 로컬 OCR)로
 #   그누보드 kcaptcha(전체 캡차의 ~95%, 단순 숫자/영문 이미지)를 무료·로컬로 해결. 실패 시에만 2captcha 폴백.
 _DDDD_OCR=None; _DDDD_TRIED=False
+def _ocr_available():
+    """무료 OCR(ddddocr) 사용 가능 여부. 서버(VPS)엔 미설치라 False, 노드(홈PC)엔 설치돼 True.
+       ★캡차 사이트를 OCR 되는 노드로 위임하는 판단에 씀(2026-09-14 대표님 '무료화·무SSH')."""
+    global _DDDD_OCR,_DDDD_TRIED
+    if _DDDD_OCR is not None: return True
+    if _DDDD_TRIED: return False
+    try:
+        import ddddocr; return True
+    except Exception:
+        return False
+
 def _ocr_kcaptcha(image_bytes):
     """kcaptcha 이미지(bytes) → OCR 텍스트. ddddocr 없거나 실패면 ''. 결과는 영숫자만 남겨 정규화."""
     global _DDDD_OCR,_DDDD_TRIED
@@ -3238,6 +3249,12 @@ def gnuboard_post_http(site, title, content_html):
     capm=re.search(r'g5_captcha_url\s*=\s*["\']([^"\']+)["\']',html)
     needs_cap=bool(capm) or ('captcha_key' in low) or ('kcaptcha' in low)
     cap_base=(capm.group(1) if capm else (base+'/plugin/kcaptcha')) if needs_cap else ''
+    # ★캡차 사이트인데 무료 OCR(ddddocr)이 없는 환경(서버 VPS)이면: 2captcha 잔액0으로 삽질하지 말고
+    #   즉시 None 반환 → 노드(ddddocr 됨)가 claim해 무료로 처리하도록 위임(2026-09-14 대표님 지시).
+    if needs_cap and not _ocr_available():
+        _2c=(cfg.get('twocaptcha_api_key') or '').strip() and cfg.get('twocaptcha_enabled')
+        if not _2c:
+            return None,'캡차 사이트 — 무료 OCR 없는 환경(노드 위임)'
     def _fetch_captcha_answer():
         """세션에 정답 심기 → 이미지 GET → 2captcha 풀이. (답, 사유). 실패시 ('',사유)."""
         try:
