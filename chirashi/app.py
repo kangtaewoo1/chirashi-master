@@ -5277,7 +5277,10 @@ def reconcile_sites():
                     _purge_site_history(s)   # 결과탭의 그 사이트 failed/queued 이력 정리(도배 제거)
                     continue
                 # 일시적 실패로 15회+면 삭제 대신 잠금만(계정·설정 유지, 원인 해소 후 재허용).
-                if _fs>=FAIL_STREAK_LOCK and s.get('permission'):
+                # ★오늘 실제 발행한 사이트는 절대 안 잠금(대표님 '발행가능 14개' 2026-09-13 실측): 교동2차노래방 등이
+                #   하루 54~120건 발행 성공하는데 간헐 캡차실패로 fail_streak가 올라 잠겨 '발행가능'에서 빠졌음.
+                #   posted_today>0 = 지금 되는 사이트 → 잠그지 않는다(캡차 간헐실패는 다음에 또 성공).
+                if _fs>=FAIL_STREAK_LOCK and s.get('permission') and not int(s.get('posted_today',0) or 0):
                     s['permission']=False
                     s['auto_drop_reason']=f'연속 실패 {s.get("fail_streak")}회(일시적) — 발행 잠금(원인 확인 후 재허용)'
                     s['auto_dropped_at']=now; locked+=1
@@ -5289,7 +5292,7 @@ def reconcile_sites():
                 _fsv=int(s.get('fail_streak',0) or 0)
                 try: _tmpv=classify_fail(str(s.get('last_fail_reason') or ''))[2]
                 except Exception: _tmpv=False
-                if (not _tmpv) and _fsv>=30 and s.get('permission'):
+                if (not _tmpv) and _fsv>=30 and s.get('permission') and not int(s.get('posted_today',0) or 0):
                     s['permission']=False; s['auto_drop_reason']=f'검증됨이나 연속 실패 {_fsv}회(비일시적) — 발행 잠금'
                     s['auto_dropped_at']=now; locked+=1
                 kept.append(s); continue
