@@ -11399,7 +11399,15 @@ def compute_ops_dashboard(cfg=None):
     max_per_min=vals[0] if vals else 0
     recent60_total=sum(m['count'] for m in minutes)
     # --- 오늘 발행수 + 목표 대비 ---
-    today_done=sum(1 for x in done if str(x.get('time') or '').startswith(today))
+    # ★실측 정정(2026-09-14 대표님 '다 실패로 보임'): 실제 발행은 각 사이트 posted_today에 쌓이는데
+    #   history(done)엔 기록이 안 남아 대시보드가 0으로 표시→'다 실패'로 오해. 두 소스 중 큰 값을 오늘 발행수로.
+    today_done_hist=sum(1 for x in done if str(x.get('time') or '').startswith(today))
+    try:
+        _sites=load_sites()
+        today_done_sites=sum(int(s.get('posted_today',0) or 0) for s in _sites if s.get('posted_date')==today)
+    except Exception:
+        today_done_sites=0
+    today_done=max(today_done_hist,today_done_sites)
     goal=int(cfg.get('daily_publish_goal') or 0)
     goal_pct=round(today_done/goal*100,1) if goal>0 else 0.0
     # --- 일별 통합(발행수 + 지출액 + 건당비용) 14일 ---
