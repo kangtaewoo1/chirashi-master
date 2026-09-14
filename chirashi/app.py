@@ -9486,7 +9486,9 @@ def api_pipeline_claim_sites():
             if _need_pub(s): return True
             if _node_all:
                 try:
-                    if s.get('permission',True) and is_autopostable(s) and under_daily_limit(s,_cfg) and under_min_interval(s)[0]:
+                    # ★노드 전담(2026-09-14): 서버가 발행 안 하므로 min_interval을 따지지 않는다(서버 발행으로
+                    #   last_post가 최근이면 노드가 못 가져가 '대기 후보 없음'만 뜨던 악순환). 허용+오늘한도 이내면 위임.
+                    if s.get('permission',True) and is_autopostable(s) and under_daily_limit(s,_cfg):
                         return True
                 except Exception: pass
             return False
