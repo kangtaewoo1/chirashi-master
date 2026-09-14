@@ -4019,6 +4019,30 @@ def cafe24_post(site, title, content_html, skip_login=False):
         write_urls=[base+'/board/product/write.html?board_no=1',
                     base+'/board/write.html?board_no=1', base+'/board/free/write.html']
         list_urls=[base+'/board/product/list.html?board_no=1']
+    # ★실제 board_no 우선 사용(2026-09-15 대표님 '실패 사유 하나씩 개발로'): cafe24 최다 실패
+    #   '글쓰기 페이지 못찾음'의 주원인 = bo_table이 문자('free')일 때 board_no를 1로 추측해 못 찾음.
+    #   실측(abctool): 진짜 글쓰기=/board/free/write.html?board_no=1002 인데 코드는 board_no=1만 시도했음.
+    #   과거 발행성공(verified_post_url)·저장진입(write_entry_url)에 실제 board_no가 박혀 있으므로 추출해
+    #   /board/{bo}/write.html?board_no={실제} 를 최우선 후보로 넣는다. (verified: .../list.html?board_no=1002,
+    #   /article/게시판명/6/..., read.html?no=..&board_no=.. 등 다양 → 정규식 여러 개로 잡음.)
+    def _extract_board_no(*urls):
+        for u in urls:
+            u=str(u or '')
+            m=re.search(r'[?&]board_no=(\d+)',u)
+            if m: return m.group(1)
+        for u in urls:  # /article/게시판명/{board_no}/글번호/ 형태(board_no가 경로 2번째)
+            u=str(u or '')
+            m=re.search(r'/article/[^/]+/(\d+)/',u)
+            if m: return m.group(1)
+        return ''
+    _real_bno=_extract_board_no(site.get('verified_post_url'),site.get('write_entry_url'),site.get('site_url'))
+    if _real_bno:
+        _bo_path=bo if (bo and not bo.isdigit()) else 'product'   # 경로 세그먼트(free/product/게시판명)
+        _pref=[base+f'/board/{_bo_path}/write.html?board_no={_real_bno}',
+               base+f'/board/write.html?board_no={_real_bno}',
+               base+f'/board/product/write.html?board_no={_real_bno}']
+        # 중복 제거하며 맨 앞에 삽입(정확 후보 우선)
+        write_urls=_pref+[u for u in write_urls if u not in _pref]
     # ★대표님 지시(2026-09-08): '메인도메인만 저장 말고 진짜 글 쓸 수 있는 링크까지 저장'.
     #   지난 발행/검증에서 진입 성공한 경로(write_entry_url)가 저장돼 있으면 그걸 최우선으로 쓴다
     #   (매번 추측해 홈으로 튕기던 문제 해결). Cafe24 /article/게시판명/board_no/ SEO-URL(글목록)에는
