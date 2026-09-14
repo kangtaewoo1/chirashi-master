@@ -8287,6 +8287,11 @@ def workroom_worker(slot):
             cfg=load_config()
             if not cfg.get('publish_loop_enabled'):
                 time.sleep(20); continue
+            # ★노드 발행 전담(2026-09-14 대표님 지시): 서버(VPS)엔 ddddocr 없어 kcaptcha 못 풂 → 서버 정기발행이
+            #   OCR 전멸(최근60건중 57건 서버·전부 OCR실패)의 주범. node_publish_all+노드 살아있으면 서버 워커는
+            #   발행 안 하고 대기(노드가 claim-sites로 전담). 노드 다 죽으면 서버가 폴백 발행.
+            if cfg.get('node_publish_all',True) and _pc_node_alive():
+                time.sleep(30); continue
             rooms=[r for r in (load_json(WORKROOMS_FILE,[]) or []) if _workroom_combos(r)]
             if not rooms:
                 if slot==0:   # 작업실 없음 → 슬롯0이 통합풀 폴백
