@@ -2142,6 +2142,37 @@ def _ocr_available():
     except Exception:
         return False
 
+def _ocr_install_diag():
+    """★서버 ddddocr 자동설치 진단(2026-09-14, 무SSH): pip 설치를 강제 재시도하고
+       stdout/stderr·import 오류를 그대로 문자열로 돌려준다. /api/diag?ocr=1 에서 호출.
+       _DDDD_TRIED를 리셋해 한 번 실패로 굳은 상태도 다시 시도한다."""
+    global _DDDD_OCR,_DDDD_TRIED
+    if _DDDD_OCR is not None:
+        return True,'이미 설치·가동됨'
+    import subprocess,sys as _sys
+    _DDDD_TRIED=True
+    # 1) 이미 있는지 재확인
+    try:
+        import ddddocr; _DDDD_OCR=ddddocr.DdddOcr(show_ad=False); return True,'import 성공(설치돼 있었음)'
+    except Exception as e0:
+        _imp_err=str(e0)[:120]
+    # 2) pip 설치 시도 — stdout/stderr 캡처
+    try:
+        p=subprocess.run([_sys.executable,'-m','pip','install','--disable-pip-version-check','ddddocr','onnxruntime'],
+                         timeout=420,capture_output=True,text=True)
+        tail=((p.stdout or '')[-400:]+' | ERR:'+(p.stderr or '')[-600:]).strip()
+        # 3) 설치 후 재import
+        try:
+            import importlib
+            import ddddocr as _dd
+            if 'ddddocr' in _sys.modules: importlib.reload(_dd)
+            _DDDD_OCR=_dd.DdddOcr(show_ad=False)
+            return True,f'설치+import 성공(rc={p.returncode})'
+        except Exception as e2:
+            return False,f'설치 rc={p.returncode}·재import 실패: {str(e2)[:120]} | import초기오류:{_imp_err} | pip:{tail[:400]}'
+    except Exception as e:
+        return False,f'pip 실행 예외: {str(e)[:120]} | import초기오류:{_imp_err}'
+
 def _ocr_kcaptcha(image_bytes):
     """kcaptcha 이미지(bytes) → OCR 텍스트. ddddocr 없거나 실패면 ''. 결과는 영숫자만 남겨 정규화."""
     global _DDDD_OCR,_DDDD_TRIED
@@ -10272,22 +10303,16 @@ def api_diag():
     #   ?ocr=1 이면 실제 _ocr_kcaptcha를 1회 호출해 미설치 시 자동설치까지 트리거(무SSH 설치 경로 확정 검증).
     try:
         _pre=(_DDDD_OCR is not None)
-        if request.args.get('ocr') and _DDDD_OCR is None:
-            try:
-                import io as _io2
-                from PIL import Image as _Im2, ImageDraw as _Dw
-                _im=_Im2.new('RGB',(120,40),'white'); _d2=_Dw.Draw(_im); _d2.text((10,10),'12345',fill='black')
-                _bb=_io2.BytesIO(); _im.save(_bb,'PNG')
-                _r=_ocr_kcaptcha(_bb.getvalue())   # 미설치면 여기서 pip 자동설치 트리거
-            except Exception as _e2:
-                _r='(호출예외:'+str(_e2)[:40]+')'
+        _diag_msg=''
+        if request.args.get('ocr'):
+            _iok,_diag_msg=_ocr_install_diag()   # 강제 설치 재시도 + pip 출력 캡처
         _now_ok=(_DDDD_OCR is not None)
         step('무료 OCR(ddddocr)',_now_ok,
-             ('설치·가동됨' if _now_ok else 'ddddocr 미설치·미가동')
-             + (' (이번 요청에서 자동설치 성공)' if (_now_ok and not _pre) else '')
-             + (' — /api/diag?ocr=1 로 자동설치 시도 가능' if not _now_ok else ''))
+             (('설치·가동됨' if _now_ok else 'ddddocr 미설치·미가동'))
+             + ((' (이번 요청 결과: '+_diag_msg+')') if _diag_msg else '')
+             + (' — /api/diag?ocr=1 로 자동설치 시도 가능' if (not _now_ok and not _diag_msg) else ''))
     except Exception as e:
-        step('무료 OCR(ddddocr)',False,str(e)[:80])
+        step('무료 OCR(ddddocr)',False,str(e)[:120])
     out['ok']=all(s['ok'] for s in out['steps'] if s['name'] in ('크롬 설치','크롬 드라이버 기동','페이지 로드 테스트'))
     return jsonify(out)
 
