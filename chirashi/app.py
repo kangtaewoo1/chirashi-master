@@ -743,7 +743,7 @@ def load_config():
        'http_publish_enabled':True,  # ★browserless(requests) 초고속발행(~2~3초) — CSRF token 전송 추가(2026-09-13)로 활성화. 실패 시 셀레늄 자동 폴백.
        'allow_illegal_boards':True,  # ★대표님 지시 2026-09-13 '도박은 나랑 무관, 글만 써지면 발행': illegal(도박어 도배) 게시판도 탈락 안 시키고 발행. False로 되돌리면 원래대로 차단.
        'cafe24_max_per_claim':1,     # ★대표님 지시 2026-09-13 'cafe24 동시처리 줄이기': 한 claim 배치당 cafe24 최대 개수(Turnstile로 무겁고 hang 잦아 슬롯 독점 방지). 나머지 슬롯은 그누보드 등으로 채움.
-       'node_publish_all':True,      # ★대표님 지시 2026-09-14 '노드가 발행 전담': 서버(VPS)엔 ddddocr 없어 kcaptcha 못 풂 → 무료 OCR 되는 노드가 모든 등록 사이트 발행. 서버 발행루프는 이때 그누보드 정기발행 스킵(중복 방지).
+       'node_publish_all':False,     # ★2026-09-14: 서버가 ddddocr 자동설치(_ocr_kcaptcha)해 무료 OCR 가능해졌으므로 서버+노드 둘 다 발행(기본). True로 켜면 노드 전담(서버 발행 OFF).
        'node_site_cooldown_sec':90,  # 노드가 같은 등록 사이트를 다시 claim하기까지 최소 간격(초). 짧게=발행량↑(노드 전담이라 서버 경합 없음).
        'public_base_url':'https://google.twseo.kr',  # 업로드 이미지 절대 URL 기준 도메인(외부 게시판 로드용)
        'twocaptcha_price_recaptcha_usd':0.003,'twocaptcha_price_image_usd':0.0005,
@@ -821,6 +821,13 @@ def load_config():
     if not c.get('http_publish_migrated'):
         c['http_publish_enabled']=True
         c['http_publish_migrated']=True
+        try: save_json(CONFIG_FILE,c)
+        except Exception: pass
+    # ★1회 마이그레이션(2026-09-14): node_publish_all 끄기 — 서버가 ddddocr 자동설치해 무료 OCR 가능해졌으니
+    #   서버도 다시 발행(노드 전담 강제로 서버 발행 OFF됐던 것 해제). 대표님이 이후 노드전담 원하면 True로.
+    if not c.get('node_publish_all_reset_v2'):
+        c['node_publish_all']=False
+        c['node_publish_all_reset_v2']=True
         try: save_json(CONFIG_FILE,c)
         except Exception: pass
     # 1회 마이그레이션: sbr_country='kr' 제거 — endpoint customer name 깨서 'Wrong customer name'
@@ -2143,8 +2150,21 @@ def _ocr_kcaptcha(image_bytes):
         _DDDD_TRIED=True
         try:
             import ddddocr; _DDDD_OCR=ddddocr.DdddOcr(show_ad=False)
-        except Exception as e:
-            add_log(f'[kcaptcha OCR] ddddocr 미설치/로드실패 → 2captcha 사용: {str(e)[:50]}'); return ''
+        except Exception:
+            # ★서버 자동설치(2026-09-14 대표님 '서버에 ddddocr 설치·무SSH'): 서버(VPS)엔 미설치라 kcaptcha
+            #   전멸했음. autodeploy는 pip install 안 하므로, 첫 호출 시 자기 자신이 pip로 설치→재import.
+            #   (한 번만 시도, 실패해도 이후엔 _DDDD_TRIED로 재시도 안 함)
+            try:
+                import subprocess,sys as _sys
+                add_log('[kcaptcha OCR] ddddocr 미설치 → 자동설치 시도(pip install ddddocr onnxruntime)…')
+                subprocess.run([_sys.executable,'-m','pip','install','--quiet','--disable-pip-version-check','ddddocr','onnxruntime'],
+                               timeout=300,capture_output=True)
+                import importlib
+                import ddddocr as _dd; importlib.reload(_dd) if 'ddddocr' in _sys.modules else None
+                _DDDD_OCR=_dd.DdddOcr(show_ad=False)
+                add_log('[kcaptcha OCR] ddddocr 자동설치 성공 — 무료 OCR 가동')
+            except Exception as e:
+                add_log(f'[kcaptcha OCR] 자동설치 실패 → 2captcha 폴백: {str(e)[:50]}'); return ''
     def _norm(raw):
         s=re.sub(r'[^0-9A-Za-z가-힣]','',str(raw or ''))
         if s and not re.search(r'[가-힣]',s):
