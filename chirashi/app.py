@@ -2145,19 +2145,32 @@ def _ocr_kcaptcha(image_bytes):
             import ddddocr; _DDDD_OCR=ddddocr.DdddOcr(show_ad=False)
         except Exception as e:
             add_log(f'[kcaptcha OCR] ddddocr 미설치/로드실패 → 2captcha 사용: {str(e)[:50]}'); return ''
-    try:
-        raw=_DDDD_OCR.classification(image_bytes)
+    def _norm(raw):
         s=re.sub(r'[^0-9A-Za-z가-힣]','',str(raw or ''))
-        # ★그누보드 kcaptcha는 표준이 '숫자 5자리'(2026-09-14 대표님 무료화 실측: OCR이 숫자에 o/l/m 등을
-        #   섞어 읽어 오답 다발). 결과가 숫자+소수 헷갈림글자로만 되어 있으면 닮은꼴 글자를 숫자로 교정해 숫자화.
-        #   (한글 포함이면 비표준 캡차라 원문 유지)
         if s and not re.search(r'[가-힣]',s):
             _map=str.maketrans({'o':'0','O':'0','l':'1','I':'1','i':'1','z':'2','Z':'2','s':'5','S':'5',
                                 'b':'6','B':'8','g':'9','q':'9','D':'0','Q':'0','A':'4','t':'7','T':'7','G':'6'})
             d2=re.sub(r'\D','',s.translate(_map))
-            # 숫자만 남긴 게 kcaptcha 표준 길이(4~6)면 그걸 채택
             if 4<=len(d2)<=6: return d2
         return s
+    try:
+        # ★정확도 향상(2026-09-14 대표님 '재학습' 전 즉효): 원본 + 전처리(확대·이진화) 2회 OCR해서
+        #   같은 결과가 나오면 신뢰↑(그걸 채택), 다르면 원본 우선. gnuboard kcaptcha 흘림체 오독 완화.
+        a=_norm(_DDDD_OCR.classification(image_bytes))
+        try:
+            import io as _io
+            from PIL import Image as _Im, ImageOps as _IO
+            im=_Im.open(_io.BytesIO(image_bytes)).convert('L')
+            im=im.resize((im.width*2,im.height*2),_Im.LANCZOS)
+            im=_IO.autocontrast(im)
+            _b=_io.BytesIO(); im.save(_b,'PNG')
+            b=_norm(_DDDD_OCR.classification(_b.getvalue()))
+        except Exception:
+            b=''
+        # 두 결과가 같으면 그걸(신뢰), 아니면 숫자형인 원본 우선
+        if a and a==b: return a
+        if a and a.isdigit(): return a
+        return b or a
     except Exception:
         return ''
 
@@ -3269,7 +3282,7 @@ def gnuboard_post_http(site, title, content_html):
         except Exception as e:
             return '',f'캡차 처리 오류({str(e)[:30]})'
     # ── 캡차 오답 시 새 이미지로 재시도(최대 3회) — 한 번 OCR 오답으로 글 날리지 않게(리뷰 지시) ──
-    CAP_TRIES=3 if needs_cap else 1
+    CAP_TRIES=(max(3,int(cfg.get('kcaptcha_ocr_tries',8) or 8)) if needs_cap else 1)   # ★무료 OCR이라 재시도 늘려도 비용0 — 오독 커버(대표님 2026-09-14)
     last_reason='HTTP 발행 확인 불가'
     for attempt in range(CAP_TRIES):
         if needs_cap:

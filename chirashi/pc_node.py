@@ -195,6 +195,30 @@ def _process_site(s, cfg):
         html, title = app.generate_article(kw, cfg, unique=True)
         res.update({"title": title, "region": kw.get("지역", ""), "service": kw.get("서비스", "")})   # 서버 이력(결과탭)용
         ok, msg = app.do_post(site, title, html, skip_login=False)   # 저장 계정으로 로그인 발행
+        # ★로그인 필요 사이트 자동가입 후 발행(대표님 지시 2026-09-14): 저장 계정이 없거나 로그인폼이라
+        #   'wr_subject 없음/로그인 필요'로 실패하면, 자동가입→그 세션으로 재발행. 성공하면 계정을 서버에 저장.
+        import re as _re
+        _need_signup = (not ok) and (not str(site.get("mb_id") or "").strip()) and \
+            _re.search(r'(로그인이? 필요|wr_subject.*없음|글쓰기 폼.*없음|비회원 글쓰기 불가|권한이? 없)', str(msg))
+        if _need_signup:
+            try: app.reset_driver()
+            except Exception: pass
+            time.sleep(1)
+            log(f"[등록 자동가입] {name} — 로그인 필요 → 자동가입 시도")
+            try:
+                ok_su, msg_su = app.auto_signup_guarded(site, submit=True)
+            except Exception as _e:
+                ok_su, msg_su = False, str(_e)[:60]
+            if ok_su and site.get("mb_id"):
+                # 가입 직후 로그인 세션 그대로 재발행(재로그인이 세션 깨는 것 방지)
+                ok, msg = app.do_post(site, title, html, skip_login=(_plat != "cafe24"))
+                if ok:
+                    # 새 계정을 서버에 저장(다음부턴 로그인만)
+                    res["new_mb_id"] = site.get("mb_id", ""); res["new_mb_pass"] = site.get("mb_pass", "")
+                    log(f"[등록 자동가입 성공] {name} — {site.get('mb_id','')} 계정으로 발행")
+            else:
+                log(f"[등록 자동가입 실패] {name} — {str(msg_su)[:60]}")
+                msg = f"{msg} · 자동가입: {str(msg_su)[:50]}"
         _tag = 'Cafe24' if _plat=='cafe24' else '등록'
         if ok and str(msg).startswith(("http://", "https://")):
             res.update({"ok": True, "result_url": msg}); log(f"[{_tag} 발행성공] {name} → {msg}")
