@@ -6501,6 +6501,21 @@ def screen_candidate(url, cfg=None):
             res['corp_board']=(_corp_t[0] if _corp_t else _bt)
     except Exception: pass
     res['parked']=(any(w in low or w in tl for w in PARKED_WORDS) or len(html)<800)
+    # ★언론사·관리자페이지 오발굴 컷(2026-09-15 대표님 '발굴 품질·오발굴 컷'): 실측상 자동가입 실패 최다(7건)가
+    #   신문/저널/일보/투데이/뉴스 등 언론사와 '게시판관리/관리자매뉴얼' 관리자페이지였음 — 회원가입이 없거나
+    #   기자용이라 앱이 가입 불가. 후보 단계에서 걸러 헛가입 시도를 원천 차단(발행 대상 아님).
+    #   신호: title/도메인에 언론 키워드 + '기사/보도/편집국/기자' 언론 본문신호(단순 '뉴스' 1개 오탐 방지),
+    #   또는 관리자페이지(게시판관리/관리자매뉴얼/admin) 신호.
+    try:
+        _MEDIA_KW=['신문','일보','저널','투데이','타임스','미디어','뉴스','포스트','헤럴드','데일리','press','news','journal','times','media','herald','daily']
+        _dom_l=(res.get('domain') or '').lower()
+        _media_name=[w for w in _MEDIA_KW if (w in tl or w in _dom_l)]
+        _press_body=any(s in html for s in ['편집국','보도자료','취재','기자수첩','논설위원','오피니언','편집장']) or bool(re.search(r'\b(기자|reporter)\b',html))
+        _admin_sig=any(s in (tl+' '+low) for s in ['게시판관리','관리자매뉴얼','관리자 매뉴얼','admin/','/adm/','관리자모드'])
+        # 언론: 이름신호 + (본문 언론신호 OR 도메인이 언론 키워드) → 강판정(정상 게시판 오탐 최소화)
+        if (_media_name and (_press_body or any(w in _dom_l for w in _MEDIA_KW))) or _admin_sig:
+            res['media_admin']=(('언론사('+_media_name[0]+')') if _media_name else '관리자페이지')
+    except Exception: pass
     # ★불법·도박 판별 정밀화(2026-09-12 감사): '슬롯/사설/casino/betting/베팅' 등 짧은 단어 전체 HTML 부분일치는
     #   정상 게시판의 광고배너·사용자글·영어 템플릿에 걸려 오탐 → 정상 게시판을 영구 차단(add_rejected)했음.
     #   → 강한 도박어 2개 이상 동시 OR title/도메인에 있을 때만 illegal. 짧은 오탐어(casino/betting/슬롯/사설)는 본문 단독 매칭 제외.
@@ -6849,6 +6864,7 @@ def screen_pending(limit=30):
         elif r.get('index_blocked'): r['status']='rejected'; r['reject_reason']=f'색인차단 — {r.get("index_blocked")}'
         elif r.get('corp_board'): r['status']='rejected'; r['reject_reason']=f'기업 소개 게시판({r.get("corp_board")}) — 홍보 부적합(삭제·신고 위험)'
         elif r.get('parked'): r['status']='rejected'; r['reject_reason']='주차/만료 도메인 (실제 게시판 아님)'
+        elif r.get('media_admin'): r['status']='rejected'; r['reject_reason']=f'{r.get("media_admin")} — 회원가입 없음/기자용(자동가입 불가, 발행 대상 아님)'
         elif r.get('illegal') and not cfg.get('allow_illegal_boards'): r['status']='rejected'; r['reject_reason']='도박·불법 사이트 (제휴 부적합)'
         elif r.get('ad_banned'): r['status']='rejected'; r['reject_reason']='광고 금지 명시'
         elif r.get('captcha'): r['status']='ready'; r['reject_reason']='캡차 있음 — 2captcha 자동해결 시도 예정'
@@ -9463,9 +9479,17 @@ def api_pipeline_claim():
         #   휴대폰 본인인증(signup_phone_cert)만 자동 불가라 제외 유지.
         #   ★수동 추가(source='manual')는 쿨다운(_cool) 면제 — 대표님이 넣자마자 즉시 처리.
         _allow_ill=load_config().get('allow_illegal_boards')   # 대표님 지시: 허용 시 도박판도 노드에 claim 배정
+        # ★언론사/관리자 오발굴 제외(2026-09-15): 새 후보는 media_admin 플래그로, 이미 검수된 옛 후보는
+        #   저장된 title(board_name)에 언론 키워드가 있으면 claim에서 제외 — 재검수 전에도 헛가입 시도 차단.
+        _MEDIA_T=['신문','일보','저널','투데이','타임스','미디어','뉴스','헤럴드','데일리','게시판관리','관리자매뉴얼']
+        def _looks_media(c):
+            if c.get('media_admin'): return True
+            _t=(c.get('board_name') or '')
+            return any(w in _t for w in _MEDIA_T)
         elig=[c for c in cands
               if c.get('screened') and c.get('status') in ('ready','approved')
               and not c.get('parked') and (not c.get('illegal') or _allow_ill) and not c.get('ad_banned')
+              and not _looks_media(c)
               and (c.get('domain') or '').lower() not in site_domains
               and c.get('reachable') and _has_write_path(c)
               and not _claim_active(c)
