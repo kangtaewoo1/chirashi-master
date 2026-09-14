@@ -9573,6 +9573,10 @@ def api_pipeline_claim_sites():
               and s.get('status')!='rejected'
               and not (s.get('pc_claim_by') and float(s.get('pc_claim_expire',0) or 0)>now)
               and float(s.get('pc_last_try',0) or 0) < now-max(60,int(_cfg.get('node_site_cooldown_sec',300) or 300))]
+        # ★공정 순환(2026-09-14): pc_last_try 오래된 순으로 정렬 — 리스트 맨앞 소수만 반복 claim되던 것
+        #   (교동2차·Samjin만 계속 돌고 나머지 70곳 방치, 고장난 Samjin이 매 배치 슬롯 낭비) 해소.
+        #   전 사이트를 골고루 발행하고, 방금 시도(실패 포함)한 사이트는 뒤로 밀려 반복실패 낭비도 줄인다.
+        elig.sort(key=lambda s: float(s.get('pc_last_try',0) or 0))
         for s in elig[:n]:
             s['pc_claim_by']=node_id; s['pc_claim_expire']=now+ttl; s['pc_last_try']=now
             picked.append({'id':s.get('id'),'site_url':s.get('site_url'),'platform':s.get('platform') or 'gnuboard',
