@@ -743,6 +743,8 @@ def load_config():
        'http_publish_enabled':True,  # ★browserless(requests) 초고속발행(~2~3초) — CSRF token 전송 추가(2026-09-13)로 활성화. 실패 시 셀레늄 자동 폴백.
        'allow_illegal_boards':True,  # ★대표님 지시 2026-09-13 '도박은 나랑 무관, 글만 써지면 발행': illegal(도박어 도배) 게시판도 탈락 안 시키고 발행. False로 되돌리면 원래대로 차단.
        'cafe24_max_per_claim':1,     # ★대표님 지시 2026-09-13 'cafe24 동시처리 줄이기': 한 claim 배치당 cafe24 최대 개수(Turnstile로 무겁고 hang 잦아 슬롯 독점 방지). 나머지 슬롯은 그누보드 등으로 채움.
+       'node_publish_all':True,      # ★대표님 지시 2026-09-14 '노드가 발행 전담': 서버(VPS)엔 ddddocr 없어 kcaptcha 못 풂 → 무료 OCR 되는 노드가 모든 등록 사이트 발행. 서버 발행루프는 이때 그누보드 정기발행 스킵(중복 방지).
+       'node_site_cooldown_sec':300, # 노드가 같은 등록 사이트를 다시 claim하기까지 최소 간격(초).
        'public_base_url':'https://google.twseo.kr',  # 업로드 이미지 절대 URL 기준 도메인(외부 게시판 로드용)
        'twocaptcha_price_recaptcha_usd':0.003,'twocaptcha_price_image_usd':0.0005,
        'brave_price_per_query_usd':0.005,  # Pro 플랜 기준 쿼리당 $0.005(설정 탭에서 변경 가능)
@@ -7856,6 +7858,8 @@ def auto_pipeline_once(limit=5):
           and c.get('reachable') and _has_write_path(c)
           and not _claim_active(c)   # ★PC 노드가 잡고 있는(만료 전) 후보는 서버가 건드리지 않음
           and not (c.get('platform')=='cafe24' and _pc_node_alive())   # ★cafe24는 PC(로컬크롬)만 — 서버(DC IP)는 Turnstile 못넘어 탈락만 냄. 노드 다 죽으면 폴백.
+          # ★노드 발행 전담(2026-09-14): node_publish_all이면 서버는 신규후보 발행도 노드에 위임(서버는 ddddocr 없어 캡차 못 풂). 노드 살아있을 때만.
+          and not (cfg.get('node_publish_all',True) and _pc_node_alive())
           and float(c.get('last_pipeline_at',0) or 0) < _cool]
     # (파이프라인 진단 로그 제거 — 처리할 후보 없을 때마다 매 주기 찍혀 화면 도배. 대표님 지시)
     # 비회원 글쓰기 가능(로그인 불필요) 게시판을 먼저 처리한다. 로그인 필요 게시판은
@@ -9422,7 +9426,7 @@ def api_pipeline_claim_sites():
        비번(mb_pass) 포함해 반환(토큰 인증, PC 신뢰). PC는 로그·화면에 비번 노출 안 함. TTL 후 자동 회수."""
     d=request.get_json(silent=True) or {}
     node_id=str(d.get('node_id') or '').strip() or 'pc'
-    n=max(1,min(5,int(d.get('n',2) or 2)))
+    n=max(1,min(8,int(d.get('n',2) or 2)))   # ★노드 발행 전담(2026-09-14): 배치당 최대 8곳까지 위임(기존 5)
     _cfg=load_config()
     ttl=max(300,min(3600,int(_cfg.get('pc_site_claim_ttl',1200) or 1200)))
     now=time.time(); picked=[]
@@ -9443,16 +9447,30 @@ def api_pipeline_claim_sites():
                 if is_autopostable(s) and under_daily_limit(s,_cfg) and under_min_interval(s)[0]: return True
             except Exception: pass
             return False
+        # ★노드 발행 전담(대표님 지시 2026-09-14 '노드가 발행 전담'): 서버(VPS)엔 ddddocr 없어 kcaptcha 못 풂→
+        #   무료 OCR 되는 노드가 cafe24뿐 아니라 '모든 등록 사이트'를 발행하게 위임. node_publish_all=True면 전 플랫폼.
+        _node_all=bool(_cfg.get('node_publish_all',True))
+        def _plat_ok(s):
+            if _node_all: return True
+            return s.get('platform')=='cafe24'
+        # 정기 발행 대상: 검증·허용됐고 1일한도·최소간격 통과한 사이트도 포함(그누보드 포함).
+        def _need_pub_all(s):
+            if _need_pub(s): return True
+            if _node_all:
+                try:
+                    if s.get('permission',True) and is_autopostable(s) and under_daily_limit(s,_cfg) and under_min_interval(s)[0]:
+                        return True
+                except Exception: pass
+            return False
         elig=[s for s in sites
-              if (s.get('platform')=='cafe24')
-              and str(s.get('mb_id') or '').strip()
-              and _need_pub(s)
+              if _plat_ok(s)
+              and _need_pub_all(s)
               and s.get('status')!='rejected'
               and not (s.get('pc_claim_by') and float(s.get('pc_claim_expire',0) or 0)>now)
-              and float(s.get('pc_last_try',0) or 0) < now-1800]      # 30분 쿨다운
+              and float(s.get('pc_last_try',0) or 0) < now-max(60,int(_cfg.get('node_site_cooldown_sec',300) or 300))]
         for s in elig[:n]:
             s['pc_claim_by']=node_id; s['pc_claim_expire']=now+ttl; s['pc_last_try']=now
-            picked.append({'id':s.get('id'),'site_url':s.get('site_url'),'platform':'cafe24',
+            picked.append({'id':s.get('id'),'site_url':s.get('site_url'),'platform':s.get('platform') or 'gnuboard',
                 'bo_table':s.get('bo_table') or '1','name':s.get('name') or s.get('site_url'),
                 'mb_id':s.get('mb_id',''),'mb_pass':s.get('mb_pass',''),   # ★비번 포함(PC 로컬 로그인용)
                 'write_entry_url':s.get('write_entry_url',''),'article_board_name':s.get('article_board_name','')})

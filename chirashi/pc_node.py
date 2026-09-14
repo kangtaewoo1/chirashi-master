@@ -322,12 +322,34 @@ def run(once=False, workers=None, idle=30):
         try:
             cfg = app.load_config()
             pool = app.collect_all_keywords()
-            # ① 등록 Cafe24 사이트(집 IP 필요) 먼저 처리 — 서버가 CF 못 넘는 것들. 순차(로그인·CF라 무겁게).
-            sites = _claim_sites(min(2, n))
+            # ① 등록 사이트 발행(★노드 발행 전담 2026-09-14 대표님 지시: 서버엔 ddddocr 없어 kcaptcha 못 풂 →
+            #    노드가 등록 사이트 전부를 무료 OCR로 발행). node_publish_all이면 동시 n곳, 아니면 기존처럼 소수.
+            _site_n = n if cfg.get('node_publish_all', True) else min(2, n)
+            sites = _claim_sites(_site_n)
             if sites:
-                log(f"등록 Cafe24 {len(sites)}곳 로컬발행(로그인)")
-                sres = [_process_site(s, cfg) for s in sites]
-                _report_sites(sres)
+                log(f"등록 사이트 {len(sites)}곳 로컬발행(무료OCR)")
+                # 동시 처리(병렬) — 배치 타임아웃으로 hang 방어.
+                _sres = []; _slock = threading.Lock(); _sthreads = []
+                def _sw(_s):
+                    r = _process_site(_s, cfg)
+                    with _slock: _sres.append(r)
+                for _s in sites:
+                    _t = threading.Thread(target=_sw, args=(_s,), name=f"SITE-{str(_s.get('id',''))[:6]}", daemon=True)
+                    _t.start(); _sthreads.append(_t)
+                _sdead = time.time() + max(300, 300 * len(sites) // max(1, n))
+                for _t in _sthreads:
+                    _left = _sdead - time.time()
+                    if _left <= 0: break
+                    _t.join(timeout=_left)
+                if [t for t in _sthreads if t.is_alive()]:
+                    try: app.quit_all_drivers()
+                    except Exception: pass
+                    import subprocess as _sp
+                    try:
+                        _sp.run(['taskkill','/F','/IM','chrome.exe','/T'],capture_output=True,timeout=20)
+                        _sp.run(['taskkill','/F','/IM','chromedriver.exe','/T'],capture_output=True,timeout=20)
+                    except Exception: pass
+                _report_sites(_sres)
             # ② 미등록 후보 가입·발행테스트(동시 n).
             cands = _claim(n)
             if not cands and not sites:
