@@ -743,7 +743,7 @@ def load_config():
        'http_publish_enabled':True,  # ★browserless(requests) 초고속발행(~2~3초) — CSRF token 전송 추가(2026-09-13)로 활성화. 실패 시 셀레늄 자동 폴백.
        'allow_illegal_boards':True,  # ★대표님 지시 2026-09-13 '도박은 나랑 무관, 글만 써지면 발행': illegal(도박어 도배) 게시판도 탈락 안 시키고 발행. False로 되돌리면 원래대로 차단.
        'cafe24_max_per_claim':1,     # ★대표님 지시 2026-09-13 'cafe24 동시처리 줄이기': 한 claim 배치당 cafe24 최대 개수(Turnstile로 무겁고 hang 잦아 슬롯 독점 방지). 나머지 슬롯은 그누보드 등으로 채움.
-       'node_publish_all':True,      # ★2026-09-14 v3: 노드 전담 발행. 서버(DC IP)는 cafe24/CF·kcaptcha에 막혀 실패만 쌓고, 서버 발행경로가 write_test_status=='passed'만 통과시켜 발행이력 있는 63/72를 제외→완전정지. 무료OCR 되는 노드가 전 플랫폼 발행. False로 끄면 서버도 발행(권장X).
+       'node_publish_all':False,     # ★2026-09-14 v4: 서버 무료OCR 영구설치+is_autopostable 완화 후 서버 작업실워커가 '작업실별로' 발행(이력에 작업실명 기록). 서버=gnuboard 작업실발행, 노드=cafe24/로그인 전담. True면 노드 전담(작업실 구분 없이 등록사이트만).
        'node_site_cooldown_sec':90,  # 노드가 같은 등록 사이트를 다시 claim하기까지 최소 간격(초). 짧게=발행량↑(노드 전담이라 서버 경합 없음).
        'public_base_url':'https://google.twseo.kr',  # 업로드 이미지 절대 URL 기준 도메인(외부 게시판 로드용)
        'twocaptcha_price_recaptcha_usd':0.003,'twocaptcha_price_image_usd':0.0005,
@@ -837,6 +837,15 @@ def load_config():
     if not c.get('node_publish_all_on_v3'):
         c['node_publish_all']=True
         c['node_publish_all_on_v3']=True
+        try: save_json(CONFIG_FILE,c)
+        except Exception: pass
+    # ★1회 마이그레이션(2026-09-14 v4): node_publish_all 다시 끄기 — 서버 무료OCR(ddddocr) 영구설치 완료 +
+    #   is_autopostable가 발행이력URL만 있어도 통과하게 완화됨. 이제 서버 작업실워커가 '작업실별로' 발행 가능
+    #   (대표님 '작업실별로 나뉘어 올라가길'). 서버=작업실기반 gnuboard 발행(이력에 작업실명 기록),
+    #   노드=cafe24/로그인필요 사이트 전담(claim-sites, cafe24만). 대표님이 노드전담 원하면 설정에서 True.
+    if not c.get('node_publish_all_off_v4'):
+        c['node_publish_all']=False
+        c['node_publish_all_off_v4']=True
         try: save_json(CONFIG_FILE,c)
         except Exception: pass
     # 1회 마이그레이션: sbr_country='kr' 제거 — endpoint customer name 깨서 'Wrong customer name'
@@ -5769,9 +5778,13 @@ def is_autopostable(site):
     #   한 번 비밀글로 발행된 게 확인되면 secret_forced 표시 → 더는 발행 안 함(헛발행 방지).
     if site.get('secret_forced'):
         return False
+    # ★write_test 게이트 완화(2026-09-14 대표님 '작업실별로 안 올라간다'): 실제 발행 성공 URL이 있으면
+    #   정식 write_test(write_test_status=='passed')를 안 거쳤어도 발행 대상. 발행이력 있는 62/72 사이트가
+    #   passed 플래그 없다는 이유로 서버 작업실발행·is_publishable에서 영영 제외돼 '발행가능 0'이던 문제 해결.
+    #   (안전 제외조건: 미허용·rejected·로그인미가입·비밀글·오류데모 는 위에서 이미 걸러짐.)
     return (is_permitted(site)
             and site.get('status')!='rejected'
-            and site.get('write_test_status')=='passed'
+            and (site.get('write_test_status')=='passed' or verified_url.startswith(('http://','https://')))
             and verified_url.startswith(('http://','https://')))
 
 def is_assisted_postable(site):
