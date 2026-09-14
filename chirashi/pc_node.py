@@ -63,6 +63,35 @@ def log(msg):
         print(line.encode("ascii", "replace").decode("ascii"), flush=True)
 
 
+def _cleanup_stale_chrome_profiles(older_than_sec=3600):
+    """★디스크 누수 근본해결(2026-09-14 대표님 '자꾸 멈춘다'): selenium 워커가 크롬 임시프로필을
+       %LOCALAPPDATA%\\Temp\\chr_*·scoped_dir* 에 만들고 안 지워 30GB가 차 발행이 전멸했었다.
+       매 루프마다 '지금 안 쓰는(1시간+ 미변경)' 프로필만 지운다 — 진행 중 발행은 최근 변경이라 안 건드림.
+       반환: 지운 폴더 수(실측 로그용)."""
+    try:
+        base = os.path.join(os.environ.get("LOCALAPPDATA") or os.environ.get("TEMP") or "", "Temp")
+        if not os.path.isdir(base):
+            base = os.environ.get("TEMP") or ""
+        if not base or not os.path.isdir(base):
+            return 0
+        import shutil
+        cut = time.time() - older_than_sec
+        removed = 0
+        for nm in os.listdir(base):
+            if not (nm.startswith("chr_") or nm.startswith("scoped_dir")):
+                continue
+            p = os.path.join(base, nm)
+            try:
+                if os.path.isdir(p) and os.path.getmtime(p) < cut:
+                    shutil.rmtree(p, ignore_errors=True)
+                    removed += 1
+            except Exception:
+                pass
+        return removed
+    except Exception:
+        return 0
+
+
 # ── app.py 엔진 import (서버 로직 그대로 재사용, 서버는 안 뜸) ──
 log("app.py 엔진 로딩 중...")
 try:
@@ -348,10 +377,16 @@ def run(once=False, workers=None, idle=30):
     cfg = app.load_config()
     n = _safe_workers(workers)
     log(f"PC 발행노드 시작 — node_id={NODE_ID} · 서버={SERVER} · 동시 {n}개")
+    _last_prof_clean = 0.0
     while True:
         try:
             cfg = app.load_config()
             pool = app.collect_all_keywords()
+            # ★임시 크롬프로필 누수 정리(10분마다, 1시간+ 미사용분만) — 디스크 참으로 인한 발행 전멸 방지.
+            if time.time() - _last_prof_clean > 600:
+                _last_prof_clean = time.time()
+                _rm = _cleanup_stale_chrome_profiles()
+                if _rm: log(f"임시 크롬프로필 {_rm}개 정리(디스크 누수 방지)")
             # ① 등록 사이트 발행(★노드 발행 전담 2026-09-14 대표님 지시: 서버엔 ddddocr 없어 kcaptcha 못 풂 →
             #    노드가 등록 사이트 전부를 무료 OCR로 발행). node_publish_all이면 동시 n곳, 아니면 기존처럼 소수.
             _site_n = n if cfg.get('node_publish_all', True) else min(2, n)
