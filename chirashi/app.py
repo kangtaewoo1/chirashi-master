@@ -744,7 +744,7 @@ def load_config():
        'allow_illegal_boards':True,  # ★대표님 지시 2026-09-13 '도박은 나랑 무관, 글만 써지면 발행': illegal(도박어 도배) 게시판도 탈락 안 시키고 발행. False로 되돌리면 원래대로 차단.
        'cafe24_max_per_claim':1,     # ★대표님 지시 2026-09-13 'cafe24 동시처리 줄이기': 한 claim 배치당 cafe24 최대 개수(Turnstile로 무겁고 hang 잦아 슬롯 독점 방지). 나머지 슬롯은 그누보드 등으로 채움.
        'node_publish_all':True,      # ★대표님 지시 2026-09-14 '노드가 발행 전담': 서버(VPS)엔 ddddocr 없어 kcaptcha 못 풂 → 무료 OCR 되는 노드가 모든 등록 사이트 발행. 서버 발행루프는 이때 그누보드 정기발행 스킵(중복 방지).
-       'node_site_cooldown_sec':300, # 노드가 같은 등록 사이트를 다시 claim하기까지 최소 간격(초).
+       'node_site_cooldown_sec':90,  # 노드가 같은 등록 사이트를 다시 claim하기까지 최소 간격(초). 짧게=발행량↑(노드 전담이라 서버 경합 없음).
        'public_base_url':'https://google.twseo.kr',  # 업로드 이미지 절대 URL 기준 도메인(외부 게시판 로드용)
        'twocaptcha_price_recaptcha_usd':0.003,'twocaptcha_price_image_usd':0.0005,
        'brave_price_per_query_usd':0.005,  # Pro 플랜 기준 쿼리당 $0.005(설정 탭에서 변경 가능)
@@ -7881,8 +7881,8 @@ def auto_pipeline_once(limit=5):
           and c.get('reachable') and _has_write_path(c)
           and not _claim_active(c)   # ★PC 노드가 잡고 있는(만료 전) 후보는 서버가 건드리지 않음
           and not (c.get('platform')=='cafe24' and _pc_node_alive())   # ★cafe24는 PC(로컬크롬)만 — 서버(DC IP)는 Turnstile 못넘어 탈락만 냄. 노드 다 죽으면 폴백.
-          # ★노드 발행 전담(2026-09-14): node_publish_all이면 서버는 신규후보 발행도 노드에 위임(서버는 ddddocr 없어 캡차 못 풂). 노드 살아있을 때만.
-          and not (cfg.get('node_publish_all',True) and _pc_node_alive())
+          # ★노드 발행 전담(2026-09-14): node_publish_all이면 서버는 신규후보 발행도 노드에 무조건 위임(서버 ddddocr 없음).
+          and not cfg.get('node_publish_all',True)
           and float(c.get('last_pipeline_at',0) or 0) < _cool]
     # (파이프라인 진단 로그 제거 — 처리할 후보 없을 때마다 매 주기 찍혀 화면 도배. 대표님 지시)
     # 비회원 글쓰기 가능(로그인 불필요) 게시판을 먼저 처리한다. 로그인 필요 게시판은
@@ -8288,9 +8288,10 @@ def workroom_worker(slot):
             if not cfg.get('publish_loop_enabled'):
                 time.sleep(20); continue
             # ★노드 발행 전담(2026-09-14 대표님 지시): 서버(VPS)엔 ddddocr 없어 kcaptcha 못 풂 → 서버 정기발행이
-            #   OCR 전멸(최근60건중 57건 서버·전부 OCR실패)의 주범. node_publish_all+노드 살아있으면 서버 워커는
-            #   발행 안 하고 대기(노드가 claim-sites로 전담). 노드 다 죽으면 서버가 폴백 발행.
-            if cfg.get('node_publish_all',True) and _pc_node_alive():
+            #   OCR 전멸(최근건 대부분 서버·전부 OCR실패)의 주범. node_publish_all이면 서버 워커는 무조건 발행 안 하고
+            #   대기(노드가 claim-sites로 전담). _pc_node_alive 게이트 제거(서버 재시작 직후 beat 비어 오판→서버가
+            #   계속 발행하고 사이트 쿨다운 걸어 노드가 못 가져가던 악순환). 노드 다 죽으면 대표님이 이 설정을 끔.
+            if cfg.get('node_publish_all',True):
                 time.sleep(30); continue
             rooms=[r for r in (load_json(WORKROOMS_FILE,[]) or []) if _workroom_combos(r)]
             if not rooms:
