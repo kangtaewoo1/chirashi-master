@@ -743,7 +743,7 @@ def load_config():
        'http_publish_enabled':True,  # ★browserless(requests) 초고속발행(~2~3초) — CSRF token 전송 추가(2026-09-13)로 활성화. 실패 시 셀레늄 자동 폴백.
        'allow_illegal_boards':True,  # ★대표님 지시 2026-09-13 '도박은 나랑 무관, 글만 써지면 발행': illegal(도박어 도배) 게시판도 탈락 안 시키고 발행. False로 되돌리면 원래대로 차단.
        'cafe24_max_per_claim':1,     # ★대표님 지시 2026-09-13 'cafe24 동시처리 줄이기': 한 claim 배치당 cafe24 최대 개수(Turnstile로 무겁고 hang 잦아 슬롯 독점 방지). 나머지 슬롯은 그누보드 등으로 채움.
-       'node_publish_all':False,     # ★2026-09-14: 서버가 ddddocr 자동설치(_ocr_kcaptcha)해 무료 OCR 가능해졌으므로 서버+노드 둘 다 발행(기본). True로 켜면 노드 전담(서버 발행 OFF).
+       'node_publish_all':True,      # ★2026-09-14 v3: 노드 전담 발행. 서버(DC IP)는 cafe24/CF·kcaptcha에 막혀 실패만 쌓고, 서버 발행경로가 write_test_status=='passed'만 통과시켜 발행이력 있는 63/72를 제외→완전정지. 무료OCR 되는 노드가 전 플랫폼 발행. False로 끄면 서버도 발행(권장X).
        'node_site_cooldown_sec':90,  # 노드가 같은 등록 사이트를 다시 claim하기까지 최소 간격(초). 짧게=발행량↑(노드 전담이라 서버 경합 없음).
        'public_base_url':'https://google.twseo.kr',  # 업로드 이미지 절대 URL 기준 도메인(외부 게시판 로드용)
        'twocaptcha_price_recaptcha_usd':0.003,'twocaptcha_price_image_usd':0.0005,
@@ -828,6 +828,15 @@ def load_config():
     if not c.get('node_publish_all_reset_v2'):
         c['node_publish_all']=False
         c['node_publish_all_reset_v2']=True
+        try: save_json(CONFIG_FILE,c)
+        except Exception: pass
+    # ★1회 마이그레이션(2026-09-14 v3): node_publish_all 다시 켜기 — 실측상 서버(DC IP)는 cafe24/CF·kcaptcha에
+    #   막혀 실패만 쌓고, 서버 발행경로(is_publishable)는 write_test_status=='passed'만 통과시켜 발행이력이
+    #   있는 63/72 사이트를 영영 제외 → '발행가능 0·대기 후보 없음'으로 완전 정지했음. 무료OCR 되는 노드가
+    #   전 플랫폼을 발행하도록 전담(_node_ready가 발행성공URL 있는 사이트도 인정). 대표님이 원하면 설정에서 False로.
+    if not c.get('node_publish_all_on_v3'):
+        c['node_publish_all']=True
+        c['node_publish_all_on_v3']=True
         try: save_json(CONFIG_FILE,c)
         except Exception: pass
     # 1회 마이그레이션: sbr_country='kr' 제거 — endpoint customer name 깨서 'Wrong customer name'
@@ -9534,13 +9543,27 @@ def api_pipeline_claim_sites():
             if _node_all: return True
             return s.get('platform')=='cafe24'
         # 정기 발행 대상: 검증·허용됐고 1일한도·최소간격 통과한 사이트도 포함(그누보드 포함).
+        def _node_ready(s):
+            """★노드가 발행해도 되는 등록사이트(2026-09-14): is_autopostable은 write_test_status=='passed'를
+               요구하는데, 실측상 발행이력(verified_post_url)이 있는데도 이 플래그가 없어 63/72가 영영
+               claim 대상에서 빠져 '대기 후보 없음'으로 발행이 완전 정지했음. 발행 성공URL이 이미 있으면
+               정식 write_test를 안 거쳤어도 발행 대상으로 인정한다(안전 제외조건은 그대로 유지)."""
+            if is_autopostable(s): return True
+            try:
+                if not s.get('permission'): return False
+                if s.get('status')=='rejected': return False
+                if s.get('secret_forced'): return False
+                if _is_error_or_demo_site(s): return False
+                if s.get('login_required') and not str(s.get('mb_id') or '').strip(): return False
+                return str(s.get('verified_post_url') or '')[:4]=='http'
+            except Exception: return False
         def _need_pub_all(s):
             if _need_pub(s): return True
             if _node_all:
                 try:
                     # ★노드 전담(2026-09-14): 서버가 발행 안 하므로 min_interval을 따지지 않는다(서버 발행으로
                     #   last_post가 최근이면 노드가 못 가져가 '대기 후보 없음'만 뜨던 악순환). 허용+오늘한도 이내면 위임.
-                    if s.get('permission',True) and is_autopostable(s) and under_daily_limit(s,_cfg):
+                    if s.get('permission',True) and _node_ready(s) and under_daily_limit(s,_cfg):
                         return True
                 except Exception: pass
             return False
