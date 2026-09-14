@@ -3450,6 +3450,16 @@ def gnuboard_post(site, title, content_html, skip_login=False):
     # 보안 차단은 즉시 중단한다. CAPTCHA는 내용을 채운 뒤 사람이 입력한다.
     if _page_is_blocked(d):
         return False,'보안 차단 페이지(403 등) — 즉시 중단'
+    # ★recaptcha iframe 로드 대기(2026-09-14 대표님 '오디오 왜 안됨' 실측): 동시 크롬 부하로 recaptcha
+    #   anchor iframe이 늦게 떠서 detect_captcha가 놓치고→오디오풀이 미발동→2captcha 잔액0 실패했음.
+    #   페이지 소스에 recaptcha 흔적이 있으면 anchor iframe이 뜰 때까지 최대 6초 대기 후 감지.
+    try:
+        from selenium.webdriver.common.by import By as _By2
+        if re.search(r'g-recaptcha|recaptcha/api\.js|data-sitekey',(d.page_source or ''),re.I):
+            for _ in range(12):
+                if d.find_elements(_By2.CSS_SELECTOR,"iframe[src*='recaptcha/api2/anchor']"): break
+                time.sleep(0.5)
+    except Exception: pass
     _cap=detect_captcha(d)
 
     # 제목 — 일부 스킨은 wr_subject가 hidden 입력(JS 에디터 연동)이라 send_keys가
