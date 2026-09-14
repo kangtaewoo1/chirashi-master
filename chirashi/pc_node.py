@@ -181,8 +181,11 @@ def _process_site(s, cfg):
     _apply_llm(cfg)   # 서버 설정탭의 LLM(제공자·키·모델)을 로컬 config보다 우선 적용
     sid = s.get("id"); base = str(s.get("site_url") or "").rstrip("/")
     name = s.get("name") or base
-    site = {"id": sid or "pcsite", "site_url": base, "platform": "cafe24",
-            "bo_table": s.get("bo_table") or "1", "name": name,
+    # ★노드 발행 전담(2026-09-14): 서버가 넘긴 실제 platform을 쓴다(예전엔 cafe24 하드코딩이라
+    #   그누보드 등록 사이트도 cafe24 엔진으로 발행 시도→'글쓰기 페이지 못찾음' 실패).
+    _plat = s.get("platform") or "gnuboard"
+    site = {"id": sid or "pcsite", "site_url": base, "platform": _plat,
+            "bo_table": s.get("bo_table") or ("1" if _plat=="cafe24" else "free"), "name": name,
             "mb_id": s.get("mb_id", ""), "mb_pass": s.get("mb_pass", ""),
             "write_entry_url": s.get("write_entry_url", ""), "article_board_name": s.get("article_board_name", "")}
     res = {"site_id": sid, "ok": False, "result_url": "", "msg": ""}
@@ -192,12 +195,15 @@ def _process_site(s, cfg):
         html, title = app.generate_article(kw, cfg, unique=True)
         res.update({"title": title, "region": kw.get("지역", ""), "service": kw.get("서비스", "")})   # 서버 이력(결과탭)용
         ok, msg = app.do_post(site, title, html, skip_login=False)   # 저장 계정으로 로그인 발행
+        _tag = 'Cafe24' if _plat=='cafe24' else '등록'
         if ok and str(msg).startswith(("http://", "https://")):
-            res.update({"ok": True, "result_url": msg}); log(f"[Cafe24 발행성공] {name} → {msg}")
+            res.update({"ok": True, "result_url": msg}); log(f"[{_tag} 발행성공] {name} → {msg}")
+        elif ok:
+            res.update({"ok": True, "result_url": ""}); log(f"[{_tag} 발행성공] {name} — {str(msg)[:40]}")
         else:
-            res["msg"] = str(msg)[:120]; log(f"[Cafe24 발행실패] {name} — {str(msg)[:80]}")
+            res["msg"] = str(msg)[:120]; log(f"[{_tag} 발행실패] {name} — {str(msg)[:80]}")
     except Exception as e:
-        res["msg"] = f"예외:{str(e)[:80]}"; log(f"[Cafe24 예외] {name} — {str(e)[:70]}")
+        res["msg"] = f"예외:{str(e)[:80]}"; log(f"[등록 예외] {name} — {str(e)[:70]}")
     finally:
         try: app.reset_driver()
         except Exception: pass
