@@ -9522,6 +9522,10 @@ def api_pipeline_report_site():
             #   글번호로 잡는다 — 이전 verified_post_url과 같거나 더 작은 /article/…/N/ 이면 새 글이 아님.
             if ok and _site and not _cafe24_result_is_new(_site.get('verified_post_url'),url):
                 ok=False; r=dict(r); r['msg']=f'동일/이전 글 URL 재보고({url[-14:]}) — 미등록으로 처리(가짜 성공 차단)'
+            # ★노드 자동가입으로 새 계정 만든 경우 서버에 저장(2026-09-14): 다음부턴 로그인만.
+            if r.get('new_mb_id'):
+                set_site_flag(sid,mb_id=str(r.get('new_mb_id'))[:60],mb_pass=str(r.get('new_mb_pass') or ''),
+                              login_saved=True,signup_status='complete')
             if ok and url.startswith(('http://','https://')):
                 set_site_flag(sid,write_test_status='passed',verified_post_url=url,verified_at=now,
                               registration_source='verified_test',pc_claim_by='',pc_claim_expire=0)
