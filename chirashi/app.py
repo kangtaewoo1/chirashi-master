@@ -2367,13 +2367,37 @@ def _solve_recaptcha_audio(d, cfg, max_try=2):
         except Exception: pass
         return False
 
+_2C_BAL_CACHE={'ts':0.0,'ok':None}
+def _twocaptcha_has_balance(api_key):
+    """★2captcha 잔액0 가드(2026-09-14 대표님 '자꾸 실패로 뜬다'): 잔액이 사실상 0이면
+       recaptcha/kcaptcha에서 무료풀이 실패 후 2captcha를 부르다 매번 ERROR_ZERO_BALANCE로
+       무서운 '실패' 로그만 쌓았다. 10분 캐시로 잔액을 1회 확인해, 0이면 2captcha를 아예 건너뛴다.
+       (잔액 확인 자체는 무료.) 반환: True=쓸 수 있음 / False=잔액0·확인불가."""
+    import time as _t
+    now=_t.time()
+    if _2C_BAL_CACHE['ok'] is not None and now-_2C_BAL_CACHE['ts']<600:
+        return _2C_BAL_CACHE['ok']
+    ok=False
+    try:
+        from twocaptcha import TwoCaptcha
+        bal=float(TwoCaptcha(api_key).balance())
+        ok=(bal>0.01)   # 1센트 미만이면 사실상 못 씀
+    except Exception:
+        ok=False
+    _2C_BAL_CACHE['ts']=now; _2C_BAL_CACHE['ok']=ok
+    return ok
+
 def solve_captcha_with_2captcha(d,site,cap_type,cfg,timeout=300):
     """CAPTCHA 자동 해결. ★kcaptcha는 자체 OCR(ddddocr) 우선이라 2captcha 미설정이어도 시도(2026-09-12)."""
     api_key=(cfg.get('twocaptcha_api_key') or '').strip()
     _2c_on=bool(api_key and cfg.get('twocaptcha_enabled'))
+    # ★잔액0이면 2captcha 끔(2026-09-14): 무료풀이(kcaptcha=OCR·recaptcha=오디오)만 쓰고, 실패해도
+    #   ERROR_ZERO_BALANCE 로그를 안 남긴다. turnstile은 2captcha 필수라 잔액0이면 애초에 못 함.
+    if _2c_on and not _twocaptcha_has_balance(api_key):
+        _2c_on=False
     # kcaptcha=OCR 무료, recaptcha=오디오 음성인식 무료 → 2captcha 없어도 시도. turnstile만 2captcha 필수.
     if not _2c_on and cap_type not in ('kcaptcha','recaptcha'):
-        return False,'2captcha 설정 없음','',{}
+        return False,'2captcha 잔액0/미설정 — 유료캡차 건너뜀','',{}
 
     try:
         from selenium.webdriver.common.by import By
