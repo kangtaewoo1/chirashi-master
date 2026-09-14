@@ -8846,7 +8846,7 @@ def chk():
     #  /api/test/* = 발행 테스트 트리거(등록 사이트에 실제 글1건 발행해 검증).
     _p=request.path
     if _p=='/api/version': return  # 배포 SHA 확인 — 공개(민감정보 없음)
-    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/sites/unlock-cafe24','/api/sites/unlock-verified','/api/sites/purge-fake-cafe24','/api/candidates/rescreen-cafe24','/api/candidates/revive-rejected','/api/candidates/unrevive-nonillegal','/api/regions/normalize-existing','/api/site-board','/api/history','/api/ops-dashboard','/api/imap/test','/api/openai/usage','/api/config/clear-key','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/report-site','/api/unlocker/test','/api/sbr/test') or _p.startswith('/api/test/'):
+    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/sites/unlock-cafe24','/api/sites/unlock-verified','/api/sites/purge-fake-cafe24','/api/candidates/rescreen-cafe24','/api/candidates/revive-rejected','/api/candidates/unrevive-nonillegal','/api/regions/normalize-existing','/api/site-board','/api/history','/api/ops-dashboard','/api/imap/test','/api/openai/usage','/api/config/clear-key','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/report-site','/api/unlocker/test','/api/sbr/test','/api/diag') or _p.startswith('/api/test/'):
         tok=(request.args.get('token') or '').strip()
         cfgtok=(load_config().get('log_token') or '').strip()
         if cfgtok and tok==cfgtok:
@@ -10268,6 +10268,26 @@ def api_diag():
     except Exception:
         step('키워드 풀',len(load_keywords())>0,f'{len(load_keywords())}개')
     step('이미지 URL',True,f'{len(load_image_urls())}개'+(' (기본 이미지 사용)' if not load_image_urls() else ''))
+    # 6) 무료 kcaptcha OCR(ddddocr) 상태 — ★서버 자동설치 검증(2026-09-14 대표님 '서버에 ddddocr 설치·무SSH').
+    #   ?ocr=1 이면 실제 _ocr_kcaptcha를 1회 호출해 미설치 시 자동설치까지 트리거(무SSH 설치 경로 확정 검증).
+    try:
+        _pre=(_DDDD_OCR is not None)
+        if request.args.get('ocr') and _DDDD_OCR is None:
+            try:
+                import io as _io2
+                from PIL import Image as _Im2, ImageDraw as _Dw
+                _im=_Im2.new('RGB',(120,40),'white'); _d2=_Dw.Draw(_im); _d2.text((10,10),'12345',fill='black')
+                _bb=_io2.BytesIO(); _im.save(_bb,'PNG')
+                _r=_ocr_kcaptcha(_bb.getvalue())   # 미설치면 여기서 pip 자동설치 트리거
+            except Exception as _e2:
+                _r='(호출예외:'+str(_e2)[:40]+')'
+        _now_ok=(_DDDD_OCR is not None)
+        step('무료 OCR(ddddocr)',_now_ok,
+             ('설치·가동됨' if _now_ok else 'ddddocr 미설치·미가동')
+             + (' (이번 요청에서 자동설치 성공)' if (_now_ok and not _pre) else '')
+             + (' — /api/diag?ocr=1 로 자동설치 시도 가능' if not _now_ok else ''))
+    except Exception as e:
+        step('무료 OCR(ddddocr)',False,str(e)[:80])
     out['ok']=all(s['ok'] for s in out['steps'] if s['name'] in ('크롬 설치','크롬 드라이버 기동','페이지 로드 테스트'))
     return jsonify(out)
 
