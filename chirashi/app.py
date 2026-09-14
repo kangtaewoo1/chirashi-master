@@ -2889,6 +2889,12 @@ def get_driver(remote=False):
         #   unhandledPromptBehavior='accept'로 selenium이 예기치 않은 alert을 자동 수락하고 명령을 계속하게 해
         #   alert이 세션을 죽이는 일을 원천 차단한다.
         opts.set_capability('unhandledPromptBehavior','accept')
+        # ★인증서 오류 무시(2026-09-15 대표님 '약관단계 잡아줘' 실측): milko·acesoho 등 오래된 게시판이
+        #   만료/자체서명 SSL이라 크롬이 'NET::ERR_CERT_AUTHORITY_INVALID' 경고 화면에서 멈춰 폼 자체를
+        #   못 봤음(자동가입 '비밀번호 칸 도달 실패'의 실제 원인). 발행 대상 사이트는 우리가 거래하는 게 아니라
+        #   글만 쓰면 되므로 인증서 경고를 넘어 진행한다(지문 위조 아님, 접근성 옵션).
+        opts.add_argument('--ignore-certificate-errors')
+        opts.set_capability('acceptInsecureCerts',True)
         cb=os.environ.get('CHROME_BIN')  # 리눅스 VPS: chromium 경로 지정 가능
         if cb: opts.binary_location=cb
         # ★스레드별 독립 프로파일(WinError5·프로파일잠금 방지): 동시 크롬이 같은 기본 프로파일을 공유하면 충돌.
@@ -7363,7 +7369,20 @@ def auto_signup(site, submit=True):
     # register_form.php를 GET으로 직접 열면 약관 화면이라 필드가 없다 → 약관부터 진행.
     signup_url=profile.get('signup_url') or site.get('signup_url') or form_url
     def _has_pw_field():
-        return bool(_safe_find(d,"input[name='mb_password'],#reg_mb_password,input[type='password']"))
+        # ★사이드바 로그인 위젯 오탐 제거(2026-09-15 대표님 '필드매칭/약관 잡아줘' 실측): 그누보드 스킨의
+        #   헤더/사이드바 로그인폼에도 mb_password 칸이 있고(숨김·id=sidebar_mb_password), 예전 코드는 이걸
+        #   보고 '이미 가입폼 도달'로 오판→약관 제출을 건너뛰고 실제 register_form.php엔 못 가 필드가 하나도
+        #   안 채워졌음('입력됨: 없음'). → '실제로 보이는(displayed) + 로그인위젯이 아닌' 비번칸만 인정.
+        try:
+            for el in _safe_find(d,"#reg_mb_password,input[name='mb_password'],input[name='mb_password_re'],input[type='password']"):
+                try:
+                    if not el.is_displayed(): continue
+                    _idn=((el.get_attribute('id') or '')+' '+(el.get_attribute('name') or '')).lower()
+                    if 'sidebar' in _idn or 'login' in _idn: continue   # 로그인 위젯 제외
+                    return True
+                except Exception: pass
+        except Exception: pass
+        return False
     try:
         d.set_page_load_timeout(25); d.get(signup_url); time.sleep(2); dismiss_alerts(d)
     except Exception:
