@@ -743,7 +743,7 @@ def load_config():
        'http_publish_enabled':True,  # ★browserless(requests) 초고속발행(~2~3초) — CSRF token 전송 추가(2026-09-13)로 활성화. 실패 시 셀레늄 자동 폴백.
        'allow_illegal_boards':True,  # ★대표님 지시 2026-09-13 '도박은 나랑 무관, 글만 써지면 발행': illegal(도박어 도배) 게시판도 탈락 안 시키고 발행. False로 되돌리면 원래대로 차단.
        'cafe24_max_per_claim':1,     # ★대표님 지시 2026-09-13 'cafe24 동시처리 줄이기': 한 claim 배치당 cafe24 최대 개수(Turnstile로 무겁고 hang 잦아 슬롯 독점 방지). 나머지 슬롯은 그누보드 등으로 채움.
-       'node_publish_all':False,     # ★2026-09-14 v4: 서버 무료OCR 영구설치+is_autopostable 완화 후 서버 작업실워커가 '작업실별로' 발행(이력에 작업실명 기록). 서버=gnuboard 작업실발행, 노드=cafe24/로그인 전담. True면 노드 전담(작업실 구분 없이 등록사이트만).
+       'node_publish_all':True,      # ★2026-09-15 v5: 노드 전담 발행(실측: gnuboard도 서버 DC IP는 '로그인 실패'로 막히고 노드 집IP는 성공). claim-sites가 작업실 라운드로빈 배정+report-site가 workroom_name 기록해 작업실별 이력 유지. recaptcha 사이트만 여전히 실패. False면 서버가 gnuboard 발행(DC IP 실패 많음).
        'node_site_cooldown_sec':90,  # 노드가 같은 등록 사이트를 다시 claim하기까지 최소 간격(초). 짧게=발행량↑(노드 전담이라 서버 경합 없음).
        'public_base_url':'https://google.twseo.kr',  # 업로드 이미지 절대 URL 기준 도메인(외부 게시판 로드용)
        'twocaptcha_price_recaptcha_usd':0.003,'twocaptcha_price_image_usd':0.0005,
@@ -846,6 +846,15 @@ def load_config():
     if not c.get('node_publish_all_off_v4'):
         c['node_publish_all']=False
         c['node_publish_all_off_v4']=True
+        try: save_json(CONFIG_FILE,c)
+        except Exception: pass
+    # ★1회 마이그레이션(2026-09-15 v5): node_publish_all 다시 켜기 — 실측 확정: gnuboard 사이트가 서버(DC IP)에선
+    #   '로그인 실패'로 막히고 노드(집 IP)에선 발행 성공(교동2차 서버실패→노드 wr_id=57987 성공). 서버 DC IP가
+    #   '로그인 실패 716건'의 주범. 노드가 전 사이트 발행하되, claim-sites가 작업실을 라운드로빈 배정+report-site가
+    #   workroom_name 기록 → 작업실별 이력 유지(대표님 '노드 발행+작업실 이력 유지'). recaptcha 3개는 여전히 못 풂.
+    if not c.get('node_publish_all_on_v5'):
+        c['node_publish_all']=True
+        c['node_publish_all_on_v5']=True
         try: save_json(CONFIG_FILE,c)
         except Exception: pass
     # 1회 마이그레이션: sbr_country='kr' 제거 — endpoint customer name 깨서 'Wrong customer name'
@@ -9873,12 +9882,27 @@ def api_pipeline_claim_sites():
         #   (교동2차·Samjin만 계속 돌고 나머지 70곳 방치, 고장난 Samjin이 매 배치 슬롯 낭비) 해소.
         #   전 사이트를 골고루 발행하고, 방금 시도(실패 포함)한 사이트는 뒤로 밀려 반복실패 낭비도 줄인다.
         elig.sort(key=lambda s: float(s.get('pc_last_try',0) or 0))
-        for s in elig[:n]:
+        # ★작업실 이력 유지(2026-09-15 대표님 '노드 발행+작업실 이력 유지'): 노드가 gnuboard도 발행하되
+        #   이력이 '직접입력'으로 뭉치지 않게, 각 사이트에 작업실을 라운드로빈 배정해 그 작업실 키워드로 발행·기록.
+        #   서버(DC IP)가 로그인실패 대량생산하던 걸 노드(집 IP)로 옮기면서도 작업실별 이력을 살린다.
+        try: _rooms=[r for r in (load_json(WORKROOMS_FILE,[]) or []) if _workroom_combos(r)]
+        except Exception: _rooms=[]
+        for _i,s in enumerate(elig[:n]):
             s['pc_claim_by']=node_id; s['pc_claim_expire']=now+ttl; s['pc_last_try']=now
-            picked.append({'id':s.get('id'),'site_url':s.get('site_url'),'platform':s.get('platform') or 'gnuboard',
+            _pl={'id':s.get('id'),'site_url':s.get('site_url'),'platform':s.get('platform') or 'gnuboard',
                 'bo_table':s.get('bo_table') or '1','name':s.get('name') or s.get('site_url'),
                 'mb_id':s.get('mb_id',''),'mb_pass':s.get('mb_pass',''),   # ★비번 포함(PC 로컬 로그인용)
-                'write_entry_url':s.get('write_entry_url',''),'article_board_name':s.get('article_board_name','')})
+                'write_entry_url':s.get('write_entry_url',''),'article_board_name':s.get('article_board_name','')}
+            # 작업실 라운드로빈 배정 + 그 작업실의 조합(키워드) 하나
+            if _rooms:
+                _room=_rooms[_i % len(_rooms)]
+                _picked=_pick_next_combo([_room])
+                if _picked:
+                    _rm,_kw,_cur,_tot=_picked
+                    _pl['workroom_id']=_rm.get('id',''); _pl['workroom_name']=_rm.get('name','')
+                    _pl['kw']={'지역':_kw.get('지역',''),'서비스':_kw.get('서비스',''),'브랜드':_kw.get('브랜드','')}
+                    _pl['writer_name']=str(_rm.get('writer_name') or '').strip()
+            picked.append(_pl)
         if picked: save_sites(sites)
     if picked: add_log(f'[PC노드] {node_id} 등록Cafe24 {len(picked)}곳 위임(로컬크롬 로그인발행)','파이프라인')
     if picked: _node_beat(node_id, action=f'Cafe24 {len(picked)}곳 발행 시작')
@@ -9918,6 +9942,7 @@ def api_pipeline_report_site():
                     history_add({'id':secrets.token_hex(8),'time':_t,'updated':_t,'site_id':sid,
                                  'site_name':_nm,'site_url':_site.get('site_url',''),'bo_table':_site.get('bo_table',''),
                                  'title':str(r.get('title') or '')[:120],'region':str(r.get('region') or ''),'service':str(r.get('service') or ''),
+                                 'workroom_id':str(r.get('workroom_id') or ''),'workroom_name':str(r.get('workroom_name') or ''),   # ★작업실별 이력(2026-09-15)
                                  'status':'done','result_url':url,'message':url,'attempts':0,'node':node_id,'alive':'yes'})
                     finalize_post(_site,True)
                 add_log(f'[Cafe24 발행성공] {str(_nm)[:24]} — PC로컬({node_id}) → {url}'.rstrip())

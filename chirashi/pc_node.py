@@ -219,10 +219,18 @@ def _process_site(s, cfg):
             "write_entry_url": s.get("write_entry_url", ""), "article_board_name": s.get("article_board_name", "")}
     res = {"site_id": sid, "ok": False, "result_url": "", "msg": ""}
     try:
-        pool = app.collect_all_keywords()
-        kw = app.pick_keywords(pool, cfg) if pool else {"지역": "인천", "서비스": "노래방", "브랜드": cfg.get("brand", "") or "테스트"}
+        # ★작업실 이력 유지(2026-09-15 대표님 '노드 발행+작업실 이력 유지'): 서버가 claim 때 배정한
+        #   작업실 키워드(kw)·작업실명이 있으면 그걸로 발행하고 회신에 실어 서버 이력이 작업실별로 쌓이게 한다.
+        #   없으면(구버전/후보) 기존대로 통합풀 랜덤.
+        _srv_kw = s.get("kw") or {}
+        if _srv_kw.get("지역") or _srv_kw.get("서비스"):
+            kw = {"지역": _srv_kw.get("지역",""), "서비스": _srv_kw.get("서비스",""), "브랜드": _srv_kw.get("브랜드","")}
+        else:
+            pool = app.collect_all_keywords()
+            kw = app.pick_keywords(pool, cfg) if pool else {"지역": "인천", "서비스": "노래방", "브랜드": cfg.get("brand", "") or "테스트"}
         html, title = app.generate_article(kw, cfg, unique=True)
-        res.update({"title": title, "region": kw.get("지역", ""), "service": kw.get("서비스", "")})   # 서버 이력(결과탭)용
+        res.update({"title": title, "region": kw.get("지역", ""), "service": kw.get("서비스", ""),
+                    "workroom_id": s.get("workroom_id",""), "workroom_name": s.get("workroom_name","")})   # 서버 이력(작업실별)용
         ok, msg = app.do_post(site, title, html, skip_login=False)   # 저장 계정으로 로그인 발행
         # ★로그인 필요 사이트 자동가입 후 발행(대표님 지시 2026-09-14): 저장 계정이 없거나 로그인폼이라
         #   'wr_subject 없음/로그인 필요'로 실패하면, 자동가입→그 세션으로 재발행. 성공하면 계정을 서버에 저장.
