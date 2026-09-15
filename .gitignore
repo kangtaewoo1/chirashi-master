@@ -45,3 +45,10 @@ chirashi/claudedocs/
 chirashi/app.py.bak*
 chirashi/data/*.pre-*.bak
 chirashi/backups/
+
+# captcha 재학습 부산물(모델 onnx는 커밋, 학습 중간물은 제외)
+chirashi/captcha_retrain/*.pt
+chirashi/captcha_retrain/train.log
+chirashi/captcha_retrain/clean/
+
+chirashi/captcha_retrain/train_s.log

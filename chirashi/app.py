@@ -2149,6 +2149,50 @@ def _captcha_image_data(d):
 # ★kcaptcha 자체 OCR(대표님 지시 2026-09-12 '2captcha 돈 아깝다·자체개발'): ddddocr(캡차 특화 로컬 OCR)로
 #   그누보드 kcaptcha(전체 캡차의 ~95%, 단순 숫자/영문 이미지)를 무료·로컬로 해결. 실패 시에만 2captcha 폴백.
 _DDDD_OCR=None; _DDDD_TRIED=False
+# ★kcaptcha 전용 재학습 모델(2026-09-15 대표님 '캡차 모델 재학습'): 그누보드 kcaptcha(6자리 숫자)로
+#   CRNN 학습한 전용 onnx. 범용 ddddocr(~7-10%)보다 이 좁은 도메인에서 훨씬 정확(검증 92%).
+#   추론 우선순위: 전용모델 → (실패/불확실) ddddocr 폴백. onnxruntime만 필요(torch 불필요).
+_KC_SESS=None; _KC_TRIED=False
+_KC_MODEL_PATH=os.path.join(os.path.dirname(os.path.abspath(__file__)),'captcha_retrain','kcaptcha_model.onnx')
+_KC_MODEL_B64=''   # ★서버 무SSH 배포용(2026-09-15): autodeploy는 app.py만 받으므로 전용모델 onnx를
+                   #   base64로 app.py에 임베드 → 서버가 파일 없으면 이걸 디스크에 풀어 쓴다. (노드는 로컬파일 우선)
+def _kcaptcha_model_predict(image_bytes):
+    """전용 CRNN onnx로 kcaptcha 예측 → 숫자문자열(6자리 기대). 모델 없거나 실패면 ''."""
+    global _KC_SESS,_KC_TRIED
+    if _KC_SESS is None:
+        if _KC_TRIED: return ''
+        _KC_TRIED=True
+        try:
+            # 파일 없고 임베드 base64가 있으면 디스크에 풀어 서버에서도 전용모델 사용(무SSH).
+            if not os.path.exists(_KC_MODEL_PATH) and _KC_MODEL_B64:
+                try:
+                    import base64 as _b64k
+                    os.makedirs(os.path.dirname(_KC_MODEL_PATH),exist_ok=True)
+                    with open(_KC_MODEL_PATH,'wb') as _mf: _mf.write(_b64k.b64decode(_KC_MODEL_B64))
+                    add_log('[kcaptcha 전용모델] 임베드 모델을 디스크에 복원(서버 무SSH)')
+                except Exception: pass
+            if not os.path.exists(_KC_MODEL_PATH): return ''
+            import onnxruntime as _ort
+            _KC_SESS=_ort.InferenceSession(_KC_MODEL_PATH,providers=['CPUExecutionProvider'])
+            add_log('[kcaptcha 전용모델] 로드 성공 — 재학습 모델 가동')
+        except Exception as e:
+            add_log(f'[kcaptcha 전용모델] 로드 실패→ddddocr: {str(e)[:50]}'); return ''
+    try:
+        import io as _io, numpy as _np
+        from PIL import Image as _Im, ImageOps as _IO
+        im=_Im.open(_io.BytesIO(image_bytes)).convert('L')
+        im=_IO.autocontrast(im).resize((160,32),_Im.BILINEAR)
+        a=(_np.asarray(im,dtype=_np.float32)/255.0)[None,None,:,:]
+        inp=_KC_SESS.get_inputs()[0].name
+        logits=_KC_SESS.run(None,{inp:a})[0][0]   # (W,C)
+        idx=logits.argmax(-1); prev=0; s=''
+        for v in idx:
+            v=int(v)
+            if v!=prev and v!=0: s+=str(v-1)   # blank=0, '0'->1..'9'->10
+            prev=v
+        return s
+    except Exception:
+        return ''
 def _ocr_available():
     """무료 OCR(ddddocr) 사용 가능 여부. 서버(VPS)엔 미설치라 False, 노드(홈PC)엔 설치돼 True.
        ★캡차 사이트를 OCR 되는 노드로 위임하는 판단에 씀(2026-09-14 대표님 '무료화·무SSH')."""
@@ -2192,8 +2236,15 @@ def _ocr_install_diag():
         return False,f'pip 실행 예외: {str(e)[:120]} | import초기오류:{_imp_err}'
 
 def _ocr_kcaptcha(image_bytes):
-    """kcaptcha 이미지(bytes) → OCR 텍스트. ddddocr 없거나 실패면 ''. 결과는 영숫자만 남겨 정규화."""
+    """kcaptcha 이미지(bytes) → OCR 텍스트. ★전용 재학습모델 우선(2026-09-15) → ddddocr 폴백."""
     global _DDDD_OCR,_DDDD_TRIED
+    # ① 전용 CRNN 모델 먼저(그누보드 kcaptcha=6자리 숫자 특화, 검증정확도 92%). 6자리 나오면 즉시 채택.
+    try:
+        _m=_kcaptcha_model_predict(image_bytes)
+        if _m and len(_m)==6 and _m.isdigit():
+            return _m
+    except Exception: pass
+    # ② 전용모델 없거나 6자리 아니면 기존 ddddocr 경로로 폴백
     if _DDDD_OCR is None:
         if _DDDD_TRIED: return ''
         _DDDD_TRIED=True
