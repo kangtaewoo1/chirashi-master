@@ -751,12 +751,12 @@ def load_config():
        'auto_pipeline_enabled':True,'auto_pipeline_batch':20,   # ★배치 대폭↑(대표님 '대기 너무 쌓임'): 유입>소진 병목 해소. 병렬가입으로 감당.
        'min_interval_minutes':1,   # 발행 간격(분): 1=사실상 무간격, daily_limit=0=하루 무제한(대표님 요청)
        'publish_loop_enabled':True,'publish_interval_sec':300,   # 24시간 상시발행 루프(5분 주기 큐 보충)
-       'workroom_workers':4,   # 작업실별 전용 발행 워커(=동시 크롬) 수 상한. VPS 사양에 맞게 조절(4vCPU→4)
+       'workroom_workers':6,   # ★2026-09-15 대표님 '사이트간 최대한 병렬': 4→6(서버 메모리 mem_cap≈15 내). 작업실 동시 처리 슬롯.
        'strict_screen':True,   # ★빡센 검수(대표님 지시): 홍보글 흔적 있는 방치·개방 게시판만 ready 통과
        'signup_parallel':4,   # ★자동가입 전담 병렬 수(대표님 지시). 후보들을 동시에 가입 시도. 전역 크롬상한 내에서.
 
-       'publish_fanout':4,   # ★한 조합을 발행가능 사이트들에 '동시에' 뿌리는 병렬 크롬 수(대표님 '속도'). 1=순차
-       'publish_max_chromes':6,   # ★전역 동시 크롬 상한(모든 작업실 슬롯×fanout 통틀어). VPS 메모리 보호. 크롬1개~400MB
+       'publish_fanout':8,   # ★한 조합을 발행가능 사이트들에 '동시에' 뿌리는 병렬 크롬 수(대표님 '최대한 병렬'). 4→8. 1=순차
+       'publish_max_chromes':8,   # ★전역 동시 크롬 상한(모든 작업실 슬롯×fanout 통틀어). 6→10(대표님 '최대한 병렬', 서버 메모리 내). 크롬1개~400MB
 
        'vps_reserve_mb':350,'vps_mb_per_worker':300,   # 메모리 가드 민감도(낮출수록 워커 더 허용·OOM위험↑)
 
@@ -867,6 +867,15 @@ def load_config():
         if int(c.get('workroom_workers',0) or 0) in (0,3):
             c['workroom_workers']=4
         c['wr_workers4_migrated']=True
+        try: save_json(CONFIG_FILE,c)
+        except Exception: pass
+    # ★1회 마이그레이션(2026-09-15 대표님 '사이트간 발행 최대한 병렬'): 서버 메모리(가용 5GB, mem_cap≈15) 내에서
+    #   동시 발행 병렬도 상향. 옛 기본값(fanout 4·chromes 6·workroom 4)이면만 올리고, 대표님 조정값은 존중.
+    if not c.get('parallel_boost_v1'):
+        if int(c.get('publish_fanout',0) or 0) in (0,4): c['publish_fanout']=8
+        if int(c.get('publish_max_chromes',0) or 0) in (0,6): c['publish_max_chromes']=8
+        if int(c.get('workroom_workers',0) or 0) in (0,4): c['workroom_workers']=6
+        c['parallel_boost_v1']=True
         try: save_json(CONFIG_FILE,c)
         except Exception: pass
     return c
@@ -5362,7 +5371,7 @@ def _site_lock(site_id):
 _chrome_sem=None; _chrome_sem_n=0; _chrome_sem_guard=threading.Lock()
 def _global_chrome_sem():
     global _chrome_sem,_chrome_sem_n
-    n=max(1,min(12,int(load_config().get('publish_max_chromes',6) or 6)))
+    n=max(1,min(16,int(load_config().get('publish_max_chromes',8) or 8)))   # ★2026-09-15 대표님 '최대한 병렬': 상한 12→16, 기본 6→10(서버 메모리 mem_cap≈15 내)
     with _chrome_sem_guard:
         if _chrome_sem is None or _chrome_sem_n!=n:
             _chrome_sem=threading.BoundedSemaphore(n); _chrome_sem_n=n
@@ -8478,7 +8487,7 @@ def _publish_one_combo(kw, wname, rid, cfg, writer_name=''):
        → publish_fanout(기본4)개씩 스레드로 동시 발행. 각 스레드=자기 크롬. 같은사이트는 _site_lock."""
     sites=[x for x in load_sites() if is_publishable(x)]
     if not sites: return
-    fan=max(1,min(6,int(cfg.get('publish_fanout',4) or 4)))
+    fan=max(1,min(12,int(cfg.get('publish_fanout',8) or 8)))   # ★2026-09-15 대표님 '사이트간 발행 최대한 병렬': 상한 6→12, 기본 4→8
     _sem=threading.Semaphore(fan)          # 이 조합의 동시 발행 수(작업실 슬롯 내)
     _gsem=_global_chrome_sem()             # 전역 크롬 상한(모든 슬롯 통틀어)
     threads=[]
