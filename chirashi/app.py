@@ -1389,6 +1389,57 @@ def _auto_subkeywords(main):
     brand=region+random.choice(pool)
     return {'지역':region,'서비스':svc,'브랜드':brand}
 
+def _build_meta_intro(r, s, b, p, mood, cfg=None):
+    """★구글 메타설명용 도입부(대표님 지시 2026-09-15): 반드시 '메인키워드({r}{s})'로 시작하고
+       지역SEO 메타 형식(연락처·소개·지역맥락·해결약속)을 따른다. 매 글 유니크(풀 랜덤 조합).
+       예: '미아사거리셔츠룸에 대해 가장 많이 물어보시는 내용을 정리했습니다. 010·2200·0712 세련된
+            셔츠 코드와 격조 높은 분위기…. 미아동, 강북구, 미아사거리역 인근에 위치하며, 이용 방법부터
+            가격, 예약 방식, 위치까지 궁금하신 점을 한 번에 해결해 드립니다.'"""
+    main=f'{r}{s}'
+    # 연락처: 점 구분 표기(예 010·2200·0712) 우선, 없으면 원본 p
+    phone_dot=re.sub(r'[^0-9]','',str(p or ''))
+    if len(phone_dot)==11: phone=f'{phone_dot[:3]}·{phone_dot[3:7]}·{phone_dot[7:]}'
+    elif len(phone_dot)==10: phone=f'{phone_dot[:3]}·{phone_dot[3:6]}·{phone_dot[6:]}'
+    else: phone=str(p or '').strip()
+    # 지역 맥락(동/구/역) — r에서 파생. r이 '역/동/구'로 끝나면 그대로, 아니면 동+역 변형 추가.
+    _ctx=[]
+    _rr=str(r).strip()
+    if _rr:
+        _ctx.append(_rr if re.search(r'(동|읍|면|리|가|구|시|군|역)$',_rr) else _rr+'동')
+        # 역세권 표현(있으면) — r이 역으로 안 끝나면 '역' 후보 추가
+        if not _rr.endswith('역'):
+            _ctx.append(_rr+'역')
+    _ctx=list(dict.fromkeys([x for x in _ctx if x]))[:3]
+    ctx_str=', '.join(_ctx) if _ctx else _rr
+    # 소개문 풀(업종 분위기 반영, 유니크)
+    desc_pool=[
+        f'{mood} 분위기에서 즐기는 품격 있는 프라이빗 공간',
+        f'세련된 코드와 격조 높은 분위기의 {s} 전문 공간',
+        f'접근성과 프라이빗함을 모두 갖춘 {mood} {s}',
+        f'중요한 자리를 위한 {mood} 분위기의 프리미엄 공간',
+        f'편안한 응대와 {mood} 인테리어로 완성한 {s}',
+        f'모임과 접대에 어울리는 {mood} 분위기의 프라이빗 룸',
+    ]
+    desc=random.choice(desc_pool)
+    # 도입 표현 풀 — 메인키워드 뒤에 이어지는 문구(메인키워드는 아래에서 <strong>으로 맨 앞에 1회만 붙임)
+    lead_pool=[
+        '에 대해 가장 많이 물어보시는 내용을 정리했습니다.',
+        ' 방문 전 꼭 확인하시는 정보를 한 곳에 모았습니다.',
+        '을(를) 찾으시는 분들이 자주 궁금해하시는 점을 정리했습니다.',
+        ' 이용을 고민 중이시라면 이 안내가 도움이 됩니다.',
+    ]
+    close_pool=[
+        '이용 방법부터 가격, 예약 방식, 위치까지 궁금하신 점을 한 번에 해결해 드립니다.',
+        '가격과 예약 방법, 이용 안내와 위치까지 한눈에 확인하실 수 있습니다.',
+        '예약 방식·이용 안내·가격·위치 정보를 빠짐없이 안내해 드립니다.',
+        '위치와 이용 방법, 예약·가격 정보까지 필요한 내용을 정리해 드립니다.',
+    ]
+    lead=random.choice(lead_pool)
+    close=random.choice(close_pool)
+    loc=(f'{ctx_str} 인근에 위치하며, ' if ctx_str else '')
+    # 맨 앞 글자 = 메인키워드(<strong>). 구글 스니펫이 메인키워드로 시작하게.
+    return f'<strong>{main}</strong>{lead} {phone} {desc}. {loc}{close}'
+
 def generate_rich_html(keywords, cfg, workroom_id=None):
     r=(keywords.get('지역') or '서울').strip()
     s=(keywords.get('서비스') or '셔츠룸').strip()
@@ -1578,7 +1629,12 @@ def generate_rich_html(keywords, cfg, workroom_id=None):
           f'{_label} · {r} {s}</div>'
         + f'<h1 style="font-size:32px;font-weight:800;line-height:1.3;margin:0 0 16px;color:#111;">{title}</h1>'
         + f'<div style="width:80px;height:4px;background:{AC};margin:0 0 28px;border-radius:2px;"></div>')
+    # ★메타설명 최적화 도입부(대표님 지시 2026-09-15): 구글이 본문 초반을 메타설명으로 잡으므로
+    #   '맨 앞 = 메인키워드({r}{s})'로 시작 + 지역SEO 메타 형식. H1 바로 뒤(TOC보다 위)에 배치해
+    #   검색결과 스니펫이 이 문장이 되게 한다. 매 글 유니크(변형 풀 랜덤 조합).
+    meta_intro=_build_meta_intro(r,s,b,p,mood,cfg)
     html=(head
+        + f'<p style="font-size:16px;margin:0 0 22px;line-height:1.95;color:#222;">{meta_intro}</p>'
         + IMG(0, f'{r} {s}의 {mood.split()[0]} 공간')
         + toc_box                                    # ★상단 목차 박스
         + SEC('📍',f'{r} {s} 안내')
@@ -1709,9 +1765,14 @@ def generate_post_gpt(keywords, cfg, workroom_id=None):
     # 이미지 alt=메인 키워드(지역+업종) — 구글 이미지 노출용(대표님 2026-09-12). 캡션에 키워드+브랜드도 넣어 주변텍스트 강화.
     _imgalt=f'{r}{s}'
     _img_block=(f'<div style="text-align:center;margin:0 0 28px;"><img src="{imgs[0]}" alt="{_imgalt}" title="{_imgalt}" style="max-width:100%;border-radius:8px;" loading="lazy"/><p style="color:#888;font-size:13px;margin-top:8px;">▲ {_imgalt} {b}</p></div>' if imgs else '')
+    # ★메타설명 최적화 도입부(대표님 지시 2026-09-15): H1 바로 뒤, 메인키워드로 시작하는 지역SEO 메타 문장.
+    #   구글 스니펫이 이 문장이 되게 이미지·목차보다 위에 둔다(매 글 유니크).
+    _mood_g=random.choice(SERVICE_FLAVOR.get(s,DEFAULT_FLAVOR)['mood'])
+    _meta_intro_g=_build_meta_intro(r,s,b,p,_mood_g,cfg)
     header=(f'<div style="font-size:12px;font-weight:700;letter-spacing:5px;color:{AC};margin-bottom:12px;">{_label} · {r} {s}</div>'
             f'<h1 style="font-size:32px;font-weight:800;line-height:1.3;margin:0 0 16px;color:#111;">{title}</h1>'
-            f'<div style="width:80px;height:4px;background:{AC};margin:0 0 28px;border-radius:2px;"></div>'
+            f'<div style="width:80px;height:4px;background:{AC};margin:0 0 22px;border-radius:2px;"></div>'
+            f'<p style="font-size:16px;margin:0 0 22px;line-height:1.95;color:#222;">{_meta_intro_g}</p>'
             f'{_img_block}'
             f'{toc_box}')
     cta=(f'<div style="margin:38px 0 8px;padding:24px;background:#1f2733;color:#e8edf4;border-radius:12px;text-align:center;">'
@@ -2190,9 +2251,13 @@ def _kcaptcha_model_predict(image_bytes):
         import io as _io, numpy as _np
         from PIL import Image as _Im, ImageOps as _IO
         im=_Im.open(_io.BytesIO(image_bytes)).convert('L')
-        im=_IO.autocontrast(im).resize((160,32),_Im.BILINEAR)
+        # ★모델 입력 폭을 onnx에서 동적으로 읽음(2026-09-15): wide192 등 폭이 다른 재학습 모델도 그대로 지원.
+        _ins=_KC_SESS.get_inputs()[0]; _shp=_ins.shape
+        _W=int(_shp[3]) if (len(_shp)>=4 and isinstance(_shp[3],int)) else 160
+        _H=int(_shp[2]) if (len(_shp)>=4 and isinstance(_shp[2],int)) else 32
+        im=_IO.autocontrast(im).resize((_W,_H),_Im.BILINEAR)
         a=(_np.asarray(im,dtype=_np.float32)/255.0)[None,None,:,:]
-        inp=_KC_SESS.get_inputs()[0].name
+        inp=_ins.name
         logits=_KC_SESS.run(None,{inp:a})[0][0]   # (W,C)
         idx=logits.argmax(-1); prev=0; s=''
         for v in idx:

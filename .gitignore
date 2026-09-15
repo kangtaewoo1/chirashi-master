@@ -52,3 +52,9 @@ chirashi/captcha_retrain/train.log
 chirashi/captcha_retrain/clean/
 
 chirashi/captcha_retrain/train_s.log
+chirashi/captcha_retrain/clean2/
+chirashi/captcha_retrain/*.log
+chirashi/captcha_retrain/kcaptcha_big_*.onnx
+chirashi/captcha_retrain/kcaptcha_padright.onnx
+chirashi/captcha_retrain/kcaptcha_small_*.onnx
+chirashi/captcha_retrain/kcaptcha_wide192.onnx
