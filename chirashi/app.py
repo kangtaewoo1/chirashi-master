@@ -5621,19 +5621,8 @@ def finalize_post(site,ok,fail_reason=''):
                 else:
                     s['fail_streak']=int(s.get('fail_streak',0) or 0)+1
                     if fail_reason: s['last_fail_reason']=str(fail_reason)[:120]
-                    # ★로그인필요 사이트 헛발행 중단(2026-09-15 대표님 '실패 너무 많다' 실측: 로그인실패 740건=
-                    #   계정 없는 로그인필요 게시판을 수십회씩 반복 시도). 실패사유가 '로그인 필요/비회원 불가/
-                    #   wr_subject 없음'이고 저장계정(mb_id)이 없으면 login_required=True로 표시 → is_autopostable가
-                    #   즉시 제외(가입 전엔 발행 대상 아님). 계정 생기면 다시 대상. 도배·헛실패를 30회 잠금 전에 원천 차단.
-                    # ★단, 오늘 실제 발행 성공한 적 있으면(posted_today>0) 마킹 안 함(2026-09-15 재수정):
-                    #   서현쓰리노·Di동 등은 비회원 글쓰기가 되는데 간헐 wr_subject 타이밍 실패가 날 뿐
-                    #   (오늘 30~120건 성공). 이걸 로그인필요로 오판해 막으면 잘 되는 사이트를 죽인다.
-                    #   posted_today==0(한 번도 성공 못함)이고 명시적 '로그인/권한' 사유일 때만 진짜 로그인필요로 표시.
-                    _fr=str(fail_reason or '')
-                    _explicit_login=any(k in _fr for k in ('로그인이 필요','비회원 글쓰기 불가','권한이 없','권한 alert'))
-                    if (not str(s.get('mb_id') or '').strip()) and _explicit_login \
-                            and not int(s.get('posted_today',0) or 0):
-                        s['login_required']=True
+                    # (죽은 사이트 잠금은 실시간 오판을 피해 /api/sites/mark-login-required가 last_post_at 기준으로
+                    #  주기 처리한다. 여기선 fail_streak만 올리고 reconcile_sites가 잠금 판정.)
                 break
         save_sites(sites)
     if not ok:
@@ -9508,34 +9497,41 @@ def api_sites_reject():
 
 @app.route('/api/sites/mark-login-required',methods=['POST'])
 def api_mark_login_required():
-    """★로그인필요 헛발행 즉시 차단(2026-09-15 대표님 '실패 너무 많다'): 계정(mb_id) 없는데
-       실패사유가 '로그인 필요/비회원 불가/wr_subject 없음'인 등록사이트를 login_required=True로 표시해
-       is_autopostable에서 즉시 제외한다. (실측: 33개 사이트가 로그인실패 740건 도배 — fail_streak 30회
-       잠금 전에 원천 차단). dry_run 지원. 계정 생기면(자동가입 성공) 다시 발행 대상."""
-    dry=bool((request.get_json(silent=True) or {}).get('dry_run'))
-    # ★명시적 로그인/권한 사유만(2026-09-15 재수정): 'wr_subject 없음/로그인 실패'는 비회원 발행되는
-    #   사이트의 간헐 타이밍 실패에도 뜨므로 제외 기준에서 뺀다. 그리고 오늘 발행 성공(posted_today>0)한
-    #   사이트는 절대 마킹 안 함(잘 되는 사이트 보호). 또 잘못 마킹된 것(posted_today>0)은 이번에 해제.
-    KW=('로그인이 필요','비회원 글쓰기 불가','권한이 없','권한 alert')
-    hit=[]; unmarked=[]
+    """★'죽은 사이트' 발행중단(2026-09-15 대표님 '실패 너무 많다' 최종): 실패이력 도배의 정체 =
+       소수 사이트가 오래전부터 발행 못하는데 계속 시도돼 실패만 쌓임(쪽빛하늘 fs112·홍보이벤트 fs108 등).
+       판정은 posted_today(옛값 오염)가 아니라 **last_post_at(최근 실제 발행일)** 기준:
+       최근 N일(기본3) 발행 없음 + fail_streak≥임계(기본10) → permission=False로 발행 잠금.
+       최근 발행 있는 사이트는 절대 안 건드림(간헐 실패해도 되는 사이트 보호). 옛 오판(login_required) 해제.
+       body: {dry_run, days(3), streak(10)}. 재허용은 unlock-verified."""
+    _d=(request.get_json(silent=True) or {})
+    dry=bool(_d.get('dry_run')); DAYS=int(_d.get('days',3) or 3); STK=int(_d.get('streak',10) or 10)
+    import datetime as _dt
+    now=_dt.datetime.now()
+    def _days_since(s):
+        t=s.get('last_post_at')
+        if not t: return 999
+        try: return (now-_dt.datetime.strptime(t,'%Y-%m-%d %H:%M:%S')).days
+        except Exception: return 999
+    locked=[]; unmarked=[]
     with POST_LOCK:
         sites=load_sites()
         for s in sites:
-            _today=int(s.get('posted_today',0) or 0)
-            # (1) 오판 복구: login_required인데 오늘 실제 발행됨 → 해제
-            if s.get('login_required') and _today>0 and not str(s.get('mb_id') or '').strip():
+            # 옛 login_required 오판 해제(최근 발행 있으면)
+            if s.get('login_required') and _days_since(s)<DAYS and not str(s.get('mb_id') or '').strip():
                 unmarked.append((s.get('name') or s.get('site_url') or '')[:30])
                 if not dry: s['login_required']=False
-                continue
-            # (2) 새 마킹: 계정없음 + 오늘 발행0 + 명시적 로그인/권한 사유
-            if str(s.get('mb_id') or '').strip() or s.get('login_required') or _today>0: continue
-            lfr=str(s.get('last_fail_reason') or '')
-            if any(k in lfr for k in KW):
-                hit.append((s.get('name') or s.get('site_url') or '')[:34])
-                if not dry: s['login_required']=True
-        if (hit or unmarked) and not dry: save_sites(sites)
-    add_log(f'[로그인필요 표시] {"(미리보기)" if dry else ""} 마킹 {len(hit)} · 오판해제 {len(unmarked)}','정리')
-    return jsonify({'ok':True,'dry_run':dry,'marked':len(hit),'unmarked':len(unmarked),'sites':hit[:40]})
+            # 죽은 사이트 잠금: verified인데 최근 발행 없고 fail_streak 높음
+            _ver=str(s.get('verified_post_url') or '')[:4]=='http'
+            if _ver and s.get('permission') and _days_since(s)>=DAYS and int(s.get('fail_streak',0) or 0)>=STK:
+                locked.append(((s.get('name') or s.get('site_url') or '')[:34], _days_since(s), int(s.get('fail_streak',0) or 0)))
+                if not dry:
+                    s['permission']=False
+                    s['auto_drop_reason']=f'{_days_since(s)}일째 발행0·연속실패{s.get("fail_streak")}회 — 발행 잠금(죽은 사이트)'
+                    s['auto_dropped_at']=now.strftime('%Y-%m-%d %H:%M')
+        if (locked or unmarked) and not dry: save_sites(sites)
+    add_log(f'[죽은사이트 잠금] {"(미리보기)" if dry else ""} 잠금 {len(locked)} · 오판해제 {len(unmarked)}','정리')
+    return jsonify({'ok':True,'dry_run':dry,'locked':len(locked),'unmarked':len(unmarked),
+                    'sites':[f'{n}({d}일·fs{f})' for n,d,f in locked[:40]]})
 
 @app.route('/api/sites/purge-fake-cafe24',methods=['POST'])
 def api_purge_fake_cafe24():
