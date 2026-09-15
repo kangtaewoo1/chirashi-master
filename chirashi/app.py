@@ -5625,9 +5625,14 @@ def finalize_post(site,ok,fail_reason=''):
                     #   계정 없는 로그인필요 게시판을 수십회씩 반복 시도). 실패사유가 '로그인 필요/비회원 불가/
                     #   wr_subject 없음'이고 저장계정(mb_id)이 없으면 login_required=True로 표시 → is_autopostable가
                     #   즉시 제외(가입 전엔 발행 대상 아님). 계정 생기면 다시 대상. 도배·헛실패를 30회 잠금 전에 원천 차단.
+                    # ★단, 오늘 실제 발행 성공한 적 있으면(posted_today>0) 마킹 안 함(2026-09-15 재수정):
+                    #   서현쓰리노·Di동 등은 비회원 글쓰기가 되는데 간헐 wr_subject 타이밍 실패가 날 뿐
+                    #   (오늘 30~120건 성공). 이걸 로그인필요로 오판해 막으면 잘 되는 사이트를 죽인다.
+                    #   posted_today==0(한 번도 성공 못함)이고 명시적 '로그인/권한' 사유일 때만 진짜 로그인필요로 표시.
                     _fr=str(fail_reason or '')
-                    if (not str(s.get('mb_id') or '').strip()) and any(k in _fr for k in
-                            ('로그인이 필요','로그인 필요','비회원 글쓰기 불가','권한이 없','권한 alert','wr_subject')):
+                    _explicit_login=any(k in _fr for k in ('로그인이 필요','비회원 글쓰기 불가','권한이 없','권한 alert'))
+                    if (not str(s.get('mb_id') or '').strip()) and _explicit_login \
+                            and not int(s.get('posted_today',0) or 0):
                         s['login_required']=True
                 break
         save_sites(sites)
@@ -9508,20 +9513,29 @@ def api_mark_login_required():
        is_autopostable에서 즉시 제외한다. (실측: 33개 사이트가 로그인실패 740건 도배 — fail_streak 30회
        잠금 전에 원천 차단). dry_run 지원. 계정 생기면(자동가입 성공) 다시 발행 대상."""
     dry=bool((request.get_json(silent=True) or {}).get('dry_run'))
-    KW=('로그인이 필요','로그인 필요','비회원 글쓰기 불가','권한이 없','권한 alert','wr_subject','로그인 실패')
-    hit=[]
+    # ★명시적 로그인/권한 사유만(2026-09-15 재수정): 'wr_subject 없음/로그인 실패'는 비회원 발행되는
+    #   사이트의 간헐 타이밍 실패에도 뜨므로 제외 기준에서 뺀다. 그리고 오늘 발행 성공(posted_today>0)한
+    #   사이트는 절대 마킹 안 함(잘 되는 사이트 보호). 또 잘못 마킹된 것(posted_today>0)은 이번에 해제.
+    KW=('로그인이 필요','비회원 글쓰기 불가','권한이 없','권한 alert')
+    hit=[]; unmarked=[]
     with POST_LOCK:
         sites=load_sites()
         for s in sites:
-            if str(s.get('mb_id') or '').strip(): continue      # 계정 있으면 제외 안 함
-            if s.get('login_required'): continue                 # 이미 표시됨
+            _today=int(s.get('posted_today',0) or 0)
+            # (1) 오판 복구: login_required인데 오늘 실제 발행됨 → 해제
+            if s.get('login_required') and _today>0 and not str(s.get('mb_id') or '').strip():
+                unmarked.append((s.get('name') or s.get('site_url') or '')[:30])
+                if not dry: s['login_required']=False
+                continue
+            # (2) 새 마킹: 계정없음 + 오늘 발행0 + 명시적 로그인/권한 사유
+            if str(s.get('mb_id') or '').strip() or s.get('login_required') or _today>0: continue
             lfr=str(s.get('last_fail_reason') or '')
             if any(k in lfr for k in KW):
                 hit.append((s.get('name') or s.get('site_url') or '')[:34])
                 if not dry: s['login_required']=True
-        if hit and not dry: save_sites(sites)
-    add_log(f'[로그인필요 표시] {"(미리보기)" if dry else ""} {len(hit)}곳 발행 대상 제외(계정 없는 로그인필요)','정리')
-    return jsonify({'ok':True,'dry_run':dry,'marked':len(hit),'sites':hit[:40]})
+        if (hit or unmarked) and not dry: save_sites(sites)
+    add_log(f'[로그인필요 표시] {"(미리보기)" if dry else ""} 마킹 {len(hit)} · 오판해제 {len(unmarked)}','정리')
+    return jsonify({'ok':True,'dry_run':dry,'marked':len(hit),'unmarked':len(unmarked),'sites':hit[:40]})
 
 @app.route('/api/sites/purge-fake-cafe24',methods=['POST'])
 def api_purge_fake_cafe24():
