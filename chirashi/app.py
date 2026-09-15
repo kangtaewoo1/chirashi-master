@@ -2518,8 +2518,12 @@ def _twocaptcha_has_balance(api_key):
        (잔액 확인 자체는 무료.) 반환: True=쓸 수 있음 / False=잔액0·확인불가."""
     import time as _t
     now=_t.time()
-    if _2C_BAL_CACHE['ok'] is not None and now-_2C_BAL_CACHE['ts']<600:
-        return _2C_BAL_CACHE['ok']
+    # ★충전 빠른 반영(2026-09-15 대표님 '충전해야겠다'): 잔액있음(True)은 10분 캐시(잔액확인 요청 절약),
+    #   잔액0/오류(False)는 2분만 캐시 → 충전 직후 최대 2분이면 자동으로 2captcha 재가동(재시작 불필요).
+    _cached=_2C_BAL_CACHE['ok']
+    _ttl=600 if _cached else 120
+    if _cached is not None and now-_2C_BAL_CACHE['ts']<_ttl:
+        return _cached
     ok=False
     try:
         from twocaptcha import TwoCaptcha
@@ -9145,7 +9149,7 @@ def chk():
     #  /api/test/* = 발행 테스트 트리거(등록 사이트에 실제 글1건 발행해 검증).
     _p=request.path
     if _p=='/api/version': return  # 배포 SHA 확인 — 공개(민감정보 없음)
-    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/sites/unlock-cafe24','/api/sites/unlock-verified','/api/sites/purge-fake-cafe24','/api/sites/mark-login-required','/api/candidates/rescreen-cafe24','/api/candidates/revive-rejected','/api/candidates/unrevive-nonillegal','/api/regions/normalize-existing','/api/site-board','/api/history','/api/ops-dashboard','/api/imap/test','/api/openai/usage','/api/config/clear-key','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/report-site','/api/unlocker/test','/api/sbr/test','/api/diag') or _p.startswith('/api/test/'):
+    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/sites/unlock-cafe24','/api/sites/unlock-verified','/api/sites/purge-fake-cafe24','/api/sites/mark-login-required','/api/candidates/rescreen-cafe24','/api/candidates/revive-rejected','/api/candidates/unrevive-nonillegal','/api/regions/normalize-existing','/api/site-board','/api/history','/api/ops-dashboard','/api/imap/test','/api/openai/usage','/api/twocaptcha/usage','/api/config/clear-key','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/report-site','/api/unlocker/test','/api/sbr/test','/api/diag') or _p.startswith('/api/test/'):
         tok=(request.args.get('token') or '').strip()
         cfgtok=(load_config().get('log_token') or '').strip()
         if cfgtok and tok==cfgtok:
