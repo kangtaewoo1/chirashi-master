@@ -7360,8 +7360,14 @@ def auto_signup(site, submit=True):
     else:
         email_local=re.sub(r'[^a-z0-9]','',mid.lower())[:20] or ('u'+secrets.token_hex(4))
         email=f'{email_local}@gmail.com'
-    nick=(cfg.get('brand') or 'user')+secrets.token_hex(2)
-    name=cfg.get('brand') or '홍길동'
+    # ★닉네임/이름 규칙 위반 방지(2026-09-15 대표님 'ID 규칙 위반도 잡아줘' 실측): 그누보드 다수 스킨의
+    #   닉네임 검증이 '공백없이 한글,영문,숫자만 (한글 2자·영문 4자 이상)' + 한글·영문 혼합 거부. 예전 닉네임은
+    #   brand('인천홍마니')+hex = 한글+숫자 혼합이라 거부됐음(가입실패 '규칙 위반(아이디/닉네임)').
+    #   → 닉네임은 '영문 4자 이상' 순수 영숫자(항상 통과), 이름은 순수 한글 2자 이상만 사용(혼합 제거).
+    nick=re.sub(r'[^a-zA-Z0-9]','',(mid or 'user'))[:16] or ('user'+secrets.token_hex(2))
+    if len(nick)<4: nick=(nick+secrets.token_hex(3))[:8]
+    _kor_name=re.sub(r'[^가-힣]','',str(cfg.get('brand') or ''))   # 브랜드에서 한글만
+    name=_kor_name if len(_kor_name)>=2 else '홍길동'
     vals_by_role={'id':mid,'password':pw,'password_confirm':pw,'email':email,
                   'nickname':nick,'name':name}
     d=get_driver()
@@ -7834,9 +7840,17 @@ def auto_signup(site, submit=True):
         return False,'가입 실패 — 본인인증 필요(자동가입 불가)'
     if any(k in pt for k in ('승인 후','관리자 승인','승인이 필요','가입 승인')):
         return False,'가입 보류 — 관리자 승인제 게시판(자동발행 불가)'
-    # (d) 입력값 규칙 위반 — 가입 폼이 여전히 화면에 있을 때만(오탐 방지) + 더 구체적인 오류 문구.
-    if _form_still and any(k in pt for k in ('비밀번호가 일치','비밀번호를 확인','자 이상','자 이하','사용할 수 없는','다시 입력','형식이 맞지','올바르지 않은')):
-        _errline=next((ln.strip() for ln in pt.splitlines() if any(k in ln for k in ('비밀번호','아이디','일치','자 이상','형식','사용할 수'))),pt[:50])
+    # (c-2) ★kcaptcha 오답이 '규칙 위반'으로 오분류되던 것 교정(2026-09-15 대표님 'ID 규칙 위반도 잡아줘' 실측):
+    #   그누보드 가입폼엔 닉네임 옆에 '공백없이 한글,영문,숫자만 (한글2·영문4자 이상)' 안내문구가 상시 노출된다.
+    #   kcaptcha OCR이 틀리면(ddddocr는 흘림체 정확도 낮음) 폼이 그대로 남는데, 위 (d)가 그 안내문구의
+    #   '자 이상'에 걸려 매번 '규칙 위반(아이디)'로 오보고 → 진짜 원인(캡차 오답)이 가려졌음.
+    #   캡차 있는 사이트에서 폼 잔존 + '진짜 오류 신호(빨강 에러/실패 문구)'가 없으면 캡차 실패로 정확히 보고.
+    _real_err=any(k in pt for k in ('비밀번호가 일치하지','비밀번호를 확인','이미 사용','중복','사용할 수 없는','다시 입력해','형식이 맞지','형식이 올바','올바르지 않은','필수 항목','필수항목'))
+    if _form_still and cap and not _real_err:
+        return False,'가입 실패 — 캡차 인식 실패 추정(그누보드 kcaptcha OCR 오답, 재발굴/재시도 대상)'
+    # (d) 입력값 규칙 위반 — 가입 폼이 여전히 화면에 있을 때 + '진짜' 오류 신호일 때만(안내문구 '자 이상' 오탐 제거).
+    if _form_still and _real_err:
+        _errline=next((ln.strip() for ln in pt.splitlines() if any(k in ln for k in ('비밀번호','아이디','일치','중복','형식','사용할 수','필수'))),pt[:50])
         return False,f'가입 실패 — 입력값 규칙 위반({_errline[:50]})'
 
     # ② (완료문구·로그인 없이 홈으로 갔지만 폼도 안 남은 경우) 홈에서 로그인 상태 재확인
