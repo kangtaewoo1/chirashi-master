@@ -3678,11 +3678,24 @@ def gnuboard_post(site, title, content_html, skip_login=False):
     if ('login.php' in cur or 'login_check' in cur or 'login' in cur) or (not mid and _page_login_state(d)):
         return False,'로그인이 필요한 게시판입니다 — 비회원 글쓰기 불가'
     # wr_subject 자체가 없으면(비회원 폼 미제공) 크래시 유발 wait 대신 조기 반환.
-    try:
-        if not d.find_elements(By.CSS_SELECTOR,"input[name='wr_subject'],input#wr_subject"):
-            return False,'글쓰기 폼(wr_subject) 없음 — 로그인 필요/비표준 스킨'
-    except Exception:
-        return False,'글쓰기 폼 확인 중 세션 오류 — 로그인 필요 추정'
+    # ★간헐 'wr_subject 없음' 실패 해결(2026-09-15 대표님 '왜 가끔만 성공'): 폼은 있는데 병렬발행 부하·
+    #   느린 서버로 렌더 전에 1회 조회해 빈 결과→즉시 실패했음(실측: msdv·jinsungware는 폼 정상 존재인데
+    #   fail_streak 84~113). 최대 ~5초 폴링(0.5s×10)해 렌더되면 진행 → 간헐실패 대폭 감소.
+    _wr_found=False
+    for _ in range(10):
+        try:
+            if d.find_elements(By.CSS_SELECTOR,"input[name='wr_subject'],input#wr_subject"):
+                _wr_found=True; break
+        except Exception:
+            return False,'글쓰기 폼 확인 중 세션 오류 — 로그인 필요 추정'
+        # 폴링 중 로그인 리다이렉트로 바뀌면 즉시 로그인필요 반환
+        try:
+            if 'login' in (d.current_url or '').lower():
+                return False,'로그인이 필요한 게시판입니다 — 비회원 글쓰기 불가'
+        except Exception: pass
+        time.sleep(0.5)
+    if not _wr_found:
+        return False,'글쓰기 폼(wr_subject) 없음 — 로그인 필요/비표준 스킨'
 
     # 보안 차단은 즉시 중단한다. CAPTCHA는 내용을 채운 뒤 사람이 입력한다.
     if _page_is_blocked(d):
