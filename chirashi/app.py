@@ -5621,6 +5621,14 @@ def finalize_post(site,ok,fail_reason=''):
                 else:
                     s['fail_streak']=int(s.get('fail_streak',0) or 0)+1
                     if fail_reason: s['last_fail_reason']=str(fail_reason)[:120]
+                    # ★로그인필요 사이트 헛발행 중단(2026-09-15 대표님 '실패 너무 많다' 실측: 로그인실패 740건=
+                    #   계정 없는 로그인필요 게시판을 수십회씩 반복 시도). 실패사유가 '로그인 필요/비회원 불가/
+                    #   wr_subject 없음'이고 저장계정(mb_id)이 없으면 login_required=True로 표시 → is_autopostable가
+                    #   즉시 제외(가입 전엔 발행 대상 아님). 계정 생기면 다시 대상. 도배·헛실패를 30회 잠금 전에 원천 차단.
+                    _fr=str(fail_reason or '')
+                    if (not str(s.get('mb_id') or '').strip()) and any(k in _fr for k in
+                            ('로그인이 필요','로그인 필요','비회원 글쓰기 불가','권한이 없','권한 alert','wr_subject')):
+                        s['login_required']=True
                 break
         save_sites(sites)
     if not ok:
@@ -9121,7 +9129,7 @@ def chk():
     #  /api/test/* = 발행 테스트 트리거(등록 사이트에 실제 글1건 발행해 검증).
     _p=request.path
     if _p=='/api/version': return  # 배포 SHA 확인 — 공개(민감정보 없음)
-    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/sites/unlock-cafe24','/api/sites/unlock-verified','/api/sites/purge-fake-cafe24','/api/candidates/rescreen-cafe24','/api/candidates/revive-rejected','/api/candidates/unrevive-nonillegal','/api/regions/normalize-existing','/api/site-board','/api/history','/api/ops-dashboard','/api/imap/test','/api/openai/usage','/api/config/clear-key','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/report-site','/api/unlocker/test','/api/sbr/test','/api/diag') or _p.startswith('/api/test/'):
+    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/sites/unlock-cafe24','/api/sites/unlock-verified','/api/sites/purge-fake-cafe24','/api/sites/mark-login-required','/api/candidates/rescreen-cafe24','/api/candidates/revive-rejected','/api/candidates/unrevive-nonillegal','/api/regions/normalize-existing','/api/site-board','/api/history','/api/ops-dashboard','/api/imap/test','/api/openai/usage','/api/config/clear-key','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/report-site','/api/unlocker/test','/api/sbr/test','/api/diag') or _p.startswith('/api/test/'):
         tok=(request.args.get('token') or '').strip()
         cfgtok=(load_config().get('log_token') or '').strip()
         if cfgtok and tok==cfgtok:
@@ -9492,6 +9500,28 @@ def api_sites_reject():
     add_rejected_domains([dom],reason)
     add_log(f'[수동 제외] {dom} — {reason} (사이트 {len(hit)}·후보 {ch})','정리')
     return jsonify({'ok':True,'domain':dom,'sites':hit,'candidates':ch})
+
+@app.route('/api/sites/mark-login-required',methods=['POST'])
+def api_mark_login_required():
+    """★로그인필요 헛발행 즉시 차단(2026-09-15 대표님 '실패 너무 많다'): 계정(mb_id) 없는데
+       실패사유가 '로그인 필요/비회원 불가/wr_subject 없음'인 등록사이트를 login_required=True로 표시해
+       is_autopostable에서 즉시 제외한다. (실측: 33개 사이트가 로그인실패 740건 도배 — fail_streak 30회
+       잠금 전에 원천 차단). dry_run 지원. 계정 생기면(자동가입 성공) 다시 발행 대상."""
+    dry=bool((request.get_json(silent=True) or {}).get('dry_run'))
+    KW=('로그인이 필요','로그인 필요','비회원 글쓰기 불가','권한이 없','권한 alert','wr_subject','로그인 실패')
+    hit=[]
+    with POST_LOCK:
+        sites=load_sites()
+        for s in sites:
+            if str(s.get('mb_id') or '').strip(): continue      # 계정 있으면 제외 안 함
+            if s.get('login_required'): continue                 # 이미 표시됨
+            lfr=str(s.get('last_fail_reason') or '')
+            if any(k in lfr for k in KW):
+                hit.append((s.get('name') or s.get('site_url') or '')[:34])
+                if not dry: s['login_required']=True
+        if hit and not dry: save_sites(sites)
+    add_log(f'[로그인필요 표시] {"(미리보기)" if dry else ""} {len(hit)}곳 발행 대상 제외(계정 없는 로그인필요)','정리')
+    return jsonify({'ok':True,'dry_run':dry,'marked':len(hit),'sites':hit[:40]})
 
 @app.route('/api/sites/purge-fake-cafe24',methods=['POST'])
 def api_purge_fake_cafe24():
