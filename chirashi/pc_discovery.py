@@ -319,6 +319,27 @@ def _is_real_board(body):
     # 실제 게시판: 글이 있거나(wr_id≥1), 게시판 네비(bo_table≥3)+글쓰기버튼이 있어야 함(빈 게시판도 통과).
     return (wr >= 1) or (bo >= 3 and has_write)
 
+# ★독점 가능 게시판 판정(2026-09-18 대표님 '내가 독점할 수 있는 사이트 = 키워드 안 겹쳐 상위노출'):
+#   실측 — 경쟁없는 방치 게시판에 발행하면 그 글이 그 게시판 검색 최상단(일원역하퍼 점령 공식). 지표:
+#   유흥경쟁글 흔적(하이퍼블릭·010·출장 등)=0이면 우리가 유일 / 글 적음·오래방치=방치 → 독점점수.
+_COMPETE_WORDS = ('하이퍼블릭','풀싸롱','셔츠룸','쓰리노','텐프로','쩜오','유흥','가라오케','키스방','안마',
+                  '출장마사지','출장안마','레깅스룸','미러룸','란제리','호빠','노래빠','O1O','o1o')
+def _monopoly_score(body):
+    """게시판 HTML로 '독점 가능 점수'(높을수록 경쟁없는 방치판=상위노출 유리). 0~6."""
+    wr = len(re.findall(r'wr_id=\d+', body))
+    compete = sum(body.count(k) for k in _COMPETE_WORDS)   # 유흥 경쟁글 흔적
+    empty = ('게시물이 없' in body or '등록된 글이 없' in body or wr == 0)
+    # 최근글 연도(방치 판정): 본문에 20xx 연도 최대값
+    yrs = [int(y) for y in re.findall(r'20(\d{2})', body)]
+    recent_yr = max(yrs) if yrs else 0   # 두자리(24=2024)
+    score = 0
+    if compete == 0: score += 3          # 유흥 경쟁 흔적 0 = 우리가 유일(핵심)
+    elif compete <= 3: score += 1
+    else: score -= 2                     # 이미 업자글 도배 = 경쟁판(감점)
+    if empty or wr <= 3: score += 2      # 빈/방치 게시판
+    if 0 < recent_yr <= 24: score += 1   # 최근글 2024년 이하(1년+ 방치)
+    return max(0, score)
+
 def _has_board(dom):
     """도메인에 '실제 존재하는' 그누보드 게시판이 있는지 확인. 있으면 게시판 URL 반환, 없으면 ''.
        ★cafe24 판정 제거(수율0)·오판정 정밀화(2026-09-18 실측): 단순 'bo_table 문자열 존재'로 판정하면
@@ -337,16 +358,17 @@ def _has_board(dom):
         except Exception:
             continue
         # 2) 실제 게시판 찾기: 흔한 bo_table 여러 개 시도, 실제 게시판 구조인 첫 것 반환.
+        #    ★독점점수 함께 반환(2026-09-18): 경쟁없는 방치 게시판일수록 높은 점수 → 서버가 우선 발행.
         for bo in _BO_TRY:
             try:
                 r = requests.get(f"{base}/bbs/board.php?bo_table={bo}", headers=UA, timeout=7, verify=False, allow_redirects=True)
                 body = (r.text or "")[:30000]
                 if r.status_code < 400 and _is_real_board(body):
-                    return f"{base}/bbs/board.php?bo_table={bo}"
+                    return f"{base}/bbs/board.php?bo_table={bo}", _monopoly_score(body)
             except Exception:
                 pass
-        return ""   # 그누보드 사이트지만 열린 게시판 못 찾음
-    return ""
+        return "", 0   # 그누보드 사이트지만 열린 게시판 못 찾음
+    return "", 0
 
 def crtsh_discover(skip_domains, max_check=60):
     """crt.sh 1개 TLD를 훑어 신규 도메인 중 게시판 있는 것만 서버로 ingest.
@@ -361,18 +383,23 @@ def crtsh_discover(skip_domains, max_check=60):
     # 아직 판정 안 한 신규 도메인만(서버 known + 로컬 seen 제외)
     fresh = [d for d in doms if d not in skip_domains and d not in seen and d.replace("www.", "") not in skip_domains]
     log(f"[crt.sh 발굴] {tld} 총 {len(doms)}개 · 미판정 {len(fresh)}개 → 이번 회 {min(len(fresh), max_check)}개 게시판 확인")
-    board_urls = []
+    found = []   # (url, monopoly_score)
     checked = 0
     for d in fresh[:max_check]:
         seen.add(d)
-        bu = _has_board(d)
+        bu, score = _has_board(d)
         if bu:
-            board_urls.append(bu)
-            log(f"  ✅게시판 발견: {bu}")
+            found.append((bu, score))
+            log(f"  ✅게시판 발견(독점점수 {score}): {bu}")
         checked += 1
         time.sleep(0.5)   # 노드 IP 부하·차단 방지
     _crtsh_save_seen(seen)
-    if board_urls:
+    # ★독점점수 높은 순 정렬(2026-09-18 대표님 '독점 가능 사이트 우선'): 경쟁없는 방치판을 먼저 전송·발행.
+    found.sort(key=lambda x: x[1], reverse=True)
+    board_urls = [u for u, sc in found]
+    if found:
+        _hi = sum(1 for u, sc in found if sc >= 4)
+        log(f"[crt.sh 발굴] 게시판 {len(found)}개(독점가능 고득점 {_hi}개) — 점수순 전송")
         # ingest가 검수·발행테스트를 백그라운드로 돌리지만 응답이 늦을 수 있어 넉넉한 타임아웃.
         # 100개씩 나눠 전송(서버 상한). 타임아웃 나도 서버는 URL을 받았을 수 있으니 다음 회 seen으로 중복 방지됨.
         for _j in range(0, len(board_urls), 100):
