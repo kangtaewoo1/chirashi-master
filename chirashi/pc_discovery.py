@@ -304,17 +304,48 @@ def _crtsh_domains(tld):
     except Exception as e:
         log(f"  crt.sh {tld} 예외: {str(e)[:80]}"); return []
 
+_ERR_WORDS = ("오류안내", "존재하지 않", "없는 게시판", "페이지를 찾을 수 없", "잘못된 접근", "비정상적인", "권한이 없")
+_BO_TRY = ("free", "qa", "notice", "community", "board", "bbs", "sboard", "gallery")
+
+def _is_real_board(body):
+    """게시판 페이지 HTML이 '실제 존재하는 게시판'인지 판정(오류페이지·홈리다이렉트 제외).
+       ★실측 판별기준(2026-09-18): 실제게시판=wr_id링크·bo_table링크 다수+write.php 버튼,
+       오류/홈페이지=전부 0. '오류안내' 등 단어 있으면 제외."""
+    if any(w in body for w in _ERR_WORDS):
+        return False
+    wr = len(re.findall(r'wr_id=\d+', body))
+    bo = len(re.findall(r'bo_table=\w+', body))
+    has_write = "write.php" in body
+    # 실제 게시판: 글이 있거나(wr_id≥1), 게시판 네비(bo_table≥3)+글쓰기버튼이 있어야 함(빈 게시판도 통과).
+    return (wr >= 1) or (bo >= 3 and has_write)
+
 def _has_board(dom):
-    """도메인에 그누보드 게시판이 있는지 확인. 있으면 게시판 URL 반환, 없으면 ''.
-       ★cafe24 /board/ 판정 제거(2026-09-18 실측): cafe24 list.html은 글목록일 뿐 비회원 글쓰기 안 되고,
-       cafe24는 Turnstile·승인제로 발행 수율 0(오늘 종일 확인). 그누보드 게시판만 판정해 헛후보 안 만든다."""
+    """도메인에 '실제 존재하는' 그누보드 게시판이 있는지 확인. 있으면 게시판 URL 반환, 없으면 ''.
+       ★cafe24 판정 제거(수율0)·오판정 정밀화(2026-09-18 실측): 단순 'bo_table 문자열 존재'로 판정하면
+       오류안내·홈리다이렉트 페이지도 게시판으로 오판(gnrehab·openweb) → 서버 검수에서 다 탈락(신규0).
+       실제 게시판 구조(wr_id 글링크/write.php/게시판네비)를 확인하고, bo_table을 free 외 여러개 시도."""
     for scheme in ("https", "http"):
+        base = f"{scheme}://{dom}"
+        # 1) 그누보드 사이트인지 빠른 확인(홈에 gnuboard generator·bbs 링크) — 아니면 이 도메인 스킵.
         try:
-            r = requests.get(f"{scheme}://{dom}/bbs/board.php?bo_table=free", headers=UA, timeout=7, verify=False, allow_redirects=True)
-            body = (r.text or "")[:20000]
-            if r.status_code < 400 and ("bo_table" in body or "gnuboard" in body.lower() or "wr_id" in body or "그누" in body):
-                return f"{scheme}://{dom}/bbs/board.php?bo_table=free"
-        except Exception: pass
+            rh = requests.get(base, headers=UA, timeout=7, verify=False, allow_redirects=True)
+            home = (rh.text or "")[:30000]
+            if rh.status_code >= 400:
+                continue
+            if not ("/bbs/board.php" in home or "gnuboard" in home.lower() or "bo_table=" in home):
+                continue   # 그누보드 흔적 없음 → 다음 scheme/도메인
+        except Exception:
+            continue
+        # 2) 실제 게시판 찾기: 흔한 bo_table 여러 개 시도, 실제 게시판 구조인 첫 것 반환.
+        for bo in _BO_TRY:
+            try:
+                r = requests.get(f"{base}/bbs/board.php?bo_table={bo}", headers=UA, timeout=7, verify=False, allow_redirects=True)
+                body = (r.text or "")[:30000]
+                if r.status_code < 400 and _is_real_board(body):
+                    return f"{base}/bbs/board.php?bo_table={bo}"
+            except Exception:
+                pass
+        return ""   # 그누보드 사이트지만 열린 게시판 못 찾음
     return ""
 
 def crtsh_discover(skip_domains, max_check=60):
