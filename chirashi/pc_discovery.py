@@ -184,23 +184,33 @@ _NAVER_SKIP = ("naver.com", "naver.net", "pstatic.net", "nid.naver", "shopping.n
                "dict.naver", "map.naver", "blog.naver", "cafe.naver", "search.naver")
 
 def naver_search(query):
-    """네이버 통합검색 — API 키 불필요(무료). DDG 차단 시 폴백. 네이버 내부링크는 제외.
-       실측(2026-09-08): '010 홍보 비회원' 등에서 실제 그누보드 게시판 다수 반환."""
+    """네이버 웹문서 검색 — API 키 불필요(무료). ★노드는 대표님 실제 IP라 네이버가 안 막힘(서버 DC IP는 막힘).
+       ★2026-09-18 개선(대표님 '저장이미지'와 별개, 발굴 0건 규명): where=web(웹문서 탭)이 통합검색보다 6배
+       많은 외부 URL 반환(로컬 실측 6→36). 여러 페이지 + &amp; 디코드 + 전체URL dedup + 게시판형 우선.
+       실측: finder 쿼리 6개로 게시판형 URL 83개 수확(개선 전 통합검색은 0~소수)."""
     hdr = {"User-Agent": _DDG_UAS[0], "Accept-Language": "ko-KR,ko;q=0.9"}
-    try:
-        r = requests.get("https://search.naver.com/search.naver",
-                         params={"query": query}, headers=hdr, timeout=15, verify=False)
-        if r.status_code >= 400:
-            log(f"  Naver {r.status_code}"); return []
-        out = []
-        for u in re.findall(r'href="(https?://[^"]+)"', r.text):
-            u = u.replace("&amp;", "&")
-            if any(s in u.lower() for s in _NAVER_SKIP):
+    def _is_board(u):
+        return bool(re.search(r'(bbs/(board|write)\.php|/board/|/article/|mod=document|document_srl|bo_table=)', u))
+    seen = set(); board = []; other = []
+    for _st in (1, 11, 21):
+        try:
+            r = requests.get("https://search.naver.com/search.naver",
+                             params={"query": query, "where": "web", "start": _st},
+                             headers=hdr, timeout=15, verify=False)
+            if r.status_code >= 400:
                 continue
-            out.append(u)
-        return out
-    except Exception as e:
-        log(f"  Naver 예외: {str(e)[:60]}"); return []
+            for u in re.findall(r'href="(https?://[^"]+)"', r.text):
+                u = u.replace("&amp;", "&")
+                if any(s in u.lower() for s in _NAVER_SKIP):
+                    continue
+                if u in seen:
+                    continue
+                seen.add(u)
+                (board if _is_board(u) else other).append(u)
+        except Exception as e:
+            log(f"  Naver 예외: {str(e)[:60]}")
+        time.sleep(0.4)
+    return board + other
 
 
 # ★구글만 발굴(대표님 지시 2026-09-11 '네이버까지 하는데 구글로만 타율↑'):
@@ -212,8 +222,15 @@ def do_search(query, prov="ddg"):
         return google_search(query)
     if prov == "brave" and BRAVE_KEY:
         return brave_search(query)
-    # 무료 발굴: DDG만(네이버 폴백 없음). DDG가 IP차단이면 이번 실행은 빈 결과.
-    return ddg_search(query)
+    # 무료 발굴: DDG 먼저(가끔 됨), 막히거나 빈 결과면 네이버 웹문서로 폴백.
+    # ★네이버 재활성화(2026-09-18 대표님 '발굴 0건'): DDG는 서버·이 IP에서 봇차단(연결차단/결과0)이 잦고,
+    #   Brave는 402(크레딧 소진)라 무료 경로가 사실상 죽어 신규 후보 0건이었음. 노드는 대표님 실제 IP라
+    #   네이버가 안 막히고, 개선된 where=web가 실제 게시판을 대량 반환(로컬 실측 6쿼리 83개). DDG만 쓰던
+    #   옛 정책(네이버 폴백 제거)은 DDG가 살아있을 때 얘기 — 지금은 네이버가 유일한 무료 산출원.
+    r = ddg_search(query)
+    if r:
+        return r
+    return naver_search(query)
 
 
 def domain_of(url):
