@@ -244,7 +244,9 @@ def _process_site(s, cfg):
         else:
             pool = app.collect_all_keywords()
             kw = app.pick_keywords(pool, cfg) if pool else {"지역": "인천", "서비스": "노래방", "브랜드": cfg.get("brand", "") or "테스트"}
-        html, title = app.generate_article(kw, cfg, unique=True)
+        # ★작업실 이미지 사용(2026-09-18 대표님 '저장해둔 이미지 쓰라했는데 랜덤이미지 나옴'): generate_article에
+        #   workroom_id를 넘겨야 pick_images가 그 작업실 저장 이미지를 쓴다. 안 넘기면 picsum 랜덤(시계 등)으로 폴백.
+        html, title = app.generate_article(kw, cfg, unique=True, workroom_id=s.get("workroom_id") or None)
         res.update({"title": title, "region": kw.get("지역", ""), "service": kw.get("서비스", ""),
                     "workroom_id": s.get("workroom_id",""), "workroom_name": s.get("workroom_name","")})   # 서버 이력(작업실별)용
         ok, msg = app.do_post(site, title, html, skip_login=False)   # 저장 계정으로 로그인 발행
@@ -311,7 +313,8 @@ def _process_one(cand, cfg, pool):
            "bo_table": tmp["bo_table"], "msg": "", "is_temp": False}
     try:
         kw = app.pick_keywords(pool, cfg) if pool else {"지역": "인천", "서비스": "셔츠룸", "브랜드": cfg.get("brand", "") or "테스트"}
-        html, title = app.generate_article(kw, cfg, unique=True)
+        # 후보(미승격)엔 작업실이 대개 없지만, 있으면 그 작업실 저장 이미지 사용(없으면 None→이미지 없이 or 전역풀).
+        html, title = app.generate_article(kw, cfg, unique=True, workroom_id=cand.get("workroom_id") or None)
         _just_signed = False
         _login_first = bool(cand.get("login_required")) and not cand.get("write_form")
         if _login_first:
