@@ -6863,6 +6863,22 @@ def screen_candidate(url, cfg=None):
                        if 1<=int(mo)<=12 and 1<=int(d)<=31)
             res['last_post_days']=max(0,(_kst_now().date()-latest).days)
     except Exception: pass
+    # ★독점 가능 점수(2026-09-18 대표님 '독점할 수 있는 사이트 = 키워드 안 겹쳐 상위노출'): 경쟁없는 방치판에
+    #   발행하면 그 글이 그 게시판 검색 최상단(일원역하퍼 점령 공식). 검수 단계에서 게시판 HTML로 점수화(0~6)해
+    #   후보에 저장 → claim 우선순위에 반영(높은 점수부터 발행). 유흥경쟁글 흔적=competition, last_post_days=방치도.
+    try:
+        _COMPETE=('하이퍼블릭','풀싸롱','셔츠룸','쓰리노','텐프로','쩜오','가라오케','키스방','안마','출장마사지',
+                  '출장안마','레깅스룸','미러룸','란제리','호빠','노래빠','o1o','O1O')
+        _cw=sum(low.count(k.lower()) for k in _COMPETE)+int(res.get('promo_phone_count',0) or 0)*2
+        _lpd=res.get('last_post_days')
+        _sc=0
+        if _cw==0: _sc+=3            # 유흥/전화 경쟁 흔적 0 = 우리가 유일(핵심)
+        elif _cw<=3: _sc+=1
+        else: _sc-=2                 # 이미 업자글 도배 = 경쟁판(감점)
+        if _lpd is not None and _lpd>180: _sc+=2   # 6개월+ 방치
+        elif _lpd is not None and _lpd>60: _sc+=1
+        res['monopoly']=max(0,min(6,_sc))
+    except Exception: res['monopoly']=0
     # 글쓰기 페이지: 실제 쓰기 링크(write.php)만 신뢰한다.
     # ※ board.php?wr_id= (글 조회) 페이지에도 wr_content가 있지만 그건 '댓글 폼'이라
     #    글쓰기 폼으로 오인하면 안 된다(오판 시 write.php에서 게시판 못찾음으로 실패).
@@ -9904,7 +9920,10 @@ def api_pipeline_claim():
             # ★cafe24 우선순위 강등(2026-09-13 대표님 지시 실측): cafe24가 최우선이라 매 배치 4슬롯을 다 차지→Turnstile/hang으로 처리량 0.
             #   그누보드 등 잘 되는 비회원 바로쓰기를 먼저 태우고, cafe24는 뒤로(아래 배치당 개수 상한과 함께).
             board_ok=1 if (is24 and not _cafe24_is_qa_board(c.get('url'))) else 0
-            return (manual, 1 if direct else 0, 1 if not is24 else 0, board_ok, 1 if not c.get('captcha') else 0, c.get('score',0))
+            # ★독점점수 우선(2026-09-18 대표님 '독점 가능 후보부터 발행'): 비회원바로발행(direct) 다음 순위로
+            #   독점점수(경쟁없는 방치판) 높은 것부터 → 그 게시판 검색 최상단 선점. 미검수(monopoly 없음)는 0.
+            _mono=int(c.get('monopoly',0) or 0)
+            return (manual, 1 if direct else 0, _mono, 1 if not is24 else 0, board_ok, 1 if not c.get('captcha') else 0, c.get('score',0))
         elig.sort(key=_prio,reverse=True)
         # ★cafe24 배치당 상한(2026-09-13 대표님 'cafe24 동시처리 줄이기'): Turnstile로 무겁고 hang 잦아
         #   한 배치에서 cafe24가 n슬롯을 독점하면 그누보드가 밀려 처리량 0. 배치당 cafe24 최대 _c24max개만.
