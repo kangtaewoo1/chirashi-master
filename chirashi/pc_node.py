@@ -256,7 +256,11 @@ def _process_site(s, cfg):
         # ★로그인 필요 사이트 자동가입 후 발행(대표님 지시 2026-09-14): 저장 계정이 없거나 로그인폼이라
         #   'wr_subject 없음/로그인 필요'로 실패하면, 자동가입→그 세션으로 재발행. 성공하면 계정을 서버에 저장.
         import re as _re
-        _need_signup = (not ok) and (not str(site.get("mb_id") or "").strip()) and \
+        # ★자동가입 재시도 낭비 차단(2026-09-18 대표님 '실패 원인 다 잡아 성공률↑'): 타임아웃 87건 중 62건이
+        #   '등록사이트 재발행'인데, 계정없는 로그인필요 사이트에 매 사이클 자동가입을 재시도해 60초씩 낭비
+        #   (점토벽돌 fs=137 = 137번 헛시도). 서버가 signup_exhausted 마킹한 사이트는 자동가입 스킵 → 즉시 실패반환.
+        _signup_exhausted = bool(site.get("signup_exhausted"))
+        _need_signup = (not ok) and (not str(site.get("mb_id") or "").strip()) and (not _signup_exhausted) and \
             _re.search(r'(로그인이? 필요|wr_subject.*없음|글쓰기 폼.*없음|비회원 글쓰기 불가|권한이? 없)', str(msg))
         if _need_signup:
             try: app.reset_driver()
@@ -277,6 +281,7 @@ def _process_site(s, cfg):
             else:
                 log(f"[등록 자동가입 실패] {name} — {str(msg_su)[:60]}")
                 msg = f"{msg} · 자동가입: {str(msg_su)[:50]}"
+                res["signup_failed"] = True   # 서버가 signup_fail_count 누적 → 임계 넘으면 signup_exhausted 마킹
         _tag = 'Cafe24' if _plat=='cafe24' else '등록'
         if ok and str(msg).startswith(("http://", "https://")):
             res.update({"ok": True, "result_url": msg}); log(f"[{_tag} 발행성공] {name} → {msg}")

@@ -9952,6 +9952,9 @@ def api_pipeline_claim_sites():
               if _plat_ok(s)
               and _need_pub_all(s)
               and s.get('status')!='rejected'
+              # ★가입 반복실패(계정 없음)면 claim 제외(2026-09-18): 매 사이클 자동가입 헛시도로 노드 슬롯 낭비.
+              #   나중에 대표님이 계정(mb_id) 넣으면 자동 재개(exhausted여도 mb_id 있으면 통과).
+              and not (s.get('signup_exhausted') and not str(s.get('mb_id') or '').strip())
               and not (s.get('pc_claim_by') and float(s.get('pc_claim_expire',0) or 0)>now)
               and float(s.get('pc_last_try',0) or 0) < now-max(60,int(_cfg.get('node_site_cooldown_sec',300) or 300))]
         # ★공정 순환(2026-09-14): pc_last_try 오래된 순으로 정렬 — 리스트 맨앞 소수만 반복 claim되던 것
@@ -9968,7 +9971,8 @@ def api_pipeline_claim_sites():
             _pl={'id':s.get('id'),'site_url':s.get('site_url'),'platform':s.get('platform') or 'gnuboard',
                 'bo_table':s.get('bo_table') or '1','name':s.get('name') or s.get('site_url'),
                 'mb_id':s.get('mb_id',''),'mb_pass':s.get('mb_pass',''),   # ★비번 포함(PC 로컬 로그인용)
-                'write_entry_url':s.get('write_entry_url',''),'article_board_name':s.get('article_board_name','')}
+                'write_entry_url':s.get('write_entry_url',''),'article_board_name':s.get('article_board_name',''),
+                'signup_exhausted':bool(s.get('signup_exhausted'))}   # 노드가 자동가입 스킵 판단(가입 반복실패 사이트)
             # 작업실 라운드로빈 배정 + 그 작업실의 조합(키워드) 하나
             if _rooms:
                 _room=_rooms[_i % len(_rooms)]
@@ -10032,6 +10036,20 @@ def api_pipeline_report_site():
             else:
                 set_site_flag(sid,write_test_status='failed',pc_claim_by='',pc_claim_expire=0)
                 if _site: finalize_post(_site,False,str(r.get('msg') or '')[:120])
+                # ★자동가입 재시도 낭비 차단(2026-09-18 대표님 '실패 원인 다 잡아 성공률↑'): 계정없는 사이트가
+                #   로그인/가입/글쓰기페이지 벽으로 반복 실패(그누=자동가입 타임아웃, cafe24=글쓰기 페이지 못찾음).
+                #   매 사이클 60초 자동가입 헛시도(점토벽돌 fs=137). signup_failed 신호 or 해당 실패사유면
+                #   signup_fail_count 누적, 3회↑면 signup_exhausted=True → 노드가 이 사이트 자동가입 스킵(즉시 실패반환).
+                _msg=str(r.get('msg') or '')
+                _signup_wall = bool(r.get('signup_failed')) or ('자동가입' in _msg and '타임아웃' in _msg) or \
+                    ('글쓰기 페이지 못찾음' in _msg) or ('Turnstile' in _msg)
+                if _site and _signup_wall and not str(_site.get('mb_id') or '').strip():
+                    _sfc=int(_site.get('signup_fail_count',0) or 0)+1
+                    if _sfc>=3:
+                        set_site_flag(sid,signup_fail_count=_sfc,signup_exhausted=True,login_required=True)
+                        add_log(f'[가입포기] {str(_nm)[:24]} — 자동가입 {_sfc}회 실패, 이후 가입 재시도 안 함(노드 시간 절약)')
+                    else:
+                        set_site_flag(sid,signup_fail_count=_sfc)
                 add_log(f'[Cafe24 발행실패] {str(_nm)[:24]} — {str(r.get("msg") or "")[:80]}')
             applied+=1
         except Exception as e:
