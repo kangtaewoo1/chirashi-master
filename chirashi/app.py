@@ -8305,10 +8305,15 @@ def auto_pipeline_once(limit=5):
     cfg=load_config()
     if not cfg.get('auto_pipeline_enabled'):
         return {'ok':False,'error':'auto_pipeline 비활성화'}
-    # 테스트 발행 키워드: 대표님 작업실/스케줄 통합 풀에서 랜덤 추출(없으면 기본값). 하드코딩 제거.
+    # 발행테스트 키워드: 작업실 조합에서 랜덤 추출. ★테스트 하드코딩 폴백 제거(2026-09-18 대표님 '인천 셔츠룸
+    #   인천홍마니 테스트글이 계속 나온다·도배된다'): 풀 비면 '인천셔츠룸테스트'로 발행하던 것 → None 반환해
+    #   발행 자체를 스킵(가짜 테스트글 발행 원천 차단). 작업실 id도 함께 반환해 실제 이미지가 들어가게.
     _tk_pool=collect_all_keywords()
     def _test_kw():
-        return pick_keywords(_tk_pool,cfg) if _tk_pool else {'지역':'인천','서비스':'셔츠룸','브랜드':cfg.get('brand','') or '테스트'}
+        if not _tk_pool: return None, None   # 키워드 없으면 발행 안 함(테스트글 방지)
+        _kw=pick_keywords(_tk_pool,cfg)
+        _wid=(_kw.get('_workroom_id') if isinstance(_kw,dict) else '') or ''
+        return _kw, _wid
     site_domains={_domain_of(s.get('site_url','')) for s in load_sites()}
     with _cand_lock:
         cands=load_cands()
@@ -8560,8 +8565,15 @@ def auto_pipeline_once(limit=5):
                 continue
             signed+=1
             fresh=next((x for x in load_sites() if x.get('id')==s.get('id')),s)
-            kw=_test_kw()
-            html,title=generate_article(kw,cfg,unique=True)
+            kw,_wid=_test_kw()
+            if not kw:
+                add_log(f'[발행테스트 스킵] {nm} — 작업실 키워드 없음(테스트글 발행 안 함)'); continue
+            # ★이미지: 작업실 id 없으면 전역 저장이미지 풀 사용(picsum 랜덤 방지 — 대표님 '이미지도 넣어서 원래대로').
+            _timg=None
+            if not _wid:
+                try: _timg=load_image_urls() or None
+                except Exception: _timg=None
+            html,title=generate_article(kw,cfg,unique=True,workroom_id=_wid or None,image_urls=_timg)
             # 가입 직후 로그인된 세션 그대로 발행(재로그인 생략) — 비표준 로그인폼 사이트 구제
             ok,msg=do_post(fresh,title,html,skip_login=True)
             if (not ok) and re.search(r'(로그인|login)',str(msg)):
@@ -11967,11 +11979,13 @@ def api_site_debug(sid):
 
 @app.route('/api/sites/dryrun/<sid>',methods=['POST'])
 def api_site_dryrun(sid):
-    """드라이런: 실제 글을 올리지 않고 등록 직전까지 검증."""
+    """드라이런: 실제 글을 올리지 않고 등록 직전까지 검증(실제 글 미발행이라 게시판 오염 없음)."""
     site=next((s for s in load_sites() if s.get('id')==sid),None)
     if not site: return jsonify({'ok':False,'error':'사이트 없음'})
     cfg=load_config()
-    kw={'지역':'인천','서비스':'셔츠룸','브랜드':cfg.get('brand','') or '테스트'}
+    # ★실제 작업실 키워드 사용(2026-09-18 대표님 '인천 셔츠룸 테스트 그만'): 풀 있으면 랜덤, 없어도 검증만 하는 드라이런이라 최소 폴백.
+    _pool=collect_all_keywords()
+    kw=pick_keywords(_pool,cfg) if _pool else {'지역':'인천','서비스':'노래방','브랜드':cfg.get('brand','') or ''}
     html,title=generate_article(kw,cfg,unique=False)   # 중복DB 오염 방지
     try:
         ok,steps=dryrun_post(site,title,html)
