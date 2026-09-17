@@ -746,6 +746,7 @@ def load_config():
        'signup_max_per_claim':2,     # ★대표님 지시 2026-09-18 'A1: 될 사이트 우선 claim': 한 claim 배치당 '가입필요(login_required)' 후보 최대 개수. 실측상 이들 대부분 자동가입 60초 타임아웃으로 죽어(빡센검수 표본 0% 성공) 슬롯 독점 시 처리량 낭비. 나머지 슬롯은 비회원 바로발행으로 채움(될 확률 높음). 0 불가(최소 1).
        'node_publish_all':True,      # ★2026-09-15 v5: 노드 전담 발행(실측: gnuboard도 서버 DC IP는 '로그인 실패'로 막히고 노드 집IP는 성공). claim-sites가 작업실 라운드로빈 배정+report-site가 workroom_name 기록해 작업실별 이력 유지. recaptcha 사이트만 여전히 실패. False면 서버가 gnuboard 발행(DC IP 실패 많음).
        'node_site_cooldown_sec':90,  # 노드가 같은 등록 사이트를 다시 claim하기까지 최소 간격(초). 짧게=발행량↑(노드 전담이라 서버 경합 없음).
+       'cand_cooldown_sec':600,      # ★대표님 지시 2026-09-18 '비회원 후보 쿨다운 단축': 후보를 다시 claim하기까지 최소 간격(초). 1200→600. 짧게=될 후보 회전율↑(claim 배치가 idle로 빠지는 것 감소). 승격된 사이트는 node_site_cooldown_sec 지배라 무관.
        'public_base_url':'https://google.twseo.kr',  # 업로드 이미지 절대 URL 기준 도메인(외부 게시판 로드용)
        'twocaptcha_price_recaptcha_usd':0.003,'twocaptcha_price_image_usd':0.0005,
        'brave_price_per_query_usd':0.005,  # Pro 플랜 기준 쿼리당 $0.005(설정 탭에서 변경 가능)
@@ -8205,9 +8206,9 @@ def auto_pipeline_once(limit=5):
                 _cand_set(_c['id'],status='manual_signup',reject_reason=f'{_why} — 자동가입 불가, 대표님 수동가입 대기')
                 _c['status']='manual_signup'
             except Exception: pass
-    # 쿨다운: 최근 20분 내 시도한 후보는 제외 → 한 사이트(예: 김정은)가 실패/hang해도
-    # 곧바로 다시 잡혀 루프를 독점하지 않게. 다른 후보에게 순서가 돌아간다.
-    _cool=time.time()-1200
+    # 쿨다운: cand_cooldown_sec(기본 600초=10분) 내 시도한 후보는 제외 → 한 사이트(예: 김정은)가 실패/hang해도
+    # 곧바로 다시 잡혀 루프를 독점하지 않게. 다른 후보에게 순서가 돌아간다.(대표님 2026-09-18 1200→600 단축)
+    _cool=time.time()-max(120,int(cfg.get('cand_cooldown_sec',600) or 600))
     # ★status 'ready'뿐 아니라 'approved'(대표님이 UI에서 승인한 후보)도 전환 대상에 포함.
     #   (approved 후보 14곳이 파이프라인이 ready만 봐서 방치되던 문제 — 대표님 "사이트 안 늚")
     _block_illegal=not cfg.get('allow_illegal_boards')   # 대표님 지시: 허용 시 도박판도 발행 대상에 포함
@@ -9702,10 +9703,11 @@ def api_pipeline_claim():
     #   옛 로직으로 전부 다시 태웠음. ver<2(옛 pc_node는 ver 미전송=0)엔 cafe24를 안 주고 일반 후보만 준다.
     try: _ver=int(d.get('ver',0) or 0)
     except Exception: _ver=0
-    ttl=max(120,min(1800,int(load_config().get('pc_claim_ttl',600) or 600)))
+    _cfg_claim=load_config()
+    ttl=max(120,min(1800,int(_cfg_claim.get('pc_claim_ttl',600) or 600)))
     now=time.time()
     site_domains={_domain_of(s.get('site_url','')) for s in load_sites()}
-    _cool=now-1200
+    _cool=now-max(120,int(_cfg_claim.get('cand_cooldown_sec',600) or 600))   # 후보 재claim 최소간격(대표님 2026-09-18 단축)
     picked=[]
     with _cand_lock:
         cands=load_cands()
