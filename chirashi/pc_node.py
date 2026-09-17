@@ -92,6 +92,21 @@ def _cleanup_stale_chrome_profiles(older_than_sec=3600):
         return 0
 
 
+def _kill_orphan_chrome():
+    """★좀비 크롬 근본정리(2026-09-18 대표님 'PC 여러대 없이 처리량' 실측: 동시4인데 크롬 45개 누적→
+       메모리 4.5GB 잠식→처리량 저하). driver.quit()이 세션 죽은/hang 크롬의 OS 프로세스를 못 죽여 orphan이
+       쌓인다. **노드가 idle(대기 후보 없음)일 땐 정상적으로 크롬이 하나도 없어야 하므로**, 이때 살아있는
+       chrome/chromedriver는 전부 orphan → taskkill로 정리. 발행 중엔 호출 안 함(진행 중 크롬 안 죽이게)."""
+    try:
+        app.quit_all_drivers()   # 등록된 드라이버 먼저 정상 종료
+    except Exception: pass
+    try:
+        import subprocess as _sp
+        _sp.run(['taskkill','/F','/IM','chrome.exe','/T'], capture_output=True, timeout=20)
+        _sp.run(['taskkill','/F','/IM','chromedriver.exe','/T'], capture_output=True, timeout=20)
+    except Exception: pass
+
+
 # ── app.py 엔진 import (서버 로직 그대로 재사용, 서버는 안 뜸) ──
 log("app.py 엔진 로딩 중...")
 try:
@@ -386,6 +401,7 @@ def run(once=False, workers=None, idle=30):
     n = _safe_workers(workers)
     log(f"PC 발행노드 시작 — node_id={NODE_ID} · 서버={SERVER} · 동시 {n}개")
     _last_prof_clean = 0.0
+    _last_orphan_kill = [0.0]
     while True:
         try:
             cfg = app.load_config()
@@ -428,6 +444,16 @@ def run(once=False, workers=None, idle=30):
             if not cands and not sites:
                 if once:
                     log("claim할 후보 없음 — 종료(--once)"); break
+                # ★idle이면 좀비 크롬 정리(정상적으로 크롬 0이어야 함). 5분에 1회로 스로틀.
+                if time.time() - _last_orphan_kill[0] > 300:
+                    _last_orphan_kill[0] = time.time()
+                    try:
+                        import subprocess as _sp
+                        _n = len(_sp.run(['tasklist','/FI','IMAGENAME eq chrome.exe'],capture_output=True,text=True,timeout=15).stdout.split('chrome.exe'))-1
+                    except Exception: _n = 0
+                    if _n > 0:
+                        _kill_orphan_chrome()
+                        log(f"idle 좀비 크롬 {_n}개 정리")
                 log(f"대기 후보 없음 — {idle}초 후 재시도"); time.sleep(idle); continue
             if cands:
                 log(f"{len(cands)}곳 claim — 가입·발행 시작(동시 {n})")
