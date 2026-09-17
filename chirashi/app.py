@@ -3122,22 +3122,25 @@ def enable_html_mode(d):
             blob+=' '+(parent.text or '').lower()
         except Exception: pass
         if 'html' not in blob: continue
-        # ★cocobrony 등: <input name="html" onclick="html_auto_br(this)" value=""> — JS onclick이 걸려있어
-        #   execute_script 클릭은 리스너를 안 태워 체크만 되고 서버 html 모드가 안 켜질 수 있다.
-        #   → 실제 el.click()으로 onclick(html_auto_br) 발화시키고, 안 되면 JS폴백. 체크 상태 확정.
+        # ★HTML 체크박스가 있어도 실제 렌더는 보장 안 됨(2026-09-17 대표님 스샷: shin-myoung qna_1에
+        #   <div style=...> 태그가 raw 텍스트로 노출=깨진 발행). gnuboard html 체크박스는 게시판 관리자가
+        #   'HTML 허용'을 회원등급에 켜야만 렌더되고, 아니면 서버가 이스케이프→코드 노출(스팸/깨짐).
+        #   폼에 체크박스 있다는 것만으론 렌더를 확신 못 하므로, 체크박스만 있는 경우는 '텍스트 발행'이 안전
+        #   (텍스트는 절대 안 깨짐). 진짜 렌더 에디터(smarteditor2/XE/KBoard 코드탭)만 아래에서 HTML 허용.
+        #   → 체크박스는 켜두되(HTML 허용 게시판이면 그대로 렌더됨) html_mode 판정은 True로 올리지 않는다.
         try:
             if not el.is_selected():
-                try: el.click()                       # 실제 클릭 — onclick 리스너 발화
+                try: el.click()
                 except Exception:
                     try: d.execute_script('arguments[0].click()',el)
                     except Exception: pass
-            # value가 빈칸이면 그누보드가 html모드로 못 받을 수 있어 강제로 'html1' 세팅.
             try:
                 if el.is_selected() and not (el.get_attribute('value') or '').strip():
                     d.execute_script("arguments[0].value='html1';",el)
             except Exception: pass
-            if el.is_selected(): return True
-        except Exception: continue
+        except Exception: pass
+        # 체크박스는 처리했으나 렌더 보장이 없으므로 True 반환하지 않음(텍스트 모드로 안전 발행).
+        break
     # WordPress/KBoard 클래식 에디터는 HTML 체크박스 대신
     # '비주얼 / 코드' 탭을 제공한다. 코드 탭을 누르면 실제 제출용
     # textarea(kboard_content)가 표시되므로 그곳에 HTML 조각을 넣는다.
