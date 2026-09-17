@@ -7577,7 +7577,12 @@ def auto_signup(site, submit=True):
         # 버튼 클릭이 안 먹으면 fregister 폼을 JS로 직접 제출(onsubmit 우회)
         if not submitted_agree:
             _safe_js(d,"var f=document.getElementById('fregister')||document.forms['fregister'];if(f){if(f.requestSubmit)f.requestSubmit();else f.submit();}")
-        time.sleep(2); dismiss_alerts(d)
+        # ★약관 제출 후 register_form 렌더 폴링(2026-09-17 대표님 '전체 실측' — 병렬발행 부하로 2초만
+        #   기다려 폼 렌더 전 조회→'비밀번호 칸 도달 실패' 오판. 단독 실측은 정상. 최대 ~6초 폴링해 완화).
+        for _ in range(12):
+            dismiss_alerts(d)
+            if _has_pw_field(): break
+            time.sleep(0.5)
     if not _has_pw_field():
         # 그래도 없으면 register_form.php를 직접 열되 약관값·기업회원 파라미터를 붙여 접근 시도
         base_o=_signup_origin(site)
