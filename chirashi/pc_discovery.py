@@ -305,21 +305,15 @@ def _crtsh_domains(tld):
         log(f"  crt.sh {tld} 예외: {str(e)[:80]}"); return []
 
 def _has_board(dom):
-    """도메인에 그누보드/카페24 게시판이 있는지 확인. 있으면 발행용 게시판 URL 반환, 없으면 ''."""
+    """도메인에 그누보드 게시판이 있는지 확인. 있으면 게시판 URL 반환, 없으면 ''.
+       ★cafe24 /board/ 판정 제거(2026-09-18 실측): cafe24 list.html은 글목록일 뿐 비회원 글쓰기 안 되고,
+       cafe24는 Turnstile·승인제로 발행 수율 0(오늘 종일 확인). 그누보드 게시판만 판정해 헛후보 안 만든다."""
     for scheme in ("https", "http"):
-        # 그누보드 자유게시판
         try:
             r = requests.get(f"{scheme}://{dom}/bbs/board.php?bo_table=free", headers=UA, timeout=7, verify=False, allow_redirects=True)
             body = (r.text or "")[:20000]
             if r.status_code < 400 and ("bo_table" in body or "gnuboard" in body.lower() or "wr_id" in body or "그누" in body):
                 return f"{scheme}://{dom}/bbs/board.php?bo_table=free"
-        except Exception: pass
-        # 카페24 게시판(자유게시판)
-        try:
-            r = requests.get(f"{scheme}://{dom}/board/free/list.html", headers=UA, timeout=7, verify=False, allow_redirects=True)
-            body = (r.text or "")[:20000]
-            if r.status_code < 400 and ("cafe24" in body.lower() or "board_no" in body or "/board/" in body):
-                return f"{scheme}://{dom}/board/free/list.html"
         except Exception: pass
     return ""
 
