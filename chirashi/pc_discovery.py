@@ -260,7 +260,7 @@ def looks_like_board(url):
 #   실측(2026-09-18): .or.kr(협회·비영리) 그누보드 수율 ~13%(3582도메인), cafe24 쇼핑몰은 ~0%(게시판 없음),
 #   .ac.kr(대학)도 0%(자체CMS). → .or.kr>.co.kr>.kr 우선, .ac.kr·cafe24쇼핑몰 제외.
 #   crt.sh는 TLD당 1회 조회가 무거움(~1MB)이라 여러 발굴루프에 1회만(_CRTSH_EVERY), TLD는 커서로 순환.
-_CRTSH_TLDS = [".or.kr", ".co.kr", ".kr", ".go.kr"]   # 게시판 수율 순(대학 .ac.kr 제외)
+_CRTSH_TLDS = [".or.kr", ".co.kr", ".kr"]   # 게시판 수율 순(대학 .ac.kr 제외, .go.kr은 crt.sh 404+정부기관이라 제외)
 _CRTSH_CURSOR_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".pc_discovery_crtsh")
 _CRTSH_SEEN_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".pc_discovery_crtsh_seen")
 
