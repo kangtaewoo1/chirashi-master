@@ -1208,6 +1208,8 @@ def normalize_region_in_text(text, cfg=None):
        - 붙여쓰기/띄어쓰기 모두 대응. 지역명이 없으면 원문 그대로(오작동 방지)."""
     s=str(text or '').strip()
     if not s: return s
+    # ★업종명 오타 교정(2026-09-18 대표님 지역명 일괄점검): '란제리름'→'란제리룸'(룸→름 오타 다수 실측).
+    s=s.replace('란제리름','란제리룸')
     # 1) 띄어쓰기면 첫 토큰만 지역으로 보고 정규화
     if ' ' in s:
         head,rest=s.split(' ',1)
@@ -1439,13 +1441,18 @@ def _build_meta_intro(r, s, b, p, mood, cfg=None):
     elif len(phone_dot)==10: phone=f'{phone_dot[:3]}·{phone_dot[3:6]}·{phone_dot[6:]}'
     else: phone=str(p or '').strip()
     # 지역 맥락(동/구/역) — r에서 파생. r이 '역/동/구'로 끝나면 그대로, 아니면 동+역 변형 추가.
+    # ★광역단위 '동' 오부착 버그수정(2026-09-18 대표님 '경기동이 어딨냐'): 경기/서울/인천 등 광역시·도에
+    #   '동'을 붙여 '경기동' 만들던 것 차단. 광역단위면 그대로 쓰고 동·역 파생 안 함.
     _ctx=[]
     _rr=str(r).strip()
+    _METRO=set(REGION_ORDER)|{'서울','부산','대구','대전','광주','울산','경기','강원','충청','전라','경상','제주','세종'}
     if _rr:
-        _ctx.append(_rr if re.search(r'(동|읍|면|리|가|구|시|군|역)$',_rr) else _rr+'동')
-        # 역세권 표현(있으면) — r이 역으로 안 끝나면 '역' 후보 추가
-        if not _rr.endswith('역'):
-            _ctx.append(_rr+'역')
+        if _rr in _METRO:
+            _ctx.append(_rr)   # 광역단위: 동·역 안 붙임
+        else:
+            _ctx.append(_rr if re.search(r'(동|읍|면|리|가|구|시|군|역)$',_rr) else _rr+'동')
+            if not _rr.endswith('역'):
+                _ctx.append(_rr+'역')
     _ctx=list(dict.fromkeys([x for x in _ctx if x]))[:3]
     ctx_str=', '.join(_ctx) if _ctx else _rr
     # 소개문 풀(업종 분위기 반영, 유니크)
