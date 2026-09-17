@@ -6485,6 +6485,7 @@ def _free_search(cfg, query, start, num):
     if r: return r
     return naver_web_search(cfg,query,start,num)
 
+_BRAVE_SKIP_UNTIL=[0.0]   # ★Brave 402(크레딧소진) 감지 시 이 시각까지 Brave 시도 건너뜀(대표님 2026-09-18 'Brave 건너뛰기')
 def web_search(cfg, query, start=1, num=10):
     provider=(cfg.get('search_provider') or 'brave').lower()
     if provider=='ddg':
@@ -6495,11 +6496,20 @@ def web_search(cfg, query, start=1, num=10):
             return r if r else _free_search(cfg,query,start,num)
         except Exception: return _free_search(cfg,query,start,num)
     # brave(기본): 실패(402 크레딧소진·429·키오류 등)면 무료(DDG→네이버)로 폴백 → 발굴 안 멈춤.
+    # ★402(크레딧소진)가 뜨면 1시간 동안 Brave를 아예 건너뛰고 바로 무료검색으로 간다(대표님 2026-09-18):
+    #   크레딧 없는데 매 쿼리 Brave를 때려 402 로그만 도배되고 시간 낭비. 크레딧 충전하면 1시간 뒤 자동 재시도.
+    if time.time() < _BRAVE_SKIP_UNTIL[0]:
+        return _free_search(cfg,query,start,num)
     try:
         r=brave_search(cfg,query,start,num)
         return r if r else _free_search(cfg,query,start,num)
     except Exception as e:
-        add_log(f'[발굴] Brave 실패({str(e)[:36]}) → 무료 검색(DDG/네이버)','발굴')
+        _es=str(e)
+        if '402' in _es:
+            _BRAVE_SKIP_UNTIL[0]=time.time()+3600
+            add_log('[발굴] Brave 402(크레딧 소진) — 1시간 Brave 건너뛰고 무료검색(네이버)만 사용. 충전 시 자동 재개','발굴')
+        else:
+            add_log(f'[발굴] Brave 실패({_es[:36]}) → 무료 검색(DDG/네이버)','발굴')
         return _free_search(cfg,query,start,num)
 
 def _post_read_block_reason(url):
