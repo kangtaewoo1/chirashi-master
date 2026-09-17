@@ -7440,13 +7440,18 @@ def _cafe24_signup_gate(d, site, cfg, join_url, max_sec=75):
     try: return bool(d.find_elements(By.CSS_SELECTOR,"input[type='password']"))
     except Exception: return False
 
-def auto_signup_guarded(site, submit=True, timeout=100):
+def auto_signup_guarded(site, submit=True, timeout=60):
     """auto_signup을 타임아웃 보호 하에 실행한다. 작업 스레드가 자기 드라이버로 가입을 수행하고,
        timeout을 넘기면 메인이 그 드라이버를 강제 quit해서 hang된 selenium 호출을 예외로 끊는다.
-       → 한 사이트가 무한 hang해 전환루프가 영영 완료 안 되던 문제 해결(김정은산부인과 케이스)."""
+       → 한 사이트가 무한 hang해 전환루프가 영영 완료 안 되던 문제 해결(김정은산부인과 케이스).
+       ★기본 100→60 단축(2026-09-18 대표님 '동시6 실측'): 그누보드 가입은 Turnstile이 없어 kcaptcha(로컬OCR)
+       +약관+폼입력만이라 60초면 충분. 동시6 실측에서 hang 가입 크롬이 100초까지 살아 크롬 40~63개 누적→
+       메모리 1.48GB까지 압박했음. 60초면 hang 크롬 생존시간이 절반 → 누적·OOM 위험 감소. cafe24만 220 유지."""
     import threading as _th
     # ★cafe24는 측정(Turnstile 해결 30~60초)+약관+폼입력+캡차가 100초를 넘겨 '자동가입 타임아웃(100초)'로 죽었음(gmmusic 2026-09-11).
     if (site.get('platform')=='cafe24') and timeout<220: timeout=220
+    # ★이메일 인증 사이트는 인증메일 대기(내부 60초)+폼입력이 60초 예산을 넘김 → 120초로 복원(단축은 non-email 그누보드만).
+    elif site.get('signup_email_verification') and timeout<120: timeout=120
     box={'done':False,'ret':(False,'타임아웃'),'wtid':None}
     def _work():
         box['wtid']=_th.current_thread().name
