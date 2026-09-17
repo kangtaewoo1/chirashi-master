@@ -6452,26 +6452,35 @@ def ddg_search(cfg, query, start=1, num=10, _retry=0):
         return []
 
 def naver_web_search(cfg, query, start=1, num=10):
-    """네이버 통합검색(무료·키불필요). DDG IP차단 시 폴백. 네이버 내부링크는 제외."""
+    """네이버 웹문서 검색(무료·키불필요). DDG IP차단 시 폴백. 네이버 내부링크는 제외.
+       ★2026-09-18 실측개선(대표님 '무료 폴백 개선'): (1) where=web(웹문서 탭)이 통합검색보다 6배 많은
+       외부 URL 반환(6→36) → where=web 사용. (2) &amp; 엔티티 디코드(안 하면 발행 URL 깨짐).
+       (3) 도메인 단위가 아니라 전체 URL로 dedup(같은 도메인 다른 게시판을 버리지 않게).
+       (4) 게시판형 URL(bbs/board.php·write.php·/board/·/article/·bo_table·document_srl)을 앞에 정렬.
+       (한계: 무료검색은 게시판형 비율이 낮음. Brave/Google 유료가 근본 해법이나 402/키없음 시 이거라도.)"""
     import requests as _rq
     _SKIP=('naver.com','naver.net','pstatic.net','nid.naver','shopping.naver','dict.naver','map.naver','blog.naver','cafe.naver','search.naver')
-    try:
-        r=_rq.get('https://search.naver.com/search.naver',params={'query':query},
-                  headers={'User-Agent':_DDG_UAS_SRV[0],'Accept-Language':'ko-KR,ko;q=0.9'},timeout=15,verify=False)
-        if r.status_code>=400: return []
-        urls=re.findall(r'href="(https?://[^"]+)"',r.text or '')
-        seen=set(); out=[]
-        for u in urls:
-            if any(s in u for s in _SKIP): continue
-            d=_domain_of(u)
-            if d in seen: continue
-            seen.add(d); out.append({'url':u,'title':'','snippet':''})
-        return out[:num*2]
-    except Exception:
-        return []
+    def _is_board(u): return bool(re.search(r'(bbs/(board|write)\.php|/board/|/article/|mod=document|document_srl|bo_table=)',u))
+    seen=set(); board=[]; other=[]
+    for _st in (1,11,21):   # 웹문서 탭 여러 페이지(실측: 페이지별 결과 일부 겹침 — dedup으로 흡수)
+        try:
+            r=_rq.get('https://search.naver.com/search.naver',params={'query':query,'where':'web','start':_st},
+                      headers={'User-Agent':_DDG_UAS_SRV[0],'Accept-Language':'ko-KR,ko;q=0.9'},timeout=15,verify=False)
+            if r.status_code>=400: continue
+            for u in re.findall(r'href="(https?://[^"]+)"',r.text or ''):
+                u=u.replace('&amp;','&')
+                if any(s in u for s in _SKIP): continue
+                if u in seen: continue
+                seen.add(u)
+                (board if _is_board(u) else other).append({'url':u,'title':'','snippet':''})
+        except Exception:
+            continue
+        time.sleep(0.4)
+    return (board+other)[:max(num*3,30)]   # 게시판형 우선, 넉넉히 반환(뒤 검수가 걸러냄)
 
 def _free_search(cfg, query, start, num):
-    """무료 검색 다단 폴백: DDG → 네이버. 둘 다 막히면 빈 결과(발굴 스킵)."""
+    """무료 검색 다단 폴백: DDG → 네이버(웹문서). 둘 다 막히면 빈 결과(발굴 스킵).
+       ★DDG는 서버 IP에서 봇차단(200이지만 결과 0, 실측 2026-09-18)이 잦아 사실상 네이버가 주력."""
     r=ddg_search(cfg,query,start,num)
     if r: return r
     return naver_web_search(cfg,query,start,num)
