@@ -1522,19 +1522,21 @@ def _build_meta_intro(r, s, b, p, mood, cfg=None):
     if len(phone_dot)==11: phone=f'{phone_dot[:3]}·{phone_dot[3:7]}·{phone_dot[7:]}'
     elif len(phone_dot)==10: phone=f'{phone_dot[:3]}·{phone_dot[3:6]}·{phone_dot[6:]}'
     else: phone=str(p or '').strip()
-    # 지역 맥락(동/구/역) — r에서 파생. r이 '역/동/구'로 끝나면 그대로, 아니면 동+역 변형 추가.
-    # ★광역단위 '동' 오부착 버그수정(2026-09-18 대표님 '경기동이 어딨냐'): 경기/서울/인천 등 광역시·도에
-    #   '동'을 붙여 '경기동' 만들던 것 차단. 광역단위면 그대로 쓰고 동·역 파생 안 함.
+    # 지역 맥락(동/구/역) — r에서 파생. ★실존검증 기반(2026-09-18 대표님 '경기동·함양동이 어딨냐'):
+    #   무조건 '동'·'역'을 붙여 '경기동'·'함양동'(가짜) 만들던 버그 근본수정. '○○동'·'○○역'은 regions_full/역DB에
+    #   실제 존재할 때만 추가한다(함양=군이라 함양동 없음→원형 '함양'만. 함양읍은 실존이라 그건 붙임).
     _ctx=[]
     _rr=str(r).strip()
     _METRO=set(REGION_ORDER)|{'서울','부산','대구','대전','광주','울산','경기','강원','충청','전라','경상','제주','세종'}
+    try: _names=set(_all_region_names())
+    except Exception: _names=set()
     if _rr:
-        if _rr in _METRO:
-            _ctx.append(_rr)   # 광역단위: 동·역 안 붙임
-        else:
-            _ctx.append(_rr if re.search(r'(동|읍|면|리|가|구|시|군|역)$',_rr) else _rr+'동')
-            if not _rr.endswith('역'):
-                _ctx.append(_rr+'역')
+        _ctx.append(_rr)   # 항상 원형은 포함
+        if _rr not in _METRO and not re.search(r'(동|읍|면|리|가|구|시|군|역)$', _rr):
+            # 파생은 '실존할 때만' 추가(가짜 지역 생성 방지)
+            for _suf in ('동','읍','면'):
+                if (_rr+_suf) in _names: _ctx.append(_rr+_suf); break
+            if (_rr+'역') in _STATIONS: _ctx.append(_rr+'역')
     _ctx=list(dict.fromkeys([x for x in _ctx if x]))[:3]
     ctx_str=', '.join(_ctx) if _ctx else _rr
     # 소개문 풀(업종 분위기 반영, 유니크)
