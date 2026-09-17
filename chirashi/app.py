@@ -743,6 +743,7 @@ def load_config():
        'http_publish_enabled':True,  # ★browserless(requests) 초고속발행(~2~3초) — CSRF token 전송 추가(2026-09-13)로 활성화. 실패 시 셀레늄 자동 폴백.
        'allow_illegal_boards':True,  # ★대표님 지시 2026-09-13 '도박은 나랑 무관, 글만 써지면 발행': illegal(도박어 도배) 게시판도 탈락 안 시키고 발행. False로 되돌리면 원래대로 차단.
        'cafe24_max_per_claim':1,     # ★대표님 지시 2026-09-13 'cafe24 동시처리 줄이기': 한 claim 배치당 cafe24 최대 개수(Turnstile로 무겁고 hang 잦아 슬롯 독점 방지). 나머지 슬롯은 그누보드 등으로 채움.
+       'signup_max_per_claim':2,     # ★대표님 지시 2026-09-18 'A1: 될 사이트 우선 claim': 한 claim 배치당 '가입필요(login_required)' 후보 최대 개수. 실측상 이들 대부분 자동가입 60초 타임아웃으로 죽어(빡센검수 표본 0% 성공) 슬롯 독점 시 처리량 낭비. 나머지 슬롯은 비회원 바로발행으로 채움(될 확률 높음). 0 불가(최소 1).
        'node_publish_all':True,      # ★2026-09-15 v5: 노드 전담 발행(실측: gnuboard도 서버 DC IP는 '로그인 실패'로 막히고 노드 집IP는 성공). claim-sites가 작업실 라운드로빈 배정+report-site가 workroom_name 기록해 작업실별 이력 유지. recaptcha 사이트만 여전히 실패. False면 서버가 gnuboard 발행(DC IP 실패 많음).
        'node_site_cooldown_sec':90,  # 노드가 같은 등록 사이트를 다시 claim하기까지 최소 간격(초). 짧게=발행량↑(노드 전담이라 서버 경합 없음).
        'public_base_url':'https://google.twseo.kr',  # 업로드 이미지 절대 URL 기준 도메인(외부 게시판 로드용)
@@ -9747,12 +9748,22 @@ def api_pipeline_claim():
         # ★cafe24 배치당 상한(2026-09-13 대표님 'cafe24 동시처리 줄이기'): Turnstile로 무겁고 hang 잦아
         #   한 배치에서 cafe24가 n슬롯을 독점하면 그누보드가 밀려 처리량 0. 배치당 cafe24 최대 _c24max개만.
         _c24max=max(1,int(load_config().get('cafe24_max_per_claim',1) or 1))
-        _c24n=0; _sel=[]
+        # ★가입필요 후보 배치당 상한(2026-09-18 대표님 'A1: 될 사이트 우선 claim'): 실측상 로그인/가입 필요
+        #   후보는 대부분 자동가입 60초 타임아웃으로 죽는다(빡센검수 표본 20개 0% 성공). 이들이 한 배치 n슬롯을
+        #   다 차지하면 비회원 바로발행(될 확률 높음)이 밀리고 매 배치 60초×N을 낭비. 배치당 가입필요 최대 _sumax개만
+        #   claim하고, 나머지 슬롯은 비회원 바로발행으로 채운다. 비회원이 쿨다운으로 없으면 슬롯을 비워 둔다
+        #   (안 되는 것에 매달리느니 idle→좀비정리가 낫다). 가입필요를 0으로 막진 않음(가끔 성공→영구 발행사이트).
+        _sumax=max(1,int(load_config().get('signup_max_per_claim',2) or 2))
+        _c24n=0; _sun=0; _sel=[]
         for c in elig:
             if len(_sel)>=n: break
+            _is_signup=bool(c.get('login_required'))   # 로그인/가입 필요 = 비회원 바로발행 아님(자동가입 시도 대상)
             if c.get('platform')=='cafe24':
                 if _c24n>=_c24max: continue   # 이 배치 cafe24 상한 초과 → 건너뛰고 다른 플랫폼 채움
                 _c24n+=1
+            if _is_signup:
+                if _sun>=_sumax: continue   # 이 배치 가입필요 상한 초과 → 건너뛰고 비회원 바로발행으로 채움
+                _sun+=1
             _sel.append(c)
         for c in _sel:
             c['claimed_by']=node_id; c['claim_expire']=now+ttl
