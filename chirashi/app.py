@@ -1100,6 +1100,24 @@ TITLE_ANGLES=['주대·티씨 기준표','시스템·수질 안내','코스·가
               '이용 체크리스트','초이스 방법 안내','영업시간·문의','실시간 예약안내','가격표·후기 정리',
               '이용방법 총정리','룸·시설 안내','당일예약 문의','메뉴·주대 안내','위치·주차 안내',
               '방문 전 체크','예약·상담 안내','서비스 기준표','운영·요금 안내','1:1 문의환영']
+# ★이미지 alt/caption 앵글(2026-09-18 대표님 '구글 이미지노출 극대화'): 이미지마다 다른 수식어로 alt 고유화.
+_IMG_ANGLES=['내부 전경','룸 시설','이용 안내','분위기','예약 문의','서비스 안내','시설 사진','인테리어','현장 사진','가격 안내']
+def _img_alt_caption(r, s, b, p, i):
+    """이미지 i번째의 (alt, caption) 생성 — 이미지마다 고유(지역변형+업종+번호+앵글).
+       구글 이미지 검색이 '지역/지역역/지역동+업종+번호'로 다 잡히게. i로 변형을 돌려 중복 방지."""
+    main=f'{r}{s}'
+    # 지역 변형: 원형 / +역 / +동 (실제 지역명 형태에 맞게, 없으면 원형만)
+    _rr=str(r).strip()
+    variants=[main]
+    if _rr and not re.search(r'(역|동|읍|면|가|구|시|군)$', _rr):
+        variants += [f'{_rr}역{s}', f'{_rr}동{s}']
+    rv=variants[i % len(variants)]
+    angle=_IMG_ANGLES[i % len(_IMG_ANGLES)]
+    ph=str(p or '').strip()
+    alt=f'{rv} {ph} {angle}'.strip() if ph else f'{rv} {angle}'
+    cap=f'{rv} {angle} · {ph}'.strip(' ·') if ph else f'{rv} {angle}'
+    return alt, cap
+
 def build_title(r,s,b,cfg,raw=None):
     """★제목: 메인키워드1 + 번호 + 키워드2 + 키워드3 + (앵글변수). 순서·키워드 유지(대표님 2026-09-08 고정)하되,
        ★2026-09-18 대표님 '묶음발행 제목 다똑같다': 같은 메인키워드로 여러 사이트 발행 시 번호표기만 달라
@@ -1563,10 +1581,13 @@ def generate_rich_html(keywords, cfg, workroom_id=None, image_urls=None):
     rel=RELATED_POOL[:]; random.shuffle(rel)
     _upd=_kst_now().strftime('%Y년 %m월')   # 우측 하단 업데이트 표기용
     H=lambda t:f'<h2 style="color:{c1};border-bottom:3px solid {c2};padding-bottom:10px;font-size:24px;margin-top:34px;">{t}</h2>'
-    # 이미지 alt = 메인 키워드(지역+업종, 붙여쓰기 예 '마포셔츠룸') — 구글 이미지 검색에 그 키워드로 노출되게(대표님 2026-09-12).
-    #   지역만 넣던 것을 제목 핵심키워드와 일치시킴. 캡션이 없으면 'alt 키워드+브랜드'를 캡션으로 자동 부여(주변 텍스트도 SEO 신호).
-    _imgalt=f'{r}{s}'
-    IMG=lambda i,cap='':('' if not imgs else (f'<div style="text-align:center;margin:34px 0;"><img src="{imgs[i%len(imgs)]}" alt="{_imgalt}" title="{_imgalt}" style="max-width:100%;height:auto;border-radius:8px;" loading="lazy" />'+f'<p style="color:#888;font-size:13px;margin-top:8px;">▲ {cap or (_imgalt+" "+b)}</p>'+'</div>'))
+    # ★이미지 SEO 강화(2026-09-18 대표님 '구글 이미지노출 극대화'): 실측(010-2200-0712 이미지검색 도배 성공)
+    #   역분석 — 이미지마다 alt/title/caption을 '지역변형+업종+번호+앵글'로 고유하게(같은 alt 반복=중복 손해).
+    #   구글 이미지가 일원/일원역/일원동+번호로 다 잡히게. p=번호 표기.
+    IMG=lambda i,cap='':('' if not imgs else (
+        (lambda _alt,_capx: f'<div style="text-align:center;margin:34px 0;"><img src="{imgs[i%len(imgs)]}" alt="{_alt}" title="{_alt}" style="max-width:100%;height:auto;border-radius:8px;" loading="lazy" />'
+         + f'<p style="color:#888;font-size:13px;margin-top:8px;">▲ {cap or _capx}</p></div>')
+        (*_img_alt_caption(r,s,b,p,i))))
 
     intro=random.choice([
         f'{r} 지역에서 {s}를 찾고 계신가요? {mood} 분위기의 <strong>{r} {s}</strong>는 회식과 모임 장소로 꾸준히 사랑받는 곳입니다. {b}에서 위치와 이용 정보를 한눈에 정리해 드립니다.',
@@ -1871,8 +1892,9 @@ def generate_post_gpt(keywords, cfg, workroom_id=None, image_urls=None):
             f'<ul style="list-style:none;padding:0;margin:0;font-size:15px;">{_items}</ul></div>')
     _label=random.choice(['총정리','이용 안내','완벽 가이드','한눈에 정리','상세 안내'])
     # 이미지 alt=메인 키워드(지역+업종) — 구글 이미지 노출용(대표님 2026-09-12). 캡션에 키워드+브랜드도 넣어 주변텍스트 강화.
-    _imgalt=f'{r}{s}'
-    _img_block=(f'<div style="text-align:center;margin:0 0 28px;"><img src="{imgs[0]}" alt="{_imgalt}" title="{_imgalt}" style="max-width:100%;border-radius:8px;" loading="lazy"/><p style="color:#888;font-size:13px;margin-top:8px;">▲ {_imgalt} {b}</p></div>' if imgs else '')
+    # ★이미지 SEO 강화(2026-09-18): alt/caption을 지역변형+업종+번호+앵글로 고유화(구글 이미지노출 극대화).
+    _ialt,_icap=_img_alt_caption(r,s,b,p,0)
+    _img_block=(f'<div style="text-align:center;margin:0 0 28px;"><img src="{imgs[0]}" alt="{_ialt}" title="{_ialt}" style="max-width:100%;border-radius:8px;" loading="lazy"/><p style="color:#888;font-size:13px;margin-top:8px;">▲ {_icap}</p></div>' if imgs else '')
     # ★메타설명 최적화 도입부(대표님 지시 2026-09-15): H1 바로 뒤, 메인키워드로 시작하는 지역SEO 메타 문장.
     #   구글 스니펫이 이 문장이 되게 이미지·목차보다 위에 둔다(매 글 유니크).
     _mood_g=random.choice(SERVICE_FLAVOR.get(s,DEFAULT_FLAVOR)['mood'])
