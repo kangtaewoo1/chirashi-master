@@ -748,6 +748,7 @@ def load_config():
        'imap_email':'','imap_password':'','imap_host':'imap.gmail.com',
        'twocaptcha_api_key':'','twocaptcha_enabled':False,
        'http_publish_enabled':True,  # ★browserless(requests) 초고속발행(~2~3초) — CSRF token 전송 추가(2026-09-13)로 활성화. 실패 시 셀레늄 자동 폴백.
+       'server_nonlogin_publish':True,  # ★대표님 지시 2026-09-18 '워커로 글발행 많이': node_publish_all일 때도 서버 6워커가 '비회원 바로발행(로그인 불필요)' 사이트를 병렬 발행(서버 DC IP는 로그인만 막힘). 노드는 로그인·cafe24 전담. False면 서버워커 완전 대기(옛 동작).
        'allow_illegal_boards':True,  # ★대표님 지시 2026-09-13 '도박은 나랑 무관, 글만 써지면 발행': illegal(도박어 도배) 게시판도 탈락 안 시키고 발행. False로 되돌리면 원래대로 차단.
        'cafe24_max_per_claim':1,     # ★대표님 지시 2026-09-13 'cafe24 동시처리 줄이기': 한 claim 배치당 cafe24 최대 개수(Turnstile로 무겁고 hang 잦아 슬롯 독점 방지). 나머지 슬롯은 그누보드 등으로 채움.
        'signup_max_per_claim':2,     # ★대표님 지시 2026-09-18 'A1: 될 사이트 우선 claim': 한 claim 배치당 '가입필요(login_required)' 후보 최대 개수. 실측상 이들 대부분 자동가입 60초 타임아웃으로 죽어(빡센검수 표본 0% 성공) 슬롯 독점 시 처리량 낭비. 나머지 슬롯은 비회원 바로발행으로 채움(될 확률 높음). 0 불가(최소 1).
@@ -8616,11 +8617,15 @@ def _publish_combo_to_site(s, kw, wname, rid, cfg, writer_name=''):
     finally:
         _slk.release()
 
-def _publish_one_combo(kw, wname, rid, cfg, writer_name=''):
+def _publish_one_combo(kw, wname, rid, cfg, writer_name='', nonlogin_only=False):
     """한 조합(kw)을 '발행가능 사이트 전체'에 병렬로 동시 발행(대표님 '속도가 생명').
        ★기존엔 사이트를 한 개씩 순차(+사이트마다 30초 대기)라 12곳이면 매우 느렸다.
-       → publish_fanout(기본4)개씩 스레드로 동시 발행. 각 스레드=자기 크롬. 같은사이트는 _site_lock."""
+       → publish_fanout(기본4)개씩 스레드로 동시 발행. 각 스레드=자기 크롬. 같은사이트는 _site_lock.
+       ★nonlogin_only=True(하이브리드, node_publish_all일 때 서버워커): 로그인 불필요 사이트만 발행
+       (서버 DC IP는 로그인만 막힘 — 비회원 게시판은 성공). 로그인/cafe24는 노드가 전담."""
     sites=[x for x in load_sites() if is_publishable(x)]
+    if nonlogin_only:
+        sites=[x for x in sites if not x.get('login_required')]
     if not sites: return
     fan=max(1,min(12,int(cfg.get('publish_fanout',8) or 8)))   # ★2026-09-15 대표님 '사이트간 발행 최대한 병렬': 상한 6→12, 기본 4→8
     _sem=threading.Semaphore(fan)          # 이 조합의 동시 발행 수(작업실 슬롯 내)
@@ -8656,27 +8661,34 @@ def workroom_worker(slot):
             #   OCR 전멸(최근건 대부분 서버·전부 OCR실패)의 주범. node_publish_all이면 서버 워커는 무조건 발행 안 하고
             #   대기(노드가 claim-sites로 전담). _pc_node_alive 게이트 제거(서버 재시작 직후 beat 비어 오판→서버가
             #   계속 발행하고 사이트 쿨다운 걸어 노드가 못 가져가던 악순환). 노드 다 죽으면 대표님이 이 설정을 끔.
+            # ★하이브리드 발행(2026-09-18 대표님 '워커로 글발행 많이 — 저번에 잘했잖아'): node_publish_all이어도
+            #   서버 워커를 완전히 재우지 않고, '비회원 바로발행(로그인 불필요)' 사이트만 서버가 발행한다.
+            #   서버 DC IP가 막히는 건 '로그인'뿐(로그인 실패 alert) — 비회원 게시판은 로그인 자체가 없어 DC IP도 성공.
+            #   → 노드(로그인·cafe24 전담) + 서버 6워커(비회원 사이트 병렬)로 처리량 배가. server_nonlogin_publish=False면 옛 동작(완전 대기).
+            _nonlogin_only=False
             if cfg.get('node_publish_all',True):
-                time.sleep(30); continue
+                if not cfg.get('server_nonlogin_publish',True):
+                    time.sleep(30); continue
+                _nonlogin_only=True   # 서버는 비회원 사이트만
             rooms=[r for r in (load_json(WORKROOMS_FILE,[]) or []) if _workroom_combos(r)]
             if not rooms:
                 if slot==0:   # 작업실 없음 → 슬롯0이 통합풀 폴백
                     pool=collect_all_keywords()
-                    if pool: _publish_one_combo(pick_keywords(pool,cfg),'통합풀','',cfg)
+                    if pool: _publish_one_combo(pick_keywords(pool,cfg),'통합풀','',cfg,nonlogin_only=_nonlogin_only)
                     else: add_log('[상시발행] 키워드 작업실에 조합을 추가하세요 (비어있음)')
                     time.sleep(20)
                 else:
                     time.sleep(30)   # 다른 슬롯은 통합풀 중복 발행 방지 위해 대기
                 continue
-            if not any(is_publishable(s) for s in load_sites()):
+            if not any(is_publishable(s) and (not _nonlogin_only or not s.get('login_required')) for s in load_sites()):
                 time.sleep(30); continue
             picked=_pick_next_combo(rooms)   # 공유풀에서 다음 (작업실,조합) 하나 꺼냄(겹침 없음)
             if not picked:
                 time.sleep(5); continue
             room,kw,cur,total=picked
             _kwlabel=(kw.get('_main') or f"{kw.get('지역','')}{kw.get('서비스','')}")
-            add_log(f"[작업실:{room.get('name','')}] 조합 {cur}/{total} ({_kwlabel}) 발행 시작 (슬롯 {slot+1})")
-            _publish_one_combo(kw,room.get('name',''),room.get('id',''),cfg,writer_name=str(room.get('writer_name') or '').strip())
+            add_log(f"[작업실:{room.get('name','')}] 조합 {cur}/{total} ({_kwlabel}) 발행 시작 (슬롯 {slot+1}{' · 비회원사이트만' if _nonlogin_only else ''})")
+            _publish_one_combo(kw,room.get('name',''),room.get('id',''),cfg,writer_name=str(room.get('writer_name') or '').strip(),nonlogin_only=_nonlogin_only)
         except Exception as e:
             add_log(f"[작업실워커 오류 슬롯{slot+1}] {str(e)[:70]}")
             time.sleep(10)
@@ -11322,7 +11334,7 @@ def api_cfg():
                   'imap_email','imap_password','imap_host',
                   'twocaptcha_api_key','twocaptcha_enabled',
                   'twocaptcha_price_recaptcha_usd','twocaptcha_price_image_usd','brave_price_per_query_usd',
-                  'auto_pipeline_enabled','auto_pipeline_batch',
+                  'auto_pipeline_enabled','auto_pipeline_batch','server_nonlogin_publish','signup_max_per_claim','cand_cooldown_sec',
                   'proxy_enabled','proxy_host','proxy_port','proxy_user','proxy_pass','proxy_only_for_cf',
                   'unlocker_enabled','unlocker_api_key','unlocker_zone',
                   'sbr_enabled','sbr_endpoint','sbr_country','signup_fixed_id','signup_fixed_pw']:
