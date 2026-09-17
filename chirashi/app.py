@@ -749,6 +749,7 @@ def load_config():
        'twocaptcha_api_key':'','twocaptcha_enabled':False,
        'http_publish_enabled':True,  # ★browserless(requests) 초고속발행(~2~3초) — CSRF token 전송 추가(2026-09-13)로 활성화. 실패 시 셀레늄 자동 폴백.
        'server_nonlogin_publish':True,  # ★대표님 지시 2026-09-18 '워커로 글발행 많이': node_publish_all일 때도 서버 6워커가 '비회원 바로발행(로그인 불필요)' 사이트를 병렬 발행(서버 DC IP는 로그인만 막힘). 노드는 로그인·cafe24 전담. False면 서버워커 완전 대기(옛 동작).
+       'workroom_fixed_slots':True,  # ★대표님 지시 2026-09-18 '워커를 작업실에 고정 배정=강제 균등': 워커 슬롯을 작업실에 1:1(slot%작업실수) 매핑해 노래방·마사지·동탄·인천 균등 발행. False면 옛 워크스틸링(조합수 많은 방 편중).
        'allow_illegal_boards':True,  # ★대표님 지시 2026-09-13 '도박은 나랑 무관, 글만 써지면 발행': illegal(도박어 도배) 게시판도 탈락 안 시키고 발행. False로 되돌리면 원래대로 차단.
        'cafe24_max_per_claim':1,     # ★대표님 지시 2026-09-13 'cafe24 동시처리 줄이기': 한 claim 배치당 cafe24 최대 개수(Turnstile로 무겁고 hang 잦아 슬롯 독점 방지). 나머지 슬롯은 그누보드 등으로 채움.
        'signup_max_per_claim':2,     # ★대표님 지시 2026-09-18 'A1: 될 사이트 우선 claim': 한 claim 배치당 '가입필요(login_required)' 후보 최대 개수. 실측상 이들 대부분 자동가입 60초 타임아웃으로 죽어(빡센검수 표본 0% 성공) 슬롯 독점 시 처리량 낭비. 나머지 슬롯은 비회원 바로발행으로 채움(될 확률 높음). 0 불가(최소 1).
@@ -8672,6 +8673,23 @@ def _pick_next_combo(rooms):
         idx=order[cur]; _WR_CURSOR[rid]=cur+1
         return (room, combos[idx], cur+1, len(combos))
 
+def _pick_combo_for_room(room):
+    """★작업실 고정배정(2026-09-18 대표님 '워커를 작업실에 고정 = 강제 균등'): 지정 작업실 하나에서만
+       다음 조합을 꺼낸다(_pick_next_combo는 전 작업실 라운드로빈이라 조합수 많은 방이 편중됨).
+       슬롯별로 자기 작업실만 발행 → 노래방·마사지·동탄·인천 균등 발행. 반환: (room,kw,cur,total) or None."""
+    if not room: return None
+    with _WR_PICK_LOCK:
+        combos=_workroom_combos(room); rid=room.get('id','')
+        if not combos: return None
+        order=_WR_ORDER.get(rid)
+        if not order or len(order)!=len(combos):
+            order=list(range(len(combos))); random.shuffle(order); _WR_ORDER[rid]=order
+        cur=int(_WR_CURSOR.get(rid,0) or 0)
+        if cur>=len(order):
+            cur=0; random.shuffle(order); _WR_ORDER[rid]=order
+        idx=order[cur]; _WR_CURSOR[rid]=cur+1
+        return (room, combos[idx], cur+1, len(combos))
+
 def _workroom_combos(room):
     """작업실 keyword_csv → [{'지역','서비스','브랜드'}, ...] (한 줄=한 조합=한 글).
        ★대표님 지시(2026-09-07): 한 줄에 메인 키워드 1개만 넣으면(콤마 없음)
@@ -8830,9 +8848,19 @@ def workroom_worker(slot):
                 continue
             if not any(is_publishable(s) and (not _nonlogin_only or not s.get('login_required')) for s in load_sites()):
                 time.sleep(30); continue
-            picked=_pick_next_combo(rooms)   # 공유풀에서 다음 (작업실,조합) 하나 꺼냄(겹침 없음)
-            if not picked:
-                time.sleep(5); continue
+            # ★작업실 고정배정(2026-09-18 대표님 '워커를 작업실에 고정=강제 균등'): 슬롯을 작업실에 1:1 매핑
+            #   (slot % 작업실수). 슬롯0→노래방, 1→마사지, 2→동탄, 3→인천… 워커가 더 많으면 순환(한 작업실을
+            #   여러 슬롯이 나눠 발행=더 빠름). 이러면 조합수 편중(노래방 53%) 없이 4개 작업실 균등 발행.
+            #   workroom_fixed_slots=False면 옛 워크스틸링(_pick_next_combo).
+            if cfg.get('workroom_fixed_slots',True):
+                _myroom=rooms[slot % len(rooms)]
+                picked=_pick_combo_for_room(_myroom)
+                if not picked:
+                    time.sleep(5); continue
+            else:
+                picked=_pick_next_combo(rooms)   # 공유풀 워크스틸링(옛 방식)
+                if not picked:
+                    time.sleep(5); continue
             room,kw,cur,total=picked
             _kwlabel=(kw.get('_main') or f"{kw.get('지역','')}{kw.get('서비스','')}")
             add_log(f"[작업실:{room.get('name','')}] 조합 {cur}/{total} ({_kwlabel}) 발행 시작 (슬롯 {slot+1}{' · 비회원사이트만' if _nonlogin_only else ''})")
