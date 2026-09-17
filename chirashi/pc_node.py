@@ -244,9 +244,12 @@ def _process_site(s, cfg):
         else:
             pool = app.collect_all_keywords()
             kw = app.pick_keywords(pool, cfg) if pool else {"지역": "인천", "서비스": "노래방", "브랜드": cfg.get("brand", "") or "테스트"}
-        # ★작업실 이미지 사용(2026-09-18 대표님 '저장해둔 이미지 쓰라했는데 랜덤이미지 나옴'): generate_article에
-        #   workroom_id를 넘겨야 pick_images가 그 작업실 저장 이미지를 쓴다. 안 넘기면 picsum 랜덤(시계 등)으로 폴백.
-        html, title = app.generate_article(kw, cfg, unique=True, workroom_id=s.get("workroom_id") or None)
+        # ★작업실 이미지 사용(2026-09-18 대표님 '저장해둔 이미지 쓰라했는데 랜덤이미지 나옴'): 이미지·작업실
+        #   데이터는 서버 data/에만 있고 노드 로컬엔 없으므로, 서버가 claim때 실어보낸 image_urls(그 작업실
+        #   저장이미지 절대URL)를 generate_article에 직접 넘긴다. 없으면 이미지 없이(picsum 랜덤 폴백 안 함).
+        html, title = app.generate_article(kw, cfg, unique=True,
+                                           workroom_id=s.get("workroom_id") or None,
+                                           image_urls=s.get("image_urls") or None)
         res.update({"title": title, "region": kw.get("지역", ""), "service": kw.get("서비스", ""),
                     "workroom_id": s.get("workroom_id",""), "workroom_name": s.get("workroom_name","")})   # 서버 이력(작업실별)용
         ok, msg = app.do_post(site, title, html, skip_login=False)   # 저장 계정으로 로그인 발행

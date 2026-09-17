@@ -125,10 +125,17 @@ def _workroom_image_urls(workroom_id):
     urls+=[_abs_media_url(x['url']) for x in uploaded_images(wid)]   # 업로드 파일 → 절대 URL
     return list(dict.fromkeys(urls))
 
-def pick_images(n, workroom_id=None):
+def pick_images(n, workroom_id=None, image_urls=None):
     """본문용 이미지 n개 선택.
+       - image_urls 주면(노드가 서버로부터 받은 작업실 이미지): 로컬 조회 없이 그걸 그대로 사용.
+         ★노드는 이미지·작업실이 로컬에 없어 workroom_id로 조회하면 빈 풀 → picsum 폴백했음(대표님 제보 2026-09-18).
        - workroom_id 주면: 그 작업실 전용 풀만 사용. 비어있으면 [](이미지 없이 발행) — 대표님 지시.
-       - workroom_id 없으면(테스트/전역): 사용자 URL 풀이 있으면 그걸, 없으면 기본(picsum) 폴백."""
+       - 둘 다 없으면(테스트/전역): 사용자 URL 풀이 있으면 그걸, 없으면 기본(picsum) 폴백."""
+    if image_urls:
+        pool=[u for u in image_urls if isinstance(u,str) and u.strip()]
+        if not pool: return []
+        if len(pool)>=n: return random.sample(pool,n)
+        return [random.choice(pool) for _ in range(n)]
     if workroom_id:
         pool=_workroom_image_urls(workroom_id)
         if not pool: return []            # 작업실에 이미지 없음 → 이미지 없이 발행
@@ -1451,7 +1458,7 @@ def _build_meta_intro(r, s, b, p, mood, cfg=None):
     # 맨 앞 글자 = 메인키워드(<strong>). 구글 스니펫이 메인키워드로 시작하게.
     return f'<strong>{main}</strong>{lead} {phone} {desc}. {loc}{close}'
 
-def generate_rich_html(keywords, cfg, workroom_id=None):
+def generate_rich_html(keywords, cfg, workroom_id=None, image_urls=None):
     r=(keywords.get('지역') or '서울').strip()
     s=(keywords.get('서비스') or '셔츠룸').strip()
     b=(keywords.get('브랜드') or cfg.get('brand') or '인천홍마니').strip()
@@ -1459,7 +1466,7 @@ def generate_rich_html(keywords, cfg, workroom_id=None):
     title,rawphone=build_title(r,s,b,cfg)
     p=format_phone(rawphone)
     mood=random.choice(SERVICE_FLAVOR.get(s,DEFAULT_FLAVOR)['mood'])
-    imgs=pick_images(1,workroom_id=workroom_id)   # 게시물당 이미지 1개(작업실에 이미지 없으면 [] → 이미지 없이 발행)
+    imgs=pick_images(1,workroom_id=workroom_id,image_urls=image_urls)   # 게시물당 이미지 1개(작업실에 이미지 없으면 [] → 이미지 없이 발행)
     # 대표님 지시(2026-09-07): 붙여준 예시처럼 '단일 강조색'을 게시물마다 하나 골라 전체에 일관 적용.
     AC=random.choice(COLORS)              # 강조색 하나(제목·소제목·라벨·별점 등 전부 이 색)
     c1=c2=c3=AC                           # 기존 c1/c2/c3 참조 호환(모두 같은 강조색)
@@ -1669,7 +1676,7 @@ def generate_rich_html(keywords, cfg, workroom_id=None):
     return html, title
 
 # ==================== GPT 본문 생성 (선택) ====================
-def generate_post_gpt(keywords, cfg, workroom_id=None):
+def generate_post_gpt(keywords, cfg, workroom_id=None, image_urls=None):
     """OpenAI로 키워드1 중심의 장문 HTML 본문 생성. 실패 시 템플릿으로 폴백."""
     import requests as _rq
     r=(keywords.get('지역') or '서울').strip(); s=(keywords.get('서비스') or '셔츠룸').strip()
@@ -1686,7 +1693,7 @@ def generate_post_gpt(keywords, cfg, workroom_id=None):
     else:
         key=cfg.get('openai_key',''); model=cfg.get('model') or 'gpt-4o-mini'
         if not key: raise RuntimeError('openai_key 없음')
-    imgs=pick_images(1,workroom_id=workroom_id)           # 이미지 1개(작업실에 없으면 [] → 이미지 없이)
+    imgs=pick_images(1,workroom_id=workroom_id,image_urls=image_urls)           # 이미지 1개(작업실에 없으면 [] → 이미지 없이)
     c1=c2=random.choice(COLORS)                           # 강조색 하나로 통일(디자인 틀과 동일 색)
     sys_p=("너는 한국어 정보형 랜딩페이지와 지역 안내 글을 작성하는 전문 카피라이터다. "
            "세 개의 키워드 중 키워드1을 문서 전체의 명확한 메인 주제로 삼고, 키워드2와 키워드3은 "
@@ -1797,7 +1804,7 @@ def generate_post_gpt(keywords, cfg, workroom_id=None):
 _GPT_SKIP_UNTIL=[0.0]   # time.time()까지 GPT 스킵(429 서킷브레이커)
 _NOKEY_LOGGED=[0.0]     # '키 없음→템플릿' 안내 마지막 시각(10분 1회)
 
-def _gen_once(keywords, cfg, workroom_id=None):
+def _gen_once(keywords, cfg, workroom_id=None, image_urls=None):
     # GPT 429(레이트리밋) 서킷브레이커: 429가 나면 5분간 GPT를 건너뛰고 템플릿 직행.
     #  (매 발행마다 GPT 호출→429 대기→폴백 반복이 발행을 느리게 해 타임아웃 유발 — 대표님 지적)
     # 제공자별 키 존재 여부로 게이트(nvidia면 nvidia_api_key). 예전엔 openai_key만 봐서 NVIDIA 전용 설정이 조용히 템플릿으로 빠졌음.
@@ -1805,7 +1812,7 @@ def _gen_once(keywords, cfg, workroom_id=None):
     _llm_key=(cfg.get('nvidia_api_key') if _pv=='nvidia' else (cfg.get('openrouter_api_key') if _pv=='openrouter' else cfg.get('openai_key')))
     if cfg.get('use_gpt') and _llm_key and time.time() >= _GPT_SKIP_UNTIL[0]:
         try:
-            return generate_post_gpt(keywords,cfg,workroom_id=workroom_id)
+            return generate_post_gpt(keywords,cfg,workroom_id=workroom_id,image_urls=image_urls)
         except Exception as e:
             _msg=str(e)
             # 여러 워커가 같은 순간 429를 받아 같은 줄을 6번 찍던 것 방지: 이미 스킵 중이면 로그 생략.
@@ -1826,16 +1833,17 @@ def _gen_once(keywords, cfg, workroom_id=None):
         # 체크는 켜졌는데 선택 엔진의 키가 비면 조용히 템플릿으로 빠져 원인을 알 수 없었음 → 10분에 1번 알림
         _NOKEY_LOGGED[0]=time.time()
         add_log(f'[AI 생성 건너뜀→템플릿] {_pv.upper()} API 키가 비어 있음 — 설정 탭에서 {_pv.upper()} 키를 입력·저장해야 AI 글 생성')
-    return generate_rich_html(keywords,cfg,workroom_id=workroom_id)
+    return generate_rich_html(keywords,cfg,workroom_id=workroom_id,image_urls=image_urls)
 
-def generate_article(keywords, cfg, unique=True, workroom_id=None):
+def generate_article(keywords, cfg, unique=True, workroom_id=None, image_urls=None):
     """본문 생성. unique=True 면 제목/본문이 과거와 겹치지 않을 때까지 재생성(상시 다르게).
-       workroom_id를 주면 그 작업실 전용 이미지 풀을 사용(없으면 이미지 없이 발행)."""
+       workroom_id를 주면 그 작업실 전용 이미지 풀을 사용(없으면 이미지 없이 발행).
+       image_urls를 주면(노드가 서버로부터 받은 작업실 이미지) 로컬 조회 없이 그걸 사용 — 노드엔 이미지가 로컬에 없어서."""
     if not unique:
-        return _gen_once(keywords,cfg,workroom_id=workroom_id)
+        return _gen_once(keywords,cfg,workroom_id=workroom_id,image_urls=image_urls)
     html=title=None
     for _ in range(8):
-        html,title=_gen_once(keywords,cfg,workroom_id=workroom_id)
+        html,title=_gen_once(keywords,cfg,workroom_id=workroom_id,image_urls=image_urls)
         if remember_if_unique(title,html): return html,title
     # 8회 모두 충돌(사실상 불가) → 강제 유니크 토큰 부착
     html=force_unique_html(html); remember_if_unique(title,html,force=True)
@@ -9951,6 +9959,13 @@ def api_pipeline_claim_sites():
                     _pl['workroom_id']=_rm.get('id',''); _pl['workroom_name']=_rm.get('name','')
                     _pl['kw']={'지역':_kw.get('지역',''),'서비스':_kw.get('서비스',''),'브랜드':_kw.get('브랜드','')}
                     _pl['writer_name']=str(_rm.get('writer_name') or '').strip()
+                    # ★작업실 저장 이미지를 노드에 함께 전달(2026-09-18 대표님 '저장이미지 쓰라했는데 랜덤이미지'):
+                    #   이미지·작업실 데이터는 서버 data/에만 있고 노드 로컬엔 없어, 노드가 workroom_id만 받아도
+                    #   자기 로컬에서 이미지를 못 찾아 picsum 폴백했음. 서버가 그 작업실의 이미지 URL을 절대경로로 실어보냄.
+                    try:
+                        _imgs=_workroom_image_urls(_rm.get('id',''))
+                        if _imgs: _pl['image_urls']=_imgs
+                    except Exception: pass
             picked.append(_pl)
         if picked: save_sites(sites)
     if picked: add_log(f'[PC노드] {node_id} 등록Cafe24 {len(picked)}곳 위임(로컬크롬 로그인발행)','파이프라인')
