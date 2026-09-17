@@ -253,6 +253,115 @@ def looks_like_board(url):
     return False
 
 
+# ============================================================================
+# ★crt.sh 신규 게시판 발굴(2026-09-18 대표님 '신규 그누보드/카페24 도메인 추적'):
+#   검색엔진 크레딧 없이 무료로 신규 도메인 대량수집. crt.sh(인증서 투명성 로그)에서 한국 TLD 도메인을
+#   훑고, 각 도메인에 그누보드/카페24 게시판이 실제 있는지 노드(집IP)가 확인 → 있는 것만 서버 ingest.
+#   실측(2026-09-18): .or.kr(협회·비영리) 그누보드 수율 ~13%(3582도메인), cafe24 쇼핑몰은 ~0%(게시판 없음),
+#   .ac.kr(대학)도 0%(자체CMS). → .or.kr>.co.kr>.kr 우선, .ac.kr·cafe24쇼핑몰 제외.
+#   crt.sh는 TLD당 1회 조회가 무거움(~1MB)이라 여러 발굴루프에 1회만(_CRTSH_EVERY), TLD는 커서로 순환.
+_CRTSH_TLDS = [".or.kr", ".co.kr", ".kr", ".go.kr"]   # 게시판 수율 순(대학 .ac.kr 제외)
+_CRTSH_CURSOR_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".pc_discovery_crtsh")
+_CRTSH_SEEN_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".pc_discovery_crtsh_seen")
+
+def _crtsh_read_cursor():
+    try: return int(open(_CRTSH_CURSOR_FILE, encoding="utf-8").read().strip() or "0")
+    except Exception: return 0
+
+def _crtsh_write_cursor(v):
+    try: open(_CRTSH_CURSOR_FILE, "w", encoding="utf-8").write(str(int(v)))
+    except Exception: pass
+
+def _crtsh_load_seen():
+    """이미 crt.sh 판정한 도메인(중복 재확인 방지). 최대 5만개 유지."""
+    try:
+        return set(x.strip() for x in open(_CRTSH_SEEN_FILE, encoding="utf-8").read().splitlines() if x.strip())
+    except Exception:
+        return set()
+
+def _crtsh_save_seen(seen):
+    try:
+        s = list(seen)[-50000:]   # 상한
+        open(_CRTSH_SEEN_FILE, "w", encoding="utf-8").write("\n".join(s))
+    except Exception: pass
+
+def _crtsh_domains(tld):
+    """crt.sh에서 해당 TLD 도메인 목록(고유·대표도메인만). 실패 시 []."""
+    try:
+        r = requests.get(f"https://crt.sh/?q=%25{tld}&output=json", headers=UA, timeout=60, verify=False)
+        if r.status_code != 200 or not (r.text or "").strip():
+            log(f"  crt.sh {tld} HTTP {r.status_code}"); return []
+        import json as _json
+        data = _json.loads(r.text)
+        doms = set()
+        for e in data:
+            for d in str(e.get("name_value", "")).split("\n"):
+                d = d.strip().lower()
+                # 대표 도메인만: 와일드카드·모바일미러(m.) 제외, 서브도메인 깊이 제한
+                if d.endswith(tld) and not d.startswith("*") and not d.startswith("m.") and d.count(".") <= 3:
+                    doms.add(d)
+        return list(doms)
+    except Exception as e:
+        log(f"  crt.sh {tld} 예외: {str(e)[:80]}"); return []
+
+def _has_board(dom):
+    """도메인에 그누보드/카페24 게시판이 있는지 확인. 있으면 발행용 게시판 URL 반환, 없으면 ''."""
+    for scheme in ("https", "http"):
+        # 그누보드 자유게시판
+        try:
+            r = requests.get(f"{scheme}://{dom}/bbs/board.php?bo_table=free", headers=UA, timeout=7, verify=False, allow_redirects=True)
+            body = (r.text or "")[:20000]
+            if r.status_code < 400 and ("bo_table" in body or "gnuboard" in body.lower() or "wr_id" in body or "그누" in body):
+                return f"{scheme}://{dom}/bbs/board.php?bo_table=free"
+        except Exception: pass
+        # 카페24 게시판(자유게시판)
+        try:
+            r = requests.get(f"{scheme}://{dom}/board/free/list.html", headers=UA, timeout=7, verify=False, allow_redirects=True)
+            body = (r.text or "")[:20000]
+            if r.status_code < 400 and ("cafe24" in body.lower() or "board_no" in body or "/board/" in body):
+                return f"{scheme}://{dom}/board/free/list.html"
+        except Exception: pass
+    return ""
+
+def crtsh_discover(skip_domains, max_check=60):
+    """crt.sh 1개 TLD를 훑어 신규 도메인 중 게시판 있는 것만 서버로 ingest.
+       skip_domains: 서버가 아는 도메인(중복 제외). max_check: 이번 회 게시판 확인할 신규 도메인 수(부하 관리)."""
+    tld = _CRTSH_TLDS[_crtsh_read_cursor() % len(_CRTSH_TLDS)]
+    _crtsh_write_cursor(_crtsh_read_cursor() + 1)
+    log(f"[crt.sh 발굴] {tld} 도메인 수집 중…")
+    doms = _crtsh_domains(tld)
+    if not doms:
+        return
+    seen = _crtsh_load_seen()
+    # 아직 판정 안 한 신규 도메인만(서버 known + 로컬 seen 제외)
+    fresh = [d for d in doms if d not in skip_domains and d not in seen and d.replace("www.", "") not in skip_domains]
+    log(f"[crt.sh 발굴] {tld} 총 {len(doms)}개 · 미판정 {len(fresh)}개 → 이번 회 {min(len(fresh), max_check)}개 게시판 확인")
+    board_urls = []
+    checked = 0
+    for d in fresh[:max_check]:
+        seen.add(d)
+        bu = _has_board(d)
+        if bu:
+            board_urls.append(bu)
+            log(f"  ✅게시판 발견: {bu}")
+        checked += 1
+        time.sleep(0.5)   # 노드 IP 부하·차단 방지
+    _crtsh_save_seen(seen)
+    if board_urls:
+        # ingest가 검수·발행테스트를 백그라운드로 돌리지만 응답이 늦을 수 있어 넉넉한 타임아웃.
+        # 100개씩 나눠 전송(서버 상한). 타임아웃 나도 서버는 URL을 받았을 수 있으니 다음 회 seen으로 중복 방지됨.
+        for _j in range(0, len(board_urls), 100):
+            _chunk = board_urls[_j:_j + 100]
+            try:
+                _url = SERVER + "/api/candidates/ingest?token=" + urllib.parse.quote(SERVER_TOKEN)
+                r = requests.post(_url, json={"urls": _chunk, "node_id": NODE_ID}, headers=UA, timeout=120)
+                res = r.json() if r.status_code < 400 else {}
+                log(f"[crt.sh 발굴] 게시판 {len(_chunk)}개 → 서버 전송(신규 {res.get('added') if res.get('ok') else '?'})")
+            except Exception as e:
+                log(f"[crt.sh 발굴] 전송 예외(서버는 수신했을 수 있음): {str(e)[:70]}")
+    else:
+        log(f"[crt.sh 발굴] {tld} 이번 회 게시판 발견 0 (확인 {checked}개)")
+
 # ★검색어 로테이션 커서(대표님 지시): 매 실행마다 400개 검색어의 '다음 묶음'을 돌려
 #  같은 검색어 반복으로 신규가 적던 문제 해결. 커서를 로컬 파일에 저장해 이어간다.
 _CURSOR_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".pc_discovery_cursor")
@@ -349,15 +458,28 @@ def run_once(max_queries):
     log(f"완료 — 총 {sent}개 서버로 넘김.")
 
 
+def _server_skip_domains():
+    """서버가 아는 도메인(known+rejected) — crt.sh 신규판정 중복 제외용."""
+    try:
+        info = server_get("/api/discovery/queries")
+        return set(info.get("known_domains", [])) | set(info.get("rejected_domains", []))
+    except Exception:
+        return set()
+
 def main():
     ap = argparse.ArgumentParser(description="찌라시 PC 자동 발굴 연동")
     ap.add_argument("--once", action="store_true", help="한 번만 실행하고 종료")
     ap.add_argument("--interval", type=int, default=300, help="반복 간격(초, 기본 300=5분)")
     ap.add_argument("--max-queries", type=int, default=30, help="한 회당 검색어 수(기본 30)")
+    ap.add_argument("--crtsh-every", type=int, default=4, help="crt.sh 발굴을 몇 발굴루프마다 1회(기본 4=약20분마다)")
     a = ap.parse_args()
     log(f"찌라시 PC 발굴 시작 — 서버 {SERVER}")
     if a.once:
-        run_once(a.max_queries); return
+        run_once(a.max_queries)
+        try: crtsh_discover(_server_skip_domains())   # --once면 crt.sh도 1회
+        except Exception as e: log(f"crt.sh 발굴 예외: {str(e)[:100]}")
+        return
+    _loop = 0
     while True:
         try:
             run_once(a.max_queries)
@@ -365,6 +487,13 @@ def main():
             log("중단됨."); break
         except Exception as e:
             log(f"루프 예외(계속): {str(e)[:120]}")
+        # ★crt.sh 신규발굴: 무거우니 _crtsh_every 루프마다 1회(검색엔진 크레딧 없이 무료 신규공급).
+        _loop += 1
+        if a.crtsh_every > 0 and _loop % a.crtsh_every == 0:
+            try:
+                crtsh_discover(_server_skip_domains())
+            except Exception as e:
+                log(f"crt.sh 발굴 예외(계속): {str(e)[:100]}")
         log(f"다음 발굴까지 {a.interval}초 대기…  (Ctrl+C로 종료)")
         try:
             time.sleep(a.interval)
