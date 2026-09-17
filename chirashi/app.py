@@ -8589,6 +8589,13 @@ def _publish_combo_to_site(s, kw, wname, rid, cfg, writer_name=''):
             if attempt<3: time.sleep(min(5*attempt,15))
         reason=reason_ko=''
         if not ok: reason,reason_ko,_=classify_fail(msg)
+        # ★하이브리드 오분류 교정(2026-09-18): login_required=False로 알고 서버가 발행했는데 '로그인 필요' alert이면
+        #   실제론 로그인 게시판(마킹 오류). login_required=True로 교정 → 서버 비회원필터에서 빠지고 노드(집IP)가 전담.
+        #   서버 DC IP가 같은 사이트에 매번 헛시도해 fail_streak 쌓고 잠그던 것 방지.
+        if (not ok) and (not fresh.get('login_required')) and ('로그인' in str(msg) and ('필요' in str(msg) or '불가' in str(msg) or '권한' in str(msg))):
+            try: set_site_flag(fresh.get('id'),login_required=True)
+            except Exception: pass
+            add_log(f"[하이브리드 교정] {fresh.get('name') or (fresh.get('site_url','') or '')[:20]} — 로그인 필요로 재마킹(노드 전담)")
         try: finalize_post(fresh,ok,fail_reason=('' if ok else str(msg)))
         except Exception: pass
         # ★비밀글 감지·비번 기록(대표님 지시 2026-09-08): 발행 성공했는데 그 글이 '비밀글'로 보호되면
