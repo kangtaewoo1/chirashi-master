@@ -95,8 +95,9 @@ def _cleanup_stale_chrome_profiles(older_than_sec=3600):
 def _kill_orphan_chrome():
     """★좀비 크롬 근본정리(2026-09-18 대표님 'PC 여러대 없이 처리량' 실측: 동시4인데 크롬 45개 누적→
        메모리 4.5GB 잠식→처리량 저하). driver.quit()이 세션 죽은/hang 크롬의 OS 프로세스를 못 죽여 orphan이
-       쌓인다. **노드가 idle(대기 후보 없음)일 땐 정상적으로 크롬이 하나도 없어야 하므로**, 이때 살아있는
-       chrome/chromedriver는 전부 orphan → taskkill로 정리. 발행 중엔 호출 안 함(진행 중 크롬 안 죽이게)."""
+       쌓인다. 호출 시점: (1) idle(대기 후보 없음) — 정상이면 크롬 0이어야 하므로 남은 건 전부 orphan,
+       (2) 배치와 배치 사이(loop-top) 크롬 수가 동시수+2 초과 시 — 발행 중이 아닌 시점이라 초과분은 orphan.
+       app.quit_all_drivers()로 등록 드라이버 먼저 닫고 taskkill로 OS 잔여 프로세스까지 강제 정리."""
     try:
         app.quit_all_drivers()   # 등록된 드라이버 먼저 정상 종료
     except Exception: pass
@@ -402,6 +403,7 @@ def run(once=False, workers=None, idle=30):
     log(f"PC 발행노드 시작 — node_id={NODE_ID} · 서버={SERVER} · 동시 {n}개")
     _last_prof_clean = 0.0
     _last_orphan_kill = [0.0]
+    _last_orphan_sweep = [0.0]
     while True:
         try:
             cfg = app.load_config()
@@ -411,6 +413,20 @@ def run(once=False, workers=None, idle=30):
                 _last_prof_clean = time.time()
                 _rm = _cleanup_stale_chrome_profiles()
                 if _rm: log(f"임시 크롬프로필 {_rm}개 정리(디스크 누수 방지)")
+            # ★루프-탑 좀비 크롬 정리(2026-09-18 대표님 '동시6 실측': idle 정리만으론 부족 — 후보 백로그가
+            #   커서 노드가 계속 바빠 idle 분기에 안 닿으면 orphan(41개까지 관측)이 무한 누적→메모리 압박→
+            #   동시성 상향이 오히려 크래시로 역효과. 배치와 배치 사이(다음 claim 직전)엔 발행 중 크롬이 없어야
+            #   하므로, 크롬 수가 동시수+2를 넘고 마지막 정리 후 180초 지났으면 loop-top에서 강제 정리.
+            #   기존 배치-타임아웃 taskkill(진행 중 워커 있을 때도 kill)과 동일한 확립된 거동이라 안전.
+            if time.time() - _last_orphan_sweep[0] > 180:
+                _last_orphan_sweep[0] = time.time()
+                try:
+                    import subprocess as _sp
+                    _cn = len(_sp.run(['tasklist','/FI','IMAGENAME eq chrome.exe'],capture_output=True,text=True,timeout=15).stdout.split('chrome.exe'))-1
+                except Exception: _cn = 0
+                if _cn > n + 2:
+                    _kill_orphan_chrome()
+                    log(f"배치간 좀비 크롬 정리 — {_cn}개 종료(동시 {n})")
             # ① 등록 사이트 발행(★노드 발행 전담 2026-09-14 대표님 지시: 서버엔 ddddocr 없어 kcaptcha 못 풂 →
             #    노드가 등록 사이트 전부를 무료 OCR로 발행). node_publish_all이면 동시 n곳, 아니면 기존처럼 소수.
             _site_n = n if cfg.get('node_publish_all', True) else min(2, n)
