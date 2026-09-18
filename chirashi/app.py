@@ -9422,7 +9422,7 @@ def chk():
     #  /api/test/* = 발행 테스트 트리거(등록 사이트에 실제 글1건 발행해 검증).
     _p=request.path
     if _p=='/api/version': return  # 배포 SHA 확인 — 공개(민감정보 없음)
-    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/sites/unlock-cafe24','/api/sites/unlock-verified','/api/sites/purge-fake-cafe24','/api/sites/mark-login-required','/api/candidates/rescreen-cafe24','/api/candidates/revive-rejected','/api/candidates/unrevive-nonillegal','/api/regions/normalize-existing','/api/site-board','/api/history','/api/ops-dashboard','/api/imap/test','/api/openai/usage','/api/twocaptcha/usage','/api/config/clear-key','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/report-site','/api/unlocker/test','/api/sbr/test','/api/diag') or _p.startswith('/api/test/'):
+    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/sites/unlock-cafe24','/api/sites/unlock-verified','/api/sites/purge-fake-cafe24','/api/sites/mark-login-required','/api/candidates/rescreen-cafe24','/api/candidates/revive-rejected','/api/candidates/unrevive-nonillegal','/api/regions/normalize-existing','/api/site-board','/api/history','/api/ops-dashboard','/api/imap/test','/api/openai/usage','/api/twocaptcha/usage','/api/config/clear-key','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/candidates/reject-unworkable','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/report-site','/api/unlocker/test','/api/sbr/test','/api/diag') or _p.startswith('/api/test/'):
         tok=(request.args.get('token') or '').strip()
         cfgtok=(load_config().get('log_token') or '').strip()
         if cfgtok and tok==cfgtok:
@@ -10371,6 +10371,41 @@ def api_cand_revive_rejected():
             except Exception: pass
     add_log(f'[탈락 회수] {"(미리보기)" if dry else ""} 재시도 가치 높은 {matched}곳 회수 → 재검수 대기','정리')
     return jsonify({'ok':True,'dry_run':dry,'revived':matched,'by_reason':by_reason})
+
+@app.route('/api/candidates/reject-unworkable',methods=['POST'])
+def api_cand_reject_unworkable():
+    """★자동 불가 후보 일괄 탈락(대표님 지시 2026-09-19 '준비중이 쌓이기만 함·안 되면 탈락 정리'):
+       준비중(ready/approved/manual_signup) 후보 중 '자동으로 절대 못 뚫는 것'만 rejected 처리한다.
+       도메인 영구차단은 하지 않는다(후보 status만 변경) — 다른 게시판(bo_table)·정책변경 시 재발굴 여지 유지.
+       되돌리기는 /api/candidates/revive-rejected. body: {dry_run?}.
+       판별(플래그 기반, 실측): 이메일인증·휴대폰인증(자동불가)·가입 2회+반복실패(로그인필수)·발행 5회+실패·
+       접속불가·불법·광고금지. 인증벽 없는 자동가입 시도가치·비회원 발행가능은 유지(탈락 안 함)."""
+    d=request.get_json(silent=True) or {}
+    dry=bool(d.get('dry_run'))
+    def _reason(c):
+        if c.get('signup_phone_cert'): return '휴대폰본인인증(자동불가)'
+        if c.get('signup_email_verify'): return '이메일인증(자동불가)'
+        if c.get('login_required') and int(c.get('signup_retry') or 0)>=2: return '가입 반복실패(로그인필수)'
+        if int(c.get('pipeline_attempts') or 0)>=5: return '발행 5회+ 실패'
+        if c.get('reachable') is False or c.get('precheck_reachable') is False: return '사이트 접속불가'
+        if c.get('illegal'): return '불법 판정'
+        if c.get('ad_banned'): return '광고 금지'
+        return None
+    matched=0; by_reason={}
+    with _cand_lock:
+        cands=load_cands()
+        for c in cands:
+            if c.get('status') not in ('ready','approved','manual_signup'): continue
+            rsn=_reason(c)
+            if not rsn: continue
+            matched+=1; by_reason[rsn]=by_reason.get(rsn,0)+1
+            if not dry:
+                c['status']='rejected'; c['reject_reason']=f'자동불가 정리: {rsn}'
+                c['claimed_by']=''; c['claim_expire']=0
+                c['rejected_at']=datetime.now().strftime('%Y-%m-%d %H:%M')
+        if not dry and matched: save_cands(cands)
+    add_log(f'[자동불가 정리] {"(미리보기)" if dry else ""} 준비중 후보 {matched}개 탈락(도메인 차단 없음·회수가능)','정리')
+    return jsonify({'ok':True,'dry_run':dry,'rejected':matched,'by_reason':by_reason})
 
 @app.route('/api/candidates/unrevive-nonillegal',methods=['POST'])
 def api_cand_unrevive_nonillegal():
