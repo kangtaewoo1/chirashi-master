@@ -1846,7 +1846,10 @@ def generate_post_gpt(keywords, cfg, workroom_id=None, image_urls=None):
     _body={"model":model,"temperature":0.85,"max_tokens":3800,
            "messages":[{"role":"system","content":sys_p},{"role":"user","content":usr_p}]}
     if _prov=='nvidia':
-        _url="https://integrate.api.nvidia.com/v1/chat/completions"; _to=200; _body['max_tokens']=4500   # Ultra 실측 73~136초·output 3800 상한 도달 → 여유
+        # ★타임아웃 200→90초 단축(2026-09-19 대표님 '느릴 때 빨리 포기'): 무료 NVIDIA 야간 과부하로 200초까지
+        #   끌다 재시도까지 하면 한 글에 수분 낭비→발행 느려짐. 정상이면 73~136초지만 느릴 땐 빨리 포기하고
+        #   템플릿으로 발행 계속(발행 안 멈추는 게 우선). max_tokens도 3500으로(90초 내 완성 유도).
+        _url="https://integrate.api.nvidia.com/v1/chat/completions"; _to=90; _body['max_tokens']=3500
         _ml=model.lower()   # 사고(thinking) 끔 — 우리는 HTML 본문만 필요, 응답 속도·토큰 절약
         if 'deepseek' in _ml: _body['chat_template_kwargs']={'thinking':False}
         elif 'nemotron' in _ml: _body['chat_template_kwargs']={'enable_thinking':False}
@@ -1862,15 +1865,15 @@ def generate_post_gpt(keywords, cfg, workroom_id=None, image_urls=None):
     def _post_once():
         return _rq.post(_url,headers=_hdr,json=_body,timeout=_to)
     resp=None
-    for _att in range(3):
+    for _att in range(2):
         try:
             resp=_post_once()
-            if resp.status_code in (500,502,503,504) and _prov in ('nvidia','openrouter') and _att<2:
-                time.sleep(4*(_att+1)); continue   # 서버 일시장애 — 재시도
+            if resp.status_code in (500,502,503,504) and _prov in ('nvidia','openrouter') and _att<1:
+                time.sleep(4); continue   # 서버 일시장애 — 1회만 재시도(빨리 포기)
             break
         except Exception as _e:
-            if _prov in ('nvidia','openrouter') and _att<2:
-                time.sleep(4*(_att+1)); continue   # 타임아웃 등 — 재시도
+            if _prov in ('nvidia','openrouter') and _att<1:
+                time.sleep(4); continue   # 타임아웃 등 — 1회만 재시도(빨리 포기)
             raise
     if _prov in ('nvidia','openrouter') and resp is not None and resp.status_code==429:
         time.sleep(3); resp=_post_once()   # 분당 한도 — 3초 뒤 1회 재시도
