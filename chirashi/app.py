@@ -3507,10 +3507,16 @@ def _verify_post_by_title(d, bbs, bo, title):
     if len(key)>=20: frags.append(key[6:18])   # 중간 조각
     frags=[f for f in dict.fromkeys(frags) if len(f)>=8]
     list_url=f'{bbs}/board.php?bo_table={bo}'
-    for _ in range(3):
+    # ★목록 반영 지연 흡수 강화(2026-09-19 대표님 '등록확인불가 폴링 개선'): 병렬 발행 부하·느린 서버는
+    #   제출 후 목록 반영에 수초~십수초 걸린다. 기존 3회·고정 1.5초(총 ~10초)로는 '반영 지연' 사이트를
+    #   승인제로 오판해 놓쳤다(실측: 등록실패 많은 사이트가 성공도 50~88건 — 간헐 타이밍 실패).
+    #   재시도 3→5회 + 대기 점증(backoff 2·3·4·5초, 총 ~15초)으로 지연 반영을 구제한다.
+    #   진짜 승인제/스팸차단은 5회 후에도 안 떠 정직하게 실패 처리(무한 대기 아님 — 안 되는 데 시간낭비 방지).
+    _waits=[2.0,3.0,4.0,5.0]   # 각 시도 실패 후 대기(마지막 시도 뒤엔 대기 없음)
+    for _i in range(5):
         try:
             d.set_page_load_timeout(25)
-            d.get(list_url); time.sleep(2)
+            d.get(list_url); time.sleep(2.5)
         except Exception:
             pass
         # 1) wr_id 링크를 훑어 '행 텍스트가 제목의 부분(접두어)'인 것을 찾는다
@@ -3541,7 +3547,7 @@ def _verify_post_by_title(d, bbs, bo, title):
                 return list_url
         except Exception:
             pass
-        time.sleep(1.5)
+        if _i < len(_waits): time.sleep(_waits[_i])
     return None
 
 # ==================== browserless 초고속 발행 (requests, 셀레늄 없이) ====================
