@@ -3297,19 +3297,24 @@ def enable_html_mode(d):
     # ★HTML을 그대로 렌더하는 리치에디터는 HTML 모드로 발행(예쁜 디자인 유지 — 대표님 지시).
     #   smarteditor2(네이버 SE2, oEditors.SET_IR)·XpressEngine(XE) 에디터는 HTML 콘텐츠를 렌더한다.
     try:
+        from selenium.webdriver.common.by import By
         src=(d.page_source or '').lower()
-        # smarteditor2(네이버 SE2): 아래 중 하나라도 있으면 HTML 렌더 에디터로 확정.
-        #  ※ 스킨마다 표기가 달라(oEditors=[]·oEditors.getById·plugin/editor/smarteditor2·
-        #    class="smarteditor2"·se2_input_wysiwyg 등) 넓게 감지한다.
-        #    실제 발행도 oEditors.getById['wr_content'].exec('SET_IR',...)로 HTML을 넣으므로
-        #    이 신호가 있으면 HTML이 그대로 렌더된다.
-        if any(k in src for k in (
-                'smarteditor2','se2_input_wysiwyg','plugin/editor/smarteditor2',
-                'oeditors.getbyid','oeditors.geteditorbyidorname','typeof oeditors',
-                "oeditors = [", 'oeditors=[', 'class="smarteditor2"')):
+        # ★smarteditor2 오판 수정(2026-09-18 대표님 스샷 imhayangjo HTML노출): 'oeditors.getbyid' 문자열만으론
+        #   판정하면 안 됨 — 그게 조건문 안 코드(if(smarteditor)!=-1){oeditors.getbyid...})거나 ckeditor 게시판에도
+        #   있어 오판→HTML모드→raw 노출. **실제 활성 smarteditor2 DOM 요소가 떠 있을 때만** HTML모드.
+        #   (se2 위지윅 iframe·se2_inputarea·smarteditor2 클래스 요소 실재 확인.)
+        _se2_dom=False
+        try:
+            _se2_dom=bool(d.find_elements(By.CSS_SELECTOR,
+                "iframe.se2_input_wysiwyg, .se2_inputarea, .smarteditor2, [class*='se2_'] iframe, textarea.smarteditor2"))
+        except Exception: pass
+        if _se2_dom:
             return True
-        # XpressEngine 에디터(ckeditor/xpresseditor 등) — editor_sequence가 있는 XE 글쓰기
-        if 'editor_sequence' in src and ('xpressengine' in src or '/modules/editor' in src or 'ckeditor' in src):
+        # 파일 로드형 SE2 플러그인(실제 에디터 파일 포함) — 단순 코드조각 아닌 로드 신호.
+        if 'plugin/editor/smarteditor2' in src or 'se2_input_wysiwyg' in src or 'class="smarteditor2"' in src:
+            return True
+        # XpressEngine 에디터 — editor_sequence(XE 실제 폼)가 있을 때만. ckeditor 단독은 HTML 안전보장 안 됨(텍스트).
+        if 'editor_sequence' in src and ('xpressengine' in src or '/modules/editor' in src):
             return True
     except Exception: pass
     return False
