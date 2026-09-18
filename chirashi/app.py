@@ -1856,9 +1856,24 @@ def generate_post_gpt(keywords, cfg, workroom_id=None, image_urls=None):
         _hdr['HTTP-Referer']='https://google.twseo.kr'; _hdr['X-Title']='chirashi'   # 선택 헤더(순위표용)
         _body['reasoning']={'enabled':False}          # 사고 토큰 끔(HTML 본문만 필요)
         _body['usage']={'include':True}               # 응답 usage에 실제 비용(cost) 포함 → 원장에 실비용 기록
-    resp=_rq.post(_url,headers=_hdr,json=_body,timeout=_to)
-    if _prov in ('nvidia','openrouter') and resp.status_code==429:
-        time.sleep(3); resp=_rq.post(_url,headers=_hdr,json=_body,timeout=_to)   # 분당 한도 — 3초 뒤 1회 재시도
+    # ★503/타임아웃 재시도(2026-09-18 대표님 스샷 'NVIDIA 503→템플릿'): 무료 NVIDIA(build.nvidia.com)는
+    #   간헐 과부하로 503·타임아웃이 잦음(실측 2/3 성공). 바로 템플릿 폴백하면 AI 글이 자주 안 나오므로,
+    #   503/타임아웃도 최대 2회 재시도(각 4초·8초 대기)해 흡수 → 템플릿 폴백 최소화.
+    def _post_once():
+        return _rq.post(_url,headers=_hdr,json=_body,timeout=_to)
+    resp=None
+    for _att in range(3):
+        try:
+            resp=_post_once()
+            if resp.status_code in (500,502,503,504) and _prov in ('nvidia','openrouter') and _att<2:
+                time.sleep(4*(_att+1)); continue   # 서버 일시장애 — 재시도
+            break
+        except Exception as _e:
+            if _prov in ('nvidia','openrouter') and _att<2:
+                time.sleep(4*(_att+1)); continue   # 타임아웃 등 — 재시도
+            raise
+    if _prov in ('nvidia','openrouter') and resp is not None and resp.status_code==429:
+        time.sleep(3); resp=_post_once()   # 분당 한도 — 3초 뒤 1회 재시도
         if resp.status_code==429: raise RuntimeError(f'{_prov.upper()} 분당 한도(429) — 잠시 후 재개')
     if _prov=='openrouter' and resp.status_code==402:   # OpenRouter는 크레딧 바닥을 402로 줌(OpenAI의 429/insufficient_quota와 다름)
         raise RuntimeError('OPENROUTER 잔액 소진(402) — openrouter.ai/settings/credits 충전 필요')
