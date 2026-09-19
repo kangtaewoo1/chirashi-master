@@ -8869,7 +8869,17 @@ def _publish_combo_to_site(s, kw, wname, rid, cfg, writer_name=''):
         # ★하이브리드 오분류 교정(2026-09-18): login_required=False로 알고 서버가 발행했는데 '로그인 필요' alert이면
         #   실제론 로그인 게시판(마킹 오류). login_required=True로 교정 → 서버 비회원필터에서 빠지고 노드(집IP)가 전담.
         #   서버 DC IP가 같은 사이트에 매번 헛시도해 fail_streak 쌓고 잠그던 것 방지.
-        if (not ok) and (not fresh.get('login_required')) and ('로그인' in str(msg) and ('필요' in str(msg) or '불가' in str(msg) or '권한' in str(msg))):
+        # ★오마킹 방지(2026-09-19 대표님 '왜 비회원사이트만?'): '글쓰기 폼(wr_subject) 없음 — 로그인 필요/비표준 스킨'은 병렬부하
+        #   렌더 타이밍의 일시 실패인데 '로그인'+'필요'에 걸려 청라다국적(9/18 21건)·차담(29건)·국제종합예술대전(14건) 등 22곳이
+        #   login_required=True → 계정 없어 서버(비회원필터)·노드(_node_ready) 양쪽 제외 → 발행 0. 진짜 로그인 alert 문구일 때만,
+        #   그리고 최근 24시간 내 발행성공이 없을 때만 재마킹.
+        _m=str(msg); _recent_ok=False
+        try:
+            _lp=str(fresh.get('last_post_at') or '')
+            _recent_ok=bool(_lp) and (datetime.now()-datetime.strptime(_lp[:19],'%Y-%m-%d %H:%M:%S')).total_seconds()<86400
+        except Exception: _recent_ok=False
+        _real_login=(('로그인이 필요' in _m or '권한 alert' in _m or '게시 권한 없음' in _m or '권한이 없' in _m) and 'wr_subject' not in _m)
+        if (not ok) and (not fresh.get('login_required')) and _real_login and not _recent_ok:
             try: set_site_flag(fresh.get('id'),login_required=True)
             except Exception: pass
             add_log(f"[하이브리드 교정] {fresh.get('name') or (fresh.get('site_url','') or '')[:20]} — 로그인 필요로 재마킹(노드 전담)")
@@ -9497,7 +9507,7 @@ def chk():
     #  /api/test/* = 발행 테스트 트리거(등록 사이트에 실제 글1건 발행해 검증).
     _p=request.path
     if _p=='/api/version': return  # 배포 SHA 확인 — 공개(민감정보 없음)
-    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/sites/unlock-cafe24','/api/sites/unlock-verified','/api/sites/purge-fake-cafe24','/api/sites/mark-login-required','/api/candidates/rescreen-cafe24','/api/candidates/revive-rejected','/api/candidates/unrevive-nonillegal','/api/regions/normalize-existing','/api/site-board','/api/history','/api/ops-dashboard','/api/imap/test','/api/openai/usage','/api/twocaptcha/usage','/api/config/clear-key','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/candidates/reject-unworkable','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/report-site','/api/unlocker/test','/api/sbr/test','/api/diag') or _p.startswith('/api/test/'):
+    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/sites/unlock-cafe24','/api/sites/unlock-verified','/api/sites/purge-fake-cafe24','/api/sites/mark-login-required','/api/sites/unmark-login-required','/api/candidates/rescreen-cafe24','/api/candidates/revive-rejected','/api/candidates/unrevive-nonillegal','/api/regions/normalize-existing','/api/site-board','/api/history','/api/ops-dashboard','/api/imap/test','/api/openai/usage','/api/twocaptcha/usage','/api/config/clear-key','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/candidates/reject-unworkable','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/report-site','/api/unlocker/test','/api/sbr/test','/api/diag') or _p.startswith('/api/test/'):
         tok=(request.args.get('token') or '').strip()
         cfgtok=(load_config().get('log_token') or '').strip()
         if cfgtok and tok==cfgtok:
@@ -9998,6 +10008,31 @@ def api_sites_unlock_cafe24():
         if unlocked: save_sites(sites)
     add_log(f'[Cafe24 잠금해제] {len(unlocked)}곳 발행 재개(로컬크롬) — {dom or "전체 SBR실패분"}','파이프라인')
     return jsonify({'ok':True,'unlocked':len(unlocked),'sites':unlocked})
+
+@app.route('/api/sites/unmark-login-required',methods=['POST'])
+def api_unmark_login_required():
+    """★로그인필요 오마킹 복구(2026-09-19 대표님 '왜 비회원사이트만?'): 하이브리드 교정이 일시 실패 문구('글쓰기 폼(wr_subject) 없음 —
+       로그인 필요/비표준 스킨')에도 login_required=True를 찍어, 계정 없는 사이트가 서버·노드 양쪽에서 빠져 발행 0이 됨(22곳).
+       조건: login_required=True·mb_id 없음·permission=True·발행검증(verified_post_url http)·(최근 days일 내 발행성공 or
+       last_fail_reason에 wr_subject) → login_required=False·fail_streak=0으로 비회원 발행 재개. body {dry_run?, days?(3)}."""
+    d=request.get_json(silent=True) or {}
+    dry=bool(d.get('dry_run')); days=max(1,int(d.get('days',3) or 3))
+    hit=[]
+    with POST_LOCK:
+        sites=load_sites()
+        for s in sites:
+            if not s.get('login_required') or str(s.get('mb_id') or '').strip() or not s.get('permission'): continue
+            if str(s.get('verified_post_url') or '')[:4]!='http': continue
+            _lp=str(s.get('last_post_at') or ''); _recent=False
+            try: _recent=bool(_lp) and (datetime.now()-datetime.strptime(_lp[:19],'%Y-%m-%d %H:%M:%S')).days<days
+            except Exception: _recent=False
+            if not (_recent or 'wr_subject' in str(s.get('last_fail_reason') or '')): continue
+            hit.append((s.get('name') or s.get('site_url') or '')[:34])
+            if not dry:
+                s['login_required']=False; s['fail_streak']=0
+        if hit and not dry: save_sites(sites)
+    add_log(f'[로그인필요 오마킹 복구] {"(미리보기)" if dry else ""} {len(hit)}곳 비회원 발행 재개','정리')
+    return jsonify({'ok':True,'dry_run':dry,'unmarked':len(hit),'sites':hit})
 
 @app.route('/api/sites/unlock-verified',methods=['POST'])
 def api_sites_unlock_verified():
