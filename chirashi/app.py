@@ -10503,11 +10503,15 @@ def api_cand_unrevive_nonillegal():
        다시 rejected로 되돌린다. body: {dry_run?}."""
     d=request.get_json(silent=True) or {}
     dry=bool(d.get('dry_run'))
+    # ★batch: revived_at 접두어(예 '2026-09-19 22:31')가 오면 그 회수 배치만 되돌림(2026-09-19: 빈 body 오전송으로
+    #   기본사유 1132개가 실제 회수된 사고를 정밀 롤백하기 위함). 없으면 종전대로 revived_at 있는 전부.
+    batch=str(d.get('batch') or '').strip()
     n=0; kept_ill=0
     with _cand_lock:
         cands=load_cands()
         for c in cands:
             if not c.get('revived_at'): continue
+            if batch and not str(c.get('revived_at')).startswith(batch): continue
             if c.get('illegal'):
                 kept_ill+=1; continue   # 도박판 부활 유지
             # 나머지(부실 후보)만 되돌림 — 아직 발행처로 등록 안 됐고 claim 안 된 것
