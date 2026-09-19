@@ -2799,8 +2799,20 @@ def solve_captcha_with_2captcha(d,site,cap_type,cfg,timeout=300):
             #  ★관리형 챌린지(veritas-hub 등)는 DOM에 data-sitekey가 없고 turnstile iframe src·JS에 숨어있다.
             #   여러 경로로 추출 시도(2026-09-11 대표님 '2captcha 왜 안됨' 진단강화).
             sitekey=None
+            # ★훅으로 캡처한 관리형 챌린지 파라미터 우선(2026-09-19): sitekey·action·cData·chlPageData·UA를 2captcha에 그대로 전달.
+            _tsp={}
+            try: _tsp=d.execute_script('return window.__ts_params||null') or {}
+            except Exception: _tsp={}
+            _ts_extra={}
+            if _tsp.get('sitekey'):
+                sitekey=str(_tsp['sitekey'])
+                for _k,_v in (('action',_tsp.get('action')),('data',_tsp.get('data')),('pagedata',_tsp.get('pagedata'))):
+                    if _v: _ts_extra[_k]=str(_v)
+            try: _ts_ua=str(_tsp.get('userAgent') or d.execute_script('return navigator.userAgent') or '')
+            except Exception: _ts_ua=''
+            if _ts_ua: _ts_extra['useragent']=_ts_ua
             mk=re.search(r'data-sitekey=["\']([A-Za-z0-9_\-]{15,})["\']',src)
-            if mk: sitekey=mk.group(1)
+            if mk and not sitekey: sitekey=mk.group(1)
             if not sitekey:  # turnstile iframe src의 sitekey/k 파라미터
                 mk=re.search(r'challenges\.cloudflare\.com/[^"\']*?/([0x][A-Za-z0-9_]{18,})',src) or re.search(r'[?&](?:sitekey|k)=([A-Za-z0-9_\-]{18,})',src)
                 if mk: sitekey=mk.group(1)
@@ -2820,9 +2832,10 @@ def solve_captcha_with_2captcha(d,site,cap_type,cfg,timeout=300):
             if not sitekey:
                 add_log(f'[Turnstile진단] sitekey 못찾음 url={page_url[:60]} src길이={len(src)}')
                 return False,'turnstile sitekey를 찾을 수 없음','',{}
-            add_log(f'[Turnstile진단] sitekey={sitekey[:24]} url={page_url[:50]} — 2captcha 요청')
+            add_log(f'[Turnstile진단] sitekey={sitekey[:24]} url={page_url[:50]} — 2captcha 요청'
+                    +(f" (훅 파라미터: {','.join(k for k in _ts_extra if k!='useragent')})" if any(k!='useragent' for k in _ts_extra) else ' (훅 파라미터 없음)'))
             try:
-                result=solver.turnstile(sitekey=sitekey,url=page_url)
+                result=solver.turnstile(sitekey=sitekey,url=page_url,**_ts_extra)
                 token=result.get('code') if isinstance(result,dict) else str(result)
             except Exception as e:
                 add_log(f'[Turnstile진단] 2captcha 해결실패: {str(e)[:100]}')
@@ -4125,6 +4138,74 @@ def _click_first(d, selectors):
         except Exception: continue
     return False
 
+# ★cafe24 도메인별 쿠키 재사용(2026-09-19 1,010곳 스캔: write.html의 91%가 veritas-hub Turnstile. 노드 실측 같은 사이트를
+#   2.5시간에 5회 재로그인·재풀이 = 세션/cf 쿠키 미재사용(get_driver 스레드별 임시 프로필). 챌린지 통과·로그인 성공 후 쿠키를
+#   data/c24_cookies.json에 도메인별 저장, 다음 방문 전 주입해 같은 IP·UA에서 챌린지·로그인을 건너뛴다. 12시간 지나면 폐기.)
+_C24_COOKIE_TTL=12*3600
+def _c24_cookie_path():
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)),'data','c24_cookies.json')
+def _c24_dom(base):
+    return re.sub(r'^https?://','',str(base or '')).split('/')[0].lower().replace('www.','')
+def _c24_cookies_save(d, base, tag=''):
+    try:
+        cks=[c for c in (d.get_cookies() or []) if c.get('name') and c.get('value')]
+        if not cks: return 0
+        p=_c24_cookie_path(); allc=load_json(p,{}) or {}
+        allc[_c24_dom(base)]={'ts':time.time(),'cookies':cks}
+        save_json(p,allc)
+        add_log(f"[Cafe24쿠키] 저장 {len(cks)}개 — {_c24_dom(base)} {tag}")
+        return len(cks)
+    except Exception as _e:
+        add_log(f"[Cafe24쿠키] 저장 실패 {str(_e)[:40]}"); return 0
+def _c24_cookies_load(d, base):
+    """저장 쿠키가 있고 TTL 내면 홈을 한 번 열고 주입. 주입 수 반환(0=없음)."""
+    try:
+        allc=load_json(_c24_cookie_path(),{}) or {}
+        ent=allc.get(_c24_dom(base))
+        if not ent or time.time()-float(ent.get('ts',0) or 0)>_C24_COOKIE_TTL: return 0
+        try: d.set_page_load_timeout(15)
+        except Exception: pass
+        try: d.get(base+'/')
+        except Exception: pass
+        n=0
+        for c in ent.get('cookies') or []:
+            ck={k:c[k] for k in ('name','value','path','domain','secure','httpOnly','expiry') if k in c and c[k] is not None}
+            try: d.add_cookie(ck); n+=1
+            except Exception:
+                try: ck.pop('domain',None); d.add_cookie(ck); n+=1
+                except Exception: pass
+        add_log(f"[Cafe24쿠키] 주입 {n}개 — {_c24_dom(base)}")
+        return n
+    except Exception: return 0
+def _c24_cookies_drop(base):
+    try:
+        p=_c24_cookie_path(); allc=load_json(p,{}) or {}
+        if allc.pop(_c24_dom(base),None) is not None: save_json(p,allc)
+    except Exception: pass
+# ★Turnstile 관리형 챌린지 파라미터 캡처(2captcha 권장): 페이지 로드 전에 turnstile.render를 가로채 sitekey·action·cData·
+#   chlPageData·callback을 window.__ts_params/__ts_cb에 보관. solve_captcha_with_2captcha가 이를 action/data/pagedata로 전달하면
+#   토큰 유효율↑(노드 실측 토큰 수령 후 실제 통과 70% → 개선 대상). 콜백은 기존 주입 로직의 'tsCallback' 후보로 호출됨.
+_TS_HOOK_JS=r"""
+(function(){ if(window.__ts_hooked) return; window.__ts_hooked=true;
+  var i=setInterval(function(){
+    try{ if(window.turnstile && typeof window.turnstile.render==='function' && !window.__ts_wrapped){
+      var orig=window.turnstile.render; window.__ts_wrapped=true;
+      window.turnstile.render=function(a,b){
+        try{ b=b||{}; window.__ts_params={sitekey:b.sitekey,pageurl:location.href,data:b.cData,pagedata:b.chlPageData,action:b.action,userAgent:navigator.userAgent};
+             window.__ts_cb=b.callback; window.tsCallback=function(t){ try{ if(typeof window.__ts_cb==='function') window.__ts_cb(t);}catch(e){} }; }catch(e){}
+        try{ return orig.apply(this,arguments);}catch(e){ return 'ts-hooked'; }
+      };
+      clearInterval(i);
+    } }catch(e){}
+  },50);
+})();
+"""
+def _c24_install_ts_hook(d):
+    if getattr(d,'_ts_hooked',False): return
+    try:
+        d.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument',{'source':_TS_HOOK_JS}); d._ts_hooked=True
+    except Exception: pass
+
 def cafe24_post(site, title, content_html, skip_login=False):
     """Cafe24 쇼핑몰 게시판 글쓰기. (게시판 구조가 사이트마다 달라 셀렉터 다중 폴백)"""
     from selenium.webdriver.common.by import By
@@ -4137,6 +4218,10 @@ def cafe24_post(site, title, content_html, skip_login=False):
     _use_sbr=bool(load_config().get('sbr_enabled'))
     d=get_driver(remote=_use_sbr)
     if _use_sbr: add_log(f'[Cafe24] Scraping Browser(원격 크롬) 사용 — {(site.get("name") or base)[:24]}')
+    if not _use_sbr:
+        _c24_install_ts_hook(d)
+        if _c24_cookies_load(d, base) and mid and not skip_login:
+            skip_login=True   # 저장 세션 재사용 시도 — 아래 skip_login 블록이 myshop으로 생존 확인, 죽었으면 재로그인
     # ★원격 크롬(Scraping Browser)은 CF를 백그라운드로 푸느라 d.get()이 page_load 완료를 못 받아
     #   renderer timeout(대표님 제보). → 원격일 때 page_load_timeout 짧게(45s) + get 예외무시+window.stop.
     #   CF는 Bright Data가 처리하므로 로드 완료 안 기다리고 폼을 폴링하면 됨.
@@ -4326,7 +4411,9 @@ def cafe24_post(site, title, content_html, skip_login=False):
                     +('' if _logged_in else ' (아이디/비번 확인 필요)'))
             if not _logged_in:
                 # 로그인 실패면 write 진입은 무의미(홈 리다이렉트) — 즉시 명확한 에러 반환.
+                _c24_cookies_drop(base)   # 죽은 세션 쿠키 폐기(다음엔 정상 로그인 경로)
                 return False,'Cafe24 로그인 실패 — 저장된 아이디/비밀번호 확인 필요(재입력 후 재시도)'
+            if not _use_sbr: _c24_cookies_save(d, base, '(로그인)')
         except Exception: pass
 
     # 글쓰기 페이지 후보 (bo_table 이 숫자면 board_no, 문자면 board 경로)
@@ -4602,6 +4689,7 @@ def cafe24_post(site, title, content_html, skip_login=False):
             return False,'Cafe24 글쓰기에 로그인 필요 — 로그인 세션 진입 실패(계정/세션 확인)'
         return False,'Cafe24 글쓰기 페이지 못찾음 — 게시판번호(board_no)/스킨 셀렉터 확인'
     add_log(f"[Cafe24글쓰기폼] 진입 성공 — {(site.get('name') or base)[:24]}")
+    if not _use_sbr: _c24_cookies_save(d, base, '(폼진입)')
     # ★대표님 지시(2026-09-08): 진짜 글쓰기 진입 성공한 경로를 사이트에 저장 → 다음부터 최우선 재사용
     #   (매번 추측해 홈으로 튕기던 문제 해결). 현재 write 폼 URL을 write_entry_url로 저장.
     try:
@@ -8480,8 +8568,12 @@ def auto_pipeline_once(limit=5):
     # ★이메일 인증·본인인증(휴대폰) 필요 후보는 자동가입 시도 안 하고 '수동가입 대기'로 분류
     #   (대표님 지시 2026-09-08: 자동불가라 크롬·2captcha 낭비. 대표님이 직접 계정 넣으면 발행가능).
     #   검수(screen_candidate)가 미리 판정한 signup_email_verify·signup_phone_cert 사용.
+    # ★IMAP 있으면 이메일인증은 자동 처리 가능(2026-09-19 대표님 '준비중 쌓이기만 함' 실측): 이 게이트(9/8)가 9/12 IMAP 연동 이후에도
+    #   그대로 남아 cafe24 이메일인증 후보 519개를 시도 없이 manual_signup에 적체시킴(claim은 L'이메일 인증 claim 허용'과 모순).
+    #   → IMAP(imap_email+imap_password) 설정돼 있으면 이메일인증은 통과시켜 자동가입(tempmail/IMAP 대기)까지 태움. 휴대폰 본인인증은 항상 보류.
+    _cfgp=load_config(); _imap_ok=bool((_cfgp.get('imap_email') or '').strip() and (_cfgp.get('imap_password') or '').strip())
     for _c in cands:
-        if _c.get('status') in ('ready','approved') and (_c.get('signup_email_verify') or _c.get('signup_phone_cert')):
+        if _c.get('status') in ('ready','approved') and (_c.get('signup_phone_cert') or (_c.get('signup_email_verify') and not _imap_ok)):
             _why='본인인증(휴대폰) 필요' if _c.get('signup_phone_cert') else '이메일 인증 필요'
             try:
                 _cand_set(_c['id'],status='manual_signup',reject_reason=f'{_why} — 자동가입 불가, 대표님 수동가입 대기')
@@ -10468,10 +10560,13 @@ def api_cand_revive_rejected():
         if any(n in s for n in never): return False
         return any(k in s for k in reasons)
     matched=0; by_reason={}; revived_doms=[]
+    # ★statuses(2026-09-19): 기본 rejected만. ['manual_signup']을 주면 '이메일 인증 필요 — 수동가입 대기'로 쌓인 더미도
+    #   같은 사유 매칭으로 ready 복귀(IMAP 자동처리 가능해진 뒤 claim 게이트가 시도 없이 보낸 것 회수용).
+    _sts=set(d.get('statuses') or ['rejected'])
     with _cand_lock:
         cands=load_cands()
         for c in cands:
-            if c.get('status')!='rejected': continue
+            if c.get('status') not in _sts: continue
             rr=c.get('reject_reason') or c.get('note') or ''
             # illegal 플래그로 탈락한 것도 허용 시 회수(사유 텍스트가 없어도)
             _by_flag=(_allow_ill and c.get('illegal'))
