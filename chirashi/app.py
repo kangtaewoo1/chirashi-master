@@ -4187,17 +4187,29 @@ def _c24_cookies_drop(base):
 #   토큰 유효율↑(노드 실측 토큰 수령 후 실제 통과 70% → 개선 대상). 콜백은 기존 주입 로직의 'tsCallback' 후보로 호출됨.
 _TS_HOOK_JS=r"""
 (function(){ if(window.__ts_hooked) return; window.__ts_hooked=true;
-  var i=setInterval(function(){
-    try{ if(window.turnstile && typeof window.turnstile.render==='function' && !window.__ts_wrapped){
-      var orig=window.turnstile.render; window.__ts_wrapped=true;
-      window.turnstile.render=function(a,b){
+  // ★setInterval 방식은 api.js가 window.turnstile을 세팅한 직후 같은 태스크에서 render를 호출하면 놓친다(실측 '훅 파라미터 없음').
+  //   → window.turnstile 자체를 setter로 가로채 세팅되는 순간 render를 감싼다(2captcha 권장 방식). 기존 값이 있으면 즉시 감쌈.
+  function wrap(t){
+    try{
+      if(!t || t.__ts_wrapped || typeof t.render!=='function') return t;
+      var orig=t.render;
+      t.render=function(a,b){
         try{ b=b||{}; window.__ts_params={sitekey:b.sitekey,pageurl:location.href,data:b.cData,pagedata:b.chlPageData,action:b.action,userAgent:navigator.userAgent};
-             window.__ts_cb=b.callback; window.tsCallback=function(t){ try{ if(typeof window.__ts_cb==='function') window.__ts_cb(t);}catch(e){} }; }catch(e){}
+             window.__ts_cb=b.callback; window.tsCallback=function(tok){ try{ if(typeof window.__ts_cb==='function') window.__ts_cb(tok);}catch(e){} }; }catch(e){}
         try{ return orig.apply(this,arguments);}catch(e){ return 'ts-hooked'; }
       };
-      clearInterval(i);
-    } }catch(e){}
-  },50);
+      t.__ts_wrapped=true;
+    }catch(e){}
+    return t;
+  }
+  var _cur=window.turnstile ? wrap(window.turnstile) : undefined;
+  try{
+    Object.defineProperty(window,'turnstile',{configurable:true,enumerable:true,
+      get:function(){ return _cur; },
+      set:function(v){ _cur=wrap(v); }});
+  }catch(e){
+    var i=setInterval(function(){ try{ if(window.turnstile){ wrap(window.turnstile); clearInterval(i);} }catch(e2){} },20);
+  }
 })();
 """
 def _c24_install_ts_hook(d):
@@ -4872,9 +4884,11 @@ def cafe24_post(site, title, content_html, skip_login=False):
     #   덤프: 보이는 input/select/textarea의 name:type(*=required)(=∅ 비어있음) — 사이트별로 어떤 필수칸이 비는지 대량 실측용.
     try:
         _ff=d.execute_script(r"""
-            var out={checked:[],fields:[]};
+            var out={checked:[],fields:[]}; var email=arguments[0]||'';
+            function labelOf(el){ var lab=''; try{ if(el.id){var l=document.querySelector("label[for='"+el.id+"']"); if(l) lab=l.textContent||'';} }catch(e){}
+              if(!lab){ var p=el.closest('label'); if(p) lab=p.textContent||''; } return lab; }
             document.querySelectorAll("input[type='checkbox']").forEach(function(cb){
-              var lab=''; try{ if(cb.id){var l=document.querySelector("label[for='"+cb.id+"']"); if(l) lab=l.textContent||'';} }catch(e){}
+              var lab=labelOf(cb);
               var near=(cb.parentElement?(cb.parentElement.textContent||''):'').slice(0,80);
               var blob=((cb.name||'')+' '+(cb.id||'')+' '+(cb.value||'')+' '+lab+' '+near).toLowerCase();
               if(/agree|privacy|consent|개인정보|동의|약관/.test(blob) && !/secret|비밀|html|수신|마케팅|광고|알림|공지/.test(blob)){
@@ -4882,6 +4896,33 @@ def cafe24_post(site, title, content_html, skip_login=False):
                 out.checked.push(((cb.name||cb.id||lab)+'').trim().slice(0,20));
               }
             });
+            // ★동의 라디오(2026-09-19 hbbiomall 실측: privacy_agreement_ 라디오 2개 '동의함/동의안함'): 그룹명이 동의 계열이면
+            //   value T/Y/1/agree 또는 라벨에 '동의'(단 '안함/하지/거부/비동의' 제외)인 쪽을 선택.
+            var groups={};
+            document.querySelectorAll("input[type='radio']").forEach(function(r){ var n=r.name||r.id||''; (groups[n]=groups[n]||[]).push(r); });
+            Object.keys(groups).forEach(function(n){
+              var rs=groups[n]; var blob=(n+' '+rs.map(function(r){return labelOf(r)+' '+(r.parentElement?r.parentElement.textContent:'');}).join(' ')).toLowerCase();
+              if(!/agree|privacy|consent|개인정보|동의|약관/.test(blob)) return;
+              if(/secret|비밀/.test(n.toLowerCase())) return;
+              var pick=null;
+              rs.forEach(function(r){ var v=(r.value||'').toLowerCase(); var lb=(labelOf(r)+' '+(r.parentElement?r.parentElement.textContent:'')).replace(/\s+/g,'');
+                var yes=/^(t|y|1|true|yes|agree|ok)$/.test(v) || (/동의/.test(lb) && !/안함|하지|거부|비동의|않/.test(lb));
+                if(yes && !pick) pick=r; });
+              if(pick && !pick.checked){ pick.checked=true; pick.dispatchEvent(new Event('click',{bubbles:true})); pick.dispatchEvent(new Event('change',{bubbles:true})); }
+              if(pick) out.checked.push((n+'=radio:'+(pick.value||'')).slice(0,28));
+            });
+            // ★cafe24 분리형 이메일(email1@email2 + email3 select) 비어 있으면 채움
+            try{
+              var e1=document.querySelector("input[name='email1']"), e2=document.querySelector("input[name='email2']"), e3=document.querySelector("select[name='email3']");
+              if(email && e1 && e2 && !(e1.value||'').trim()){ var parts=email.split('@'); e1.value=parts[0]||''; e2.value=parts[1]||'';
+                [e1,e2].forEach(function(el){ el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true})); });
+                if(e3){ var dom=(parts[1]||'').toLowerCase(); var hit=false;
+                  for(var i=0;i<e3.options.length;i++){ if((e3.options[i].value||'').toLowerCase()===dom){ e3.selectedIndex=i; hit=true; break; } }
+                  if(!hit){ for(var j=0;j<e3.options.length;j++){ var ov=(e3.options[j].value||'').toLowerCase(); var ot=(e3.options[j].textContent||'');
+                    if(ov==='' || ov==='self' || ov==='direct' || /직접/.test(ot)){ e3.selectedIndex=j; break; } } }
+                  e3.dispatchEvent(new Event('change',{bubbles:true})); }
+                out.checked.push('email='+email.slice(0,24)); }
+            }catch(e){}
             document.querySelectorAll("input,select,textarea").forEach(function(el){
               var t=(el.type||el.tagName||'').toLowerCase();
               if(['hidden','submit','button','file','image','reset'].indexOf(t)>=0) return;
@@ -4890,7 +4931,7 @@ def cafe24_post(site, title, content_html, skip_login=False):
               out.fields.push(((el.name||el.id||'?')+'').slice(0,18)+':'+t+(el.required?'*':'')+(v?'':'=∅'));
             });
             return out;
-        """) or {}
+        """, _brand_email(load_config(), site)) or {}
         add_log(f"[Cafe24폼필드] 동의체크={_ff.get('checked')} 필드={(_ff.get('fields') or [])[:16]}")
     except Exception as _e:
         add_log(f"[Cafe24폼필드] 덤프실패 {str(_e)[:50]}")

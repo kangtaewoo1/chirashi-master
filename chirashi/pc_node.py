@@ -232,7 +232,10 @@ def _process_site(s, cfg):
     site = {"id": sid or "pcsite", "site_url": base, "platform": _plat,
             "bo_table": s.get("bo_table") or ("1" if _plat=="cafe24" else "free"), "name": name,
             "mb_id": s.get("mb_id", ""), "mb_pass": s.get("mb_pass", ""),
-            "write_entry_url": s.get("write_entry_url", ""), "article_board_name": s.get("article_board_name", "")}
+            "write_entry_url": s.get("write_entry_url", ""), "article_board_name": s.get("article_board_name", ""),
+            # ★verified_post_url 전달(2026-09-19 kuspoon 실측): 서버 claim 페이로드엔 넣었는데 여기서 site dict로 옮길 때 빠져
+            #   엔진의 board_no 짝맞춤(_extract_board_pairs)이 노드에선 계속 빈 값 → /board/free/write.html부터 헛순회.
+            "verified_post_url": s.get("verified_post_url", "")}
     res = {"site_id": sid, "ok": False, "result_url": "", "msg": ""}
     try:
         # ★작업실 이력 유지(2026-09-15 대표님 '노드 발행+작업실 이력 유지'): 서버가 claim 때 배정한
