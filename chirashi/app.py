@@ -10182,7 +10182,9 @@ def api_unmark_login_required():
             if not (_recent or 'wr_subject' in str(s.get('last_fail_reason') or '')): continue
             hit.append((s.get('name') or s.get('site_url') or '')[:34])
             if not dry:
-                s['login_required']=False; s['fail_streak']=0
+                # ★가입벽 카운터도 리셋(2026-09-20 재발 실측): signup_fail_count가 과거 누적 ≥2면 복구 직후 실패 1회에
+                #   report-site 가입벽 규칙이 다시 login_required=True(signup_exhausted)로 되돌려 차담·바디렉스·인브랜드가 재오마킹됐음.
+                s['login_required']=False; s['fail_streak']=0; s['signup_fail_count']=0; s['signup_exhausted']=False
         if hit and not dry: save_sites(sites)
     add_log(f'[로그인필요 오마킹 복구] {"(미리보기)" if dry else ""} {len(hit)}곳 비회원 발행 재개','정리')
     return jsonify({'ok':True,'dry_run':dry,'unmarked':len(hit),'sites':hit})
@@ -10533,7 +10535,14 @@ def api_pipeline_report_site():
                 _msg=str(r.get('msg') or '')
                 _signup_wall = bool(r.get('signup_failed')) or ('자동가입' in _msg and '타임아웃' in _msg) or \
                     ('글쓰기 페이지 못찾음' in _msg) or ('Turnstile' in _msg)
-                if _site and _signup_wall and not str(_site.get('mb_id') or '').strip():
+                # ★최근 24h 비회원 발행성공이 있는 사이트는 가입벽으로 회원제 마킹하지 않음(2026-09-20 재발 실측): '글쓰기 페이지 못찾음'·
+                #   자동가입 타임아웃은 일시 실패인데 누적 카운터 ≥3으로 login_required=True가 되면 계정 없는 비회원 사이트가 영영 제외됨.
+                _recent_pub=False
+                try:
+                    _lp=str((_site or {}).get('last_post_at') or '')
+                    _recent_pub=bool(_lp) and (datetime.now()-datetime.strptime(_lp[:19],'%Y-%m-%d %H:%M:%S')).total_seconds()<86400
+                except Exception: _recent_pub=False
+                if _site and _signup_wall and not str(_site.get('mb_id') or '').strip() and not _recent_pub:
                     _sfc=int(_site.get('signup_fail_count',0) or 0)+1
                     if _sfc>=3:
                         set_site_flag(sid,signup_fail_count=_sfc,signup_exhausted=True,login_required=True)
