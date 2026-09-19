@@ -5823,6 +5823,11 @@ def do_post(site, title, content_html, skip_login=False):
     if ok: return True,msg
     # 3) 구조적 실패(일시적·로그인·차단 제외)면 자동 학습(디스커버리) 발행 후 레시피 저장
     reason,_,_=classify_fail(msg)
+    # ★학습시도 생략(2026-09-20 대표님 '워커 부족?' 실측): 240초 초과 발행 127건 중 실패 72건의 67건이 '등록 확인 불가 → 학습시도 →
+    #   또 등록 확인 불가'. 이미 실게시 검증된 사이트(verified_post_url http)의 '등록 확인 불가'는 선택자 문제가 아니라 승인제/목록반영/
+    #   금지어라 학습(전체 발행 재실행 2~4분)이 해결 못 함 → 생략해 워커 꼬리를 절반으로. 미검증 사이트는 종전대로 학습 시도.
+    if '등록 확인 불가' in str(msg) and str(site.get('verified_post_url') or '')[:4]=='http':
+        return False,msg
     if reason in ('board','other') or rec is not None:
         try:
             ok2,msg2,newrec=discover_and_post(site,title,content_html,skip_login=skip_login)
@@ -9008,7 +9013,7 @@ def _publish_combo_to_site(s, kw, wname, rid, cfg, writer_name=''):
             'bo_table':fresh.get('bo_table',''),'title':title,'region':pub_kw.get('지역',''),'service':pub_kw.get('서비스',''),
             'brand':pub_kw.get('브랜드',''),
             'workroom_id':rid,'workroom_name':wname,'status':'posting','result_url':'','message':'','attempts':0})
-        ok=False; msg=''
+        ok=False; msg=''; _t0=time.time()
         for attempt in range(1,4):
             try:
                 ok,msg=do_post(fresh,title,html)
@@ -9016,6 +9021,11 @@ def _publish_combo_to_site(s, kw, wname, rid, cfg, writer_name=''):
                 reset_driver()
             except Exception as e:
                 msg=str(e); reset_driver()
+            # ★꼬리 자르기(2026-09-20 대표님 '워커 부족?' 실측 — 워커는 12슬롯 중 평균 5.2개만 가동, 병목은 p90 478초 꼬리):
+            #   ①'등록 확인 불가'는 제출 자체는 됐을 수 있어 재시도하면 같은 글이 2~3번 올라갈 위험 + 결과도 같음 → 1회로 끝.
+            #   ②한 글에 300초 넘게 쓰면 추가 시도 안 함(느린 사이트가 워커를 8분씩 잡던 것 차단).
+            if '등록 확인 불가' in str(msg): break
+            if time.time()-_t0>300: break
             if attempt<3: time.sleep(min(5*attempt,15))
         reason=reason_ko=''
         if not ok: reason,reason_ko,_=classify_fail(msg)
