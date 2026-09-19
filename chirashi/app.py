@@ -4299,8 +4299,11 @@ def cafe24_post(site, title, content_html, skip_login=False):
         cfg=load_config()
         # ★render 대기(2026-09-19 훅진단 실측: hooked=True인데 turnstile=undefined·iframes=0 → api.js(defer)가 아직 실행 전에 2captcha를
         #   요청해 파라미터가 없었음). setter 훅이 render 호출 순간 __ts_params를 채우므로, 최대 6초까지 그 시점을 기다린 뒤 푼다.
+        # ★결론(2026-09-19 5·6차 실측): veritas-hub 챌린지 페이지는 6초를 기다려도 turnstile=undefined·iframes=0 — 자동화 크롬에서
+        #   api.js가 초기화되지 않아 render가 안 불림(파라미터 캡처 불가). 대신 sitekey 정규식+javascriptCallback 토큰 주입이 통과(6차 2/2).
+        #   → 훅은 위젯을 정상 렌더하는 일반 페이지용으로만 남기고 대기는 2초로 축소(챌린지당 낭비 최소화).
         try:
-            for _w in range(12):
+            for _w in range(4):
                 if d.execute_script('return !!(window.__ts_params && window.__ts_params.sitekey)'): break
                 time.sleep(0.5)
         except Exception: pass
