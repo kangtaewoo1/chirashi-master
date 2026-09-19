@@ -4297,6 +4297,13 @@ def cafe24_post(site, title, content_html, skip_login=False):
             if not _found:
                 return True
         cfg=load_config()
+        # ★render 대기(2026-09-19 훅진단 실측: hooked=True인데 turnstile=undefined·iframes=0 → api.js(defer)가 아직 실행 전에 2captcha를
+        #   요청해 파라미터가 없었음). setter 훅이 render 호출 순간 __ts_params를 채우므로, 최대 6초까지 그 시점을 기다린 뒤 푼다.
+        try:
+            for _w in range(12):
+                if d.execute_script('return !!(window.__ts_params && window.__ts_params.sitekey)'): break
+                time.sleep(0.5)
+        except Exception: pass
         # ★훅 진단(2026-09-19: setter 훅으로도 '훅 파라미터 없음' 지속): 이 문서에서 CDP 스크립트가 돌았는지·turnstile 객체·래핑·파라미터 상태를 1줄로.
         try:
             _hd=d.execute_script("try{return [!!window.__ts_hooked, typeof window.turnstile, !!(window.turnstile&&window.turnstile.__ts_wrapped), !!window.__ts_params, document.querySelectorAll('iframe').length, (document.querySelector('script[src*=\"challenges.cloudflare\"]')||{}).src||''];}catch(e){return ['err',String(e)];}")
