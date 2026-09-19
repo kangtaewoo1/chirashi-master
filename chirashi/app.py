@@ -6020,6 +6020,13 @@ def under_daily_limit(site,cfg):
 def under_min_interval(site):
     """마지막 성공 발행 후 사이트별 최소 간격 준수 여부와 남은 초 반환."""
     site=_fresh_site(site); mins=site_min_interval(site)
+    # ★실패 쿨다운(cooldown_until) 우선 — '등록 확인 불가' 직후 20분은 성공 이력과 무관하게 건너뜀(finalize_post에서 설정).
+    try:
+        _cu=str(site.get('cooldown_until') or '')
+        if _cu:
+            _rem=int((datetime.strptime(_cu[:19],'%Y-%m-%d %H:%M:%S')-datetime.now()).total_seconds())
+            if _rem>0: return False,_rem
+    except Exception: pass
     if mins<=0 or not site.get('last_post_at'): return True,0
     try:
         last=datetime.strptime(site['last_post_at'],'%Y-%m-%d %H:%M:%S')
@@ -6047,6 +6054,11 @@ def finalize_post(site,ok,fail_reason=''):
                 else:
                     s['fail_streak']=int(s.get('fail_streak',0) or 0)+1
                     if fail_reason: s['last_fail_reason']=str(fail_reason)[:120]
+                    # ★'등록 확인 불가' 후 사이트 20분 쿨다운(2026-09-20 꼬리자르기 실측): 재시도를 1회로 줄이자 같은 불안정 사이트를
+                    #   5분 간격(최소 30초)으로 다시 두드려 실패 기록만 늘고(시간당 14→35), 실제론 게시됐을 수 있어 중복게시 위험.
+                    #   under_min_interval이 cooldown_until을 존중해 서버 발행·노드 claim 모두 그 사이트를 20분 건너뜀.
+                    if '등록 확인 불가' in str(fail_reason):
+                        s['cooldown_until']=(datetime.now()+timedelta(minutes=20)).strftime('%Y-%m-%d %H:%M:%S')
                     # (죽은 사이트 잠금은 실시간 오판을 피해 /api/sites/mark-login-required가 last_post_at 기준으로
                     #  주기 처리한다. 여기선 fail_streak만 올리고 reconcile_sites가 잠금 판정.)
                 break
