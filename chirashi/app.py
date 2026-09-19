@@ -4297,6 +4297,12 @@ def cafe24_post(site, title, content_html, skip_login=False):
             if not _found:
                 return True
         cfg=load_config()
+        # ★훅 진단(2026-09-19: setter 훅으로도 '훅 파라미터 없음' 지속): 이 문서에서 CDP 스크립트가 돌았는지·turnstile 객체·래핑·파라미터 상태를 1줄로.
+        try:
+            _hd=d.execute_script("try{return [!!window.__ts_hooked, typeof window.turnstile, !!(window.turnstile&&window.turnstile.__ts_wrapped), !!window.__ts_params, document.querySelectorAll('iframe').length, (document.querySelector('script[src*=\"challenges.cloudflare\"]')||{}).src||''];}catch(e){return ['err',String(e)];}")
+            add_log(f"[Turnstile훅진단] hooked={_hd[0]} turnstile={_hd[1]} wrapped={_hd[2]} params={_hd[3]} iframes={_hd[4]} api={str(_hd[5])[-60:]}")
+        except Exception as _e:
+            add_log(f"[Turnstile훅진단] 실패 {str(_e)[:40]}")
         ok,msg,tok,info=solve_captcha_with_2captcha(d,site,'turnstile',cfg)
         add_log(f'[Turnstile] {msg}')
         if not ok: return False
@@ -5047,6 +5053,10 @@ def cafe24_post(site, title, content_html, skip_login=False):
             #   밀려 '본문 미입력'으로 오분류됐음. 제출 직후 alert에 '필수'가 있으면 그 필드 미입력이 진짜 원인.
             if _al and '필수' in _al:
                 _why=f'필수항목 미입력 반려 — alert:{_al.strip()[:40]}'
+            # ★IP 쓰기제한(2026-09-19 kuspoon 실측 alert '회원님의 IP주소는 …쓰기 제한이 되어 있습니다'): 쇼핑몰 관리자가 우리 IP를 차단한 것.
+            #   기존엔 '게시판 비활성'으로 오분류돼 6h마다 재시도. 정책 벽이라 영구 제외(다른 IP 노드가 생기면 그쪽에서만 가능).
+            elif any(k in _blob2 for k in ['쓰기 제한','쓰기제한','IP주소','IP 주소','아이피']):
+                _why='IP 쓰기제한(관리자 IP 차단) — 이 IP로는 불가(영구 제외)'
             elif any(k in _blob2 for k in ['일시적으로 중단','일시적으로 차단','스팸','금지어','불량어','등록이 제한','작성이 제한']):
                 _why='스팸/금지어 차단 — 이 게시판이 우리 콘텐츠 거부(영구 제외)'
             elif any(k in _blob2 for k in ['본문','내용을 입력','내용이 없']):
