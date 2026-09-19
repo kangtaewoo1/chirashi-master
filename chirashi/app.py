@@ -4778,6 +4778,34 @@ def cafe24_post(site, title, content_html, skip_login=False):
     if '<img' not in (content_html or '').lower(): attach_saved_images(d,1)
     _,missing=fill_required_post_fields(d,site)
     if missing: return False,'필수항목 설정 필요: '+', '.join(missing[:6])
+    # ★동의 체크박스 + 제출 직전 필드 덤프(2026-09-19 hbbiomall 실측: 작성자 채운 뒤 다음 alert가
+    #   '개인정보 수집 및 이용에 동의해 주시기 바랍니다' — cafe24 글쓰기 폼의 동의 체크박스는 required 속성이 없어
+    #   fill_required_post_fields(체크박스 skip)가 못 채움). 개인정보/약관/동의 계열만 체크(비밀글·HTML·수신동의 제외).
+    #   덤프: 보이는 input/select/textarea의 name:type(*=required)(=∅ 비어있음) — 사이트별로 어떤 필수칸이 비는지 대량 실측용.
+    try:
+        _ff=d.execute_script(r"""
+            var out={checked:[],fields:[]};
+            document.querySelectorAll("input[type='checkbox']").forEach(function(cb){
+              var lab=''; try{ if(cb.id){var l=document.querySelector("label[for='"+cb.id+"']"); if(l) lab=l.textContent||'';} }catch(e){}
+              var near=(cb.parentElement?(cb.parentElement.textContent||''):'').slice(0,80);
+              var blob=((cb.name||'')+' '+(cb.id||'')+' '+(cb.value||'')+' '+lab+' '+near).toLowerCase();
+              if(/agree|privacy|consent|개인정보|동의|약관/.test(blob) && !/secret|비밀|html|수신|마케팅|광고|알림|공지/.test(blob)){
+                if(!cb.checked){ cb.checked=true; cb.dispatchEvent(new Event('click',{bubbles:true})); cb.dispatchEvent(new Event('change',{bubbles:true})); }
+                out.checked.push(((cb.name||cb.id||lab)+'').trim().slice(0,20));
+              }
+            });
+            document.querySelectorAll("input,select,textarea").forEach(function(el){
+              var t=(el.type||el.tagName||'').toLowerCase();
+              if(['hidden','submit','button','file','image','reset'].indexOf(t)>=0) return;
+              if(el.offsetParent===null) return;
+              var v=(el.value||'').trim();
+              out.fields.push(((el.name||el.id||'?')+'').slice(0,18)+':'+t+(el.required?'*':'')+(v?'':'=∅'));
+            });
+            return out;
+        """) or {}
+        add_log(f"[Cafe24폼필드] 동의체크={_ff.get('checked')} 필드={(_ff.get('fields') or [])[:16]}")
+    except Exception as _e:
+        add_log(f"[Cafe24폼필드] 덤프실패 {str(_e)[:50]}")
 
     # 등록 — Cafe24 등록 버튼(a.btnSubmit 등)·글쓰기 폼 제출. board.write.php/exec 액션 폼 우선.
     _sub=_click_first(d,["a.btnSubmit","#btnSubmit","button.btnSubmit","a.btnEm.btnStrong",
@@ -10242,6 +10270,10 @@ def api_pipeline_claim_sites():
                 'bo_table':s.get('bo_table') or '1','name':s.get('name') or s.get('site_url'),
                 'mb_id':s.get('mb_id',''),'mb_pass':s.get('mb_pass',''),   # ★비번 포함(PC 로컬 로그인용)
                 'write_entry_url':s.get('write_entry_url',''),'article_board_name':s.get('article_board_name',''),
+                # ★verified_post_url 전달(2026-09-19 kuspoon 실측): 노드는 이 페이로드만 보므로 서버에 있는 발행성공URL이
+                #   없으면 cafe24_post의 board_no 추출(_extract_board_no/_extract_board_pairs)이 노드에선 항상 빈 값 →
+                #   9/15 수정이 노드에서 한 번도 작동 안 했음(kuspoon이 계속 /board/free/write.html부터 순회).
+                'verified_post_url':s.get('verified_post_url',''),
                 'signup_exhausted':bool(s.get('signup_exhausted'))}   # 노드가 자동가입 스킵 판단(가입 반복실패 사이트)
             # 작업실 라운드로빈 배정 + 그 작업실의 조합(키워드) 하나
             if _rooms:
@@ -10439,7 +10471,9 @@ def api_cand_reject_unworkable():
     dry=bool(d.get('dry_run'))
     def _reason(c):
         if c.get('signup_phone_cert'): return '휴대폰본인인증(자동불가)'
-        if c.get('signup_email_verify'): return '이메일인증(자동불가)'
+        # ★이메일인증은 자동불가가 아님(2026-09-19 자기정정): 지메일 IMAP(/api/imap/test connected)·임시메일(mail.tm)로
+        #   자동 처리되고 claim도 2026-09-12부터 허용. 첫 버전이 이 플래그만으로 494개(cafe24 492·시도0회 418)를
+        #   탈락시켰음 → 규칙 제거. 이메일인증 사이트도 '가입 반복실패' 규칙(아래)로만 탈락.
         if c.get('login_required') and int(c.get('signup_retry') or 0)>=2: return '가입 반복실패(로그인필수)'
         if int(c.get('pipeline_attempts') or 0)>=5: return '발행 5회+ 실패'
         if c.get('reachable') is False or c.get('precheck_reachable') is False: return '사이트 접속불가'
