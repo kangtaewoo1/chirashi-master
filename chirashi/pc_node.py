@@ -63,7 +63,9 @@ def log(msg):
         print(line.encode("ascii", "replace").decode("ascii"), flush=True)
 
 
-def _cleanup_stale_chrome_profiles(older_than_sec=3600):
+def _cleanup_stale_chrome_profiles(older_than_sec=1200):
+    # ★1h→20분(2026-09-20 실측): 워커 6개가 1시간에 chr_* 110개·5.3GB를 만들어 디스크 0.5GB까지 소진('No space left').
+    #   진행 중인 크롬은 프로필에 계속 쓰므로(mtime 갱신) 20분 미변경이면 죽은 프로필로 봐도 안전(사이트당 배치 타임아웃 300초).
     """★디스크 누수 근본해결(2026-09-14 대표님 '자꾸 멈춘다'): selenium 워커가 크롬 임시프로필을
        %LOCALAPPDATA%\\Temp\\chr_*·scoped_dir* 에 만들고 안 지워 30GB가 차 발행이 전멸했었다.
        매 루프마다 '지금 안 쓰는(1시간+ 미변경)' 프로필만 지운다 — 진행 중 발행은 최근 변경이라 안 건드림.
