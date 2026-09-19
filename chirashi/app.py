@@ -10458,9 +10458,17 @@ def api_pipeline_claim_sites():
                         return True
                 except Exception: pass
             return False
+        # ★실패 쿨다운(cooldown_until) 존중(2026-09-20 실측): finalize_post가 '등록 확인 불가' 후 20분 쿨다운을 기록해도 노드 claim은
+        #   min_interval을 안 보고 자체 5분 쿨다운만 써서 같은 불안정 사이트를 5분마다 재claim(재시도 간격 5.2→5.9분, 실패율 불변).
+        def _cooling(s):
+            try:
+                _cu=str(s.get('cooldown_until') or '')
+                return bool(_cu) and datetime.strptime(_cu[:19],'%Y-%m-%d %H:%M:%S')>datetime.now()
+            except Exception: return False
         elig=[s for s in sites
               if _plat_ok(s)
               and _need_pub_all(s)
+              and not _cooling(s)
               and s.get('status')!='rejected'
               # ★가입 반복실패(계정 없음)면 claim 제외(2026-09-18): 매 사이클 자동가입 헛시도로 노드 슬롯 낭비.
               #   나중에 대표님이 계정(mb_id) 넣으면 자동 재개(exhausted여도 mb_id 있으면 통과).
