@@ -7102,6 +7102,10 @@ def screen_candidate(url, cfg=None):
         _media_name=[w for w in _MEDIA_KW if (w in tl or w in _dom_l)]
         _press_body=any(s in html for s in ['편집국','보도자료','취재','기자수첩','논설위원','오피니언','편집장']) or bool(re.search(r'\b(기자|reporter)\b',html))
         _admin_sig=any(s in (tl+' '+low) for s in ['게시판관리','관리자매뉴얼','관리자 매뉴얼','admin/','/adm/','관리자모드'])
+        # ★cafe24 오탐 방지(2026-09-20 실측): 쇼핑몰 스킨 HTML엔 'admin/' 스크립트 경로가 흔해 비회원 글쓰기 가능한 골든 게시판
+        #   (hulec·vanillajem·juiceon24·baobabmall 등)이 '관리자페이지 — 회원가입 없음'으로 탈락했음. cafe24는 제목의 강신호만 인정.
+        if (res.get('platform') or '')=='cafe24':
+            _admin_sig=any(s in tl for s in ['게시판관리','관리자매뉴얼','관리자 매뉴얼','관리자모드'])
         # 언론: 이름신호 + (본문 언론신호 OR 도메인이 언론 키워드) → 강판정(정상 게시판 오탐 최소화)
         if (_media_name and (_press_body or any(w in _dom_l for w in _MEDIA_KW))) or _admin_sig:
             res['media_admin']=(('언론사('+_media_name[0]+')') if _media_name else '관리자페이지')
@@ -10293,7 +10297,11 @@ def api_pipeline_claim():
             # ★독점점수 우선(2026-09-18 대표님 '독점 가능 후보부터 발행'): 비회원바로발행(direct) 다음 순위로
             #   독점점수(경쟁없는 방치판) 높은 것부터 → 그 게시판 검색 최상단 선점. 미검수(monopoly 없음)는 0.
             _mono=int(c.get('monopoly',0) or 0)
-            return (manual, 1 if direct else 0, _mono, 1 if not is24 else 0, board_ok, 1 if not c.get('captcha') else 0, c.get('score',0))
+            # ★cafe24 안에서는 가입 불필요(비회원) 후보 최우선(2026-09-20 실측): cafe24 ready 254 중 로그인필요 203·비회원 51인데
+            #   구분 없이 섞여 배치당 1슬롯이 거의 로그인 후보에 가고 가입 단계에서 전멸(오늘 가입성공 0). 비회원 cafe24는
+            #   Turnstile→폼→캡차만 넘으면 되는 검증된 경로(스캔 골든 14곳 등)라 이쪽부터 태운다.
+            c24_nonlogin=1 if (is24 and not c.get('login_required')) else 0
+            return (manual, 1 if direct else 0, _mono, 1 if not is24 else 0, c24_nonlogin, board_ok, 1 if not c.get('captcha') else 0, c.get('score',0))
         elig.sort(key=_prio,reverse=True)
         # ★cafe24 배치당 상한(2026-09-13 대표님 'cafe24 동시처리 줄이기'): Turnstile로 무겁고 hang 잦아
         #   한 배치에서 cafe24가 n슬롯을 독점하면 그누보드가 밀려 처리량 0. 배치당 cafe24 최대 _c24max개만.
