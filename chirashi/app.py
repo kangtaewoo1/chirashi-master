@@ -3387,8 +3387,13 @@ def fill_required_post_fields(d,site):
     except Exception: pass
     # KBoard 비회원 글쓰기는 별표 필수항목이어도 required 속성이 없는
     # 경우가 많다. 알려진 작성자/비밀번호 필드는 선제적으로 채운다.
+    # ★cafe24 작성자/이메일 칸 선제 채움(2026-09-19 hbbiomall 실측: 제출 alert '작성자 항목은 필수 입력값입니다' —
+    #   cafe24 작성자 input(name=name/writer)은 required 속성이 없어 아래 required 루프에서 빠져 빈 채로 제출됐고,
+    #   판정도 '본문 미입력'으로 오분류돼 원인이 숨어 있었음). 보이는 빈 칸만 채움(값 있으면 건드리지 않음).
     for sel,value,label in [
         ("#kboard-input-member-display,input[name='member_display']",writer,'member_display'),
+        ("input[name='name'],#name,input[name='writer'],input[name='writer_name'],input[name='nick_name'],input[name='user_name']",writer,'name'),
+        ("input[name='email'],#email",post_email,'email'),
         ("#kboard-input-password,input[name='password']",guest_pw,'password')]:
         try:
             elems=[x for x in d.find_elements(By.CSS_SELECTOR,sel) if _sel_vis(x)]
@@ -3426,7 +3431,7 @@ def fill_required_post_fields(d,site):
             except Exception: missing.append(name)
             continue
         value=''
-        if re.search(r'(wr_name|이름)',blob): value=writer
+        if re.search(r'(wr_name|이름|작성자|닉네임|writer|nick)',blob): value=writer
         elif typ=='password' or re.search(r'(password|passwd|비밀번호)',blob): value=guest_pw
         elif re.search(r'(email|e-mail|이메일)',blob): value=post_email  # 자동 브랜드메일(빈값 방지)
         elif re.search(r'(tel|phone|mobile|연락처|전화|휴대|핸드폰)',blob): value=(phone_val or post_email)  # 실제 번호(브랜드 넣지 않음)
@@ -4363,12 +4368,24 @@ def cafe24_post(site, title, content_html, skip_login=False):
             m=re.search(r'/article/[^/]+/(\d+)/',u)
             if m: return m.group(1)
         return ''
+    # ★경로+board_no 짝 맞추기(2026-09-19 kuspoon 실측): verified_post_url이 /board/product/read.html?…&board_no=6(상품Q&A)인데
+    #   bo_table='free'라 /board/free/write.html?board_no=6(존재하지 않는 조합)을 만들어 Turnstile 챌린지/404만 반복했음.
+    #   URL에 /board/{세그먼트}/…board_no=N 이 있으면 그 세그먼트를 N과 함께 써서 실제 조합(/board/product/write.html?board_no=6)을 최우선.
+    def _extract_board_pairs(*urls):
+        pairs=[]
+        for u in urls:
+            m=re.search(r'/board/([^/?#]+)/(?:read|list|write|view)\.html[^#]*?[?&]board_no=(\d+)',str(u or ''))
+            if m: pairs.append((m.group(1),m.group(2)))
+        return list(dict.fromkeys(pairs))
     _real_bno=_extract_board_no(site.get('verified_post_url'),site.get('write_entry_url'),site.get('site_url'))
+    _pref=[base+f'/board/{_seg}/write.html?board_no={_bn}' for _seg,_bn in _extract_board_pairs(site.get('verified_post_url'),site.get('write_entry_url'))]
     if _real_bno:
         _bo_path=bo if (bo and not bo.isdigit()) else 'product'   # 경로 세그먼트(free/product/게시판명)
-        _pref=[base+f'/board/{_bo_path}/write.html?board_no={_real_bno}',
-               base+f'/board/write.html?board_no={_real_bno}',
-               base+f'/board/product/write.html?board_no={_real_bno}']
+        _pref+=[base+f'/board/{_bo_path}/write.html?board_no={_real_bno}',
+                base+f'/board/write.html?board_no={_real_bno}',
+                base+f'/board/product/write.html?board_no={_real_bno}']
+    if _pref:
+        _pref=list(dict.fromkeys(_pref))
         # 중복 제거하며 맨 앞에 삽입(정확 후보 우선)
         write_urls=_pref+[u for u in write_urls if u not in _pref]
     # ★대표님 지시(2026-09-08): '메인도메인만 저장 말고 진짜 글 쓸 수 있는 링크까지 저장'.
@@ -4447,21 +4464,30 @@ def cafe24_post(site, title, content_html, skip_login=False):
         #    로컬크롬은 실제 IP라 CF는 넘지만 /article/ 탐지가 안 돌아 '글쓰기 페이지 못찾음' 났음.)
         if bo.isdigit() and not _art_name:
             _art_name=_scrape_article_path() or _art_name
+        _entry_deadline0=_entry_deadline
+        _chal_stuck=0   # ★Turnstile을 풀었는데도 챌린지에 머문 횟수(2026-09-19 kuspoon: 후보 URL마다 유료 재풀이 방지)
         for wu in write_urls:
             if opened or time.time()>_entry_deadline: break
+            if _chal_stuck>=1:
+                add_log("[Cafe24글쓰기시도] 챌린지 검증 후에도 챌린지 → 추측 URL 순회 중단, 목록경유로"); break
             try: d.get(wu)
             except Exception: pass          # 로드 미완료(load 이벤트 지연) 타임아웃은 정상 — 폼 폴링으로 판정
             _cur=_settle_nav()              # ★about:blank 벗어날 때까지 대기 후 실제 URL 판정
             # 첫 진입 시 Turnstile/CF 챌린지면 통과 후 복귀
-            _wait_cf(12); _pass_turnstile_if_present()
+            # ★챌린지 풀이 시간은 진입 예산에서 제외(2026-09-19 kuspoon 실측: 풀이 2회(각 12초+대기 20초)가 60초 예산을
+            #   다 먹어 정답인 목록경유(write링크는 찾았음)에 도달 못 하고 종료). 풀이에 쓴 시간만큼 마감을 늘림(최대 +90초).
+            _ts0=time.time(); _wait_cf(12); _pass_turnstile_if_present(); _tsd=time.time()-_ts0
+            if _tsd>3: _entry_deadline=min(_entry_deadline+_tsd, _entry_deadline0+90)
             dismiss_alerts(d)
             # ★진단(2026-09-08): 어느 write_url에서 어디로 갔는지 로그 — 홈 리다이렉트/미렌더 구분용.
             try: _cur=(d.current_url or _cur)
             except Exception: pass
             add_log(f"[Cafe24글쓰기시도] {wu.split('/board/')[-1][:40]} → 현재:{_cur.split('//')[-1][:50]}")
+            _cl=_cur.lower()
+            if 'veritas-hub' in _cl or '/challenge' in _cl:
+                _chal_stuck+=1; continue   # 풀었는데도 챌린지 = 이 URL 조합이 틀려 재챌린지(404) — 다음 추측 대신 목록경유
             # ★홈으로 리다이렉트됐으면(경로에 board/write/article 없음) 폼 폴링 낭비 말고 즉시 다음 후보로.
             #   (takago 등은 write.html 직접 get이 홈으로 튕김 — 28초 폴링 소모 방지, article경유에 시간 확보.)
-            _cl=_cur.lower()
             if _cur and _cur not in ('about:blank','data:,') and not any(k in _cl for k in ('/board/','write','/article/','board_no','bo_table')):
                 continue
             # ★타카고 404 오류페이지 즉시 스킵(2026-09-11 실측): write.html 직접접근이 '다시 한번 확인해주세요'
@@ -4502,6 +4528,7 @@ def cafe24_post(site, title, content_html, skip_login=False):
                 except Exception: pass
                 # 목록/글 페이지의 '글쓰기' 링크 클릭(직접 get이 아니라 클릭이라 세션/리퍼러 유지).
                 #   href[write] 뿐 아니라 Cafe24 스킨의 글쓰기 버튼(board_write·onclick·텍스트)도 폭넓게.
+                _whref=''
                 try:
                     wb=None
                     _links=d.find_elements(By.CSS_SELECTOR,
@@ -4518,8 +4545,15 @@ def cafe24_post(site, title, content_html, skip_login=False):
                         try:
                             if a.is_displayed(): wb=a; break
                         except Exception: pass
-                    if not wb: continue
-                    d.execute_script("arguments[0].click();",wb)
+                    # ★직접 진입 폴백용 href 확보(2026-09-19 kuspoon 실측: 목록에서 write링크(/board/free/write.html?board_no=1002)는
+                    #   찾았는데 클릭 진입이 안 돼 폼진단만 남음). 링크에 박힌 실제 board_no 경로를 GET으로도 시도.
+                    for a in ([wb] if wb else [])+list(_links):
+                        try:
+                            _h=a.get_attribute('href') or ''
+                            if _h.startswith('http') and 'write' in _h.lower(): _whref=_h; break
+                        except Exception: pass
+                    if wb: d.execute_script("arguments[0].click();",wb)
+                    elif not _whref: continue
                 except Exception:
                     continue
                 _wait_cf(12); _pass_turnstile_if_present(); dismiss_alerts(d)
@@ -4527,6 +4561,15 @@ def cafe24_post(site, title, content_html, skip_login=False):
                 while time.time()<deadline:
                     if _form_ready(): opened=True; break
                     time.sleep(0.5)
+                if not opened and _whref and time.time()<_entry_deadline+30:
+                    try: d.get(_whref)
+                    except Exception: pass
+                    _settle_nav(); _wait_cf(12); _pass_turnstile_if_present(); dismiss_alerts(d)
+                    add_log(f"[Cafe24목록경유] write href 직접진입 → {_whref.split('//')[-1][:50]}")
+                    deadline=min(time.time()+(20 if _use_sbr else 12), _entry_deadline+30)
+                    while time.time()<deadline:
+                        if _form_ready(): opened=True; break
+                        time.sleep(0.5)
                 if opened:
                     add_log(f"[Cafe24글쓰기폼] 목록경유 진입 성공 — {(site.get('name') or base)[:24]}")
                     break
@@ -4843,7 +4886,11 @@ def cafe24_post(site, title, content_html, skip_login=False):
             # ★cafe24 스팸/금지어 차단(2026-09-12 nazel 실측 + cafe24 공식): '게시글 등록이 일시적으로 중단'은
             #   게시판 관리자가 켠 불량어(금지어)+스팸 걸러내기에 우리 유흥 키워드(셔츠룸/전화번호 등)가 걸린 것.
             #   시간·숙성 무관하게 '이 게시판이 우리 콘텐츠를 거부' → 재시도 무의미, 영구 제외 대상.
-            if any(k in _blob2 for k in ['일시적으로 중단','일시적으로 차단','스팸','금지어','불량어','등록이 제한','작성이 제한']):
+            # ★alert 우선 판정(2026-09-19 hbbiomall 실측): '작성자 항목은 필수 입력값입니다'가 body의 '내용을 입력' 안내문에
+            #   밀려 '본문 미입력'으로 오분류됐음. 제출 직후 alert에 '필수'가 있으면 그 필드 미입력이 진짜 원인.
+            if _al and '필수' in _al:
+                _why=f'필수항목 미입력 반려 — alert:{_al.strip()[:40]}'
+            elif any(k in _blob2 for k in ['일시적으로 중단','일시적으로 차단','스팸','금지어','불량어','등록이 제한','작성이 제한']):
                 _why='스팸/금지어 차단 — 이 게시판이 우리 콘텐츠 거부(영구 제외)'
             elif any(k in _blob2 for k in ['본문','내용을 입력','내용이 없']):
                 _why='본문 미입력 반려(에디터 sync 실패 추정)'
@@ -10125,7 +10172,15 @@ def api_pipeline_claim_sites():
         #   재발행 대상에서 빠졌음. 검증 전(미검증) OR 잠김(permission=False·auto_dropped_at 있음)이면 위임.
         def _need_pub(s):
             if str(s.get('verified_post_url') or '')[:4]!='http': return True   # 미검증
-            if s.get('auto_dropped_at') and not s.get('permission'): return True  # 검증됐으나 실패로 잠김 → 재발행
+            if s.get('auto_dropped_at') and not s.get('permission'):
+                # ★잠긴 사이트 재위임 백오프(2026-09-19 실측: 노드 실패 467건 중 147건(31%)이 잠긴 사이트 헛시도 —
+                #   렌탈샵·토보샵·구씨공방·abctool이 5분 쿨다운마다 재시도돼 Turnstile 유료풀이+워커 172분 낭비).
+                #   SBR 시절 억울한 잠금 구제용 예외였으나 지금은 진짜 막힌 곳까지 영원히 돎.
+                #   → 스팸/금지어(영구)·금지단어 차단은 재위임 안 함, 그 외 잠긴 사이트는 6시간(locked_retry_sec)에 1회만.
+                _lfr=str(s.get('last_fail_reason') or '')
+                if any(k in _lfr for k in ('스팸/금지어','금지단어','영구 제외')): return False
+                _lrs=max(1800,int(_cfg.get('locked_retry_sec',21600) or 21600))
+                return float(s.get('pc_last_try',0) or 0) < now-_lrs
             # ★정기 발행도 노드가(2026-09-11): 검증·허용된 Cafe24는 서버(CF 차단 IP) 대신 노드가 계속 발행.
             #   서버 큐는 _cafe24_node_only로 제외됨. 사이트별 1일 한도·최소 간격은 서버와 같은 규칙.
             try:
