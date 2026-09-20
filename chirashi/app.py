@@ -4572,6 +4572,52 @@ def cafe24_post(site, title, content_html, skip_login=False):
                 add_log(f"[Cafe24경로탐지] 홈에서 글목록 발견 — /board/{_an}/{bo}/")
                 return _an
         return None
+    def _scrape_write_urls_from_home():
+        """★경로 짝맞춤(2026-09-20 예피아·snsstudio 실측): 후보 URL의 board_no(예 /article/자료실/7/의 7)는 SEO 별칭이라 실제
+           게시판 번호와 다름 → write.html?board_no=7이 404. 홈 메뉴의 진짜 /board/{영문세그먼트}/list.html?board_no=N 링크를
+           수집하고, 각 목록에서 실제 write 링크(예 /board/consult/write.html)를 그대로 뽑아 write_urls 최상단에 넣는다.
+           (한글 세그먼트가 아니라 영문 세그먼트, 별칭이 아니라 실제 board_no를 쓰는 게 핵심.) 홍보에 적합한 자유·문의·후기 게시판 우선."""
+        found=[]
+        try:
+            d.get(base+'/'); _settle_nav()
+            lists=d.execute_script(
+                "return Array.from(document.querySelectorAll(\"a[href*='/board/'][href*='list.html']\"))"
+                ".map(a=>a.getAttribute('href')).filter(Boolean).slice(0,60);") or []
+        except Exception: lists=[]
+        # 목록 URL 정규화·중복제거 + 홍보 적합 게시판 우선순위(자유·문의·후기·상담 > 공지 > 갤러리)
+        seen=set(); norm=[]
+        for h in lists:
+            if not h: continue
+            u=h if h.startswith('http') else base+('' if h.startswith('/') else '/')+h
+            u=u.split('#')[0]
+            if u in seen: continue
+            seen.add(u); norm.append(u)
+        def _pri(u):
+            ul=u.lower()
+            for i,k in enumerate(['/free/','consult','qa','qna','inquiry','문의','상담','review','후기','community','free']):
+                if k in ul: return i
+            if 'notice' in ul or '공지' in ul: return 50
+            if 'gallery' in ul or '갤러리' in ul: return 60
+            return 30
+        norm.sort(key=_pri)
+        for lu in norm[:8]:
+            if len(found)>=4: break
+            try:
+                d.get(lu); _settle_nav(); dismiss_alerts(d)
+                wl=d.execute_script(
+                    "var a=document.querySelector(\"a[href*='write.html'],a[href*='/write'],a[href*='board_write']\");"
+                    "return a?(a.href||a.getAttribute('href')):'';") or ''
+            except Exception: wl=''
+            if wl:
+                w=wl if str(wl).startswith('http') else base+('' if str(wl).startswith('/') else '/')+wl
+                if w not in found and 'write' in w.lower(): found.append(w)
+        if found:
+            # write_urls 최상단(추측 URL보다 우선). list_urls에도 목록을 넣어 클릭경유 폴백 확보.
+            for w in reversed(found):
+                if w in write_urls: write_urls.remove(w)
+                write_urls.insert(0,w)
+            add_log(f"[Cafe24경로탐지] 홈 메뉴에서 실제 write 경로 {len(found)}개 확보 — {found[0].split('//')[-1][:50]}")
+        return found
     try:
         # ★board_no 숫자면, 대표님 발견 /article/ 경유가 write.html 직접보다 안정적 →
         #   먼저 홈에서 /article/ 경로를 찾아 list_urls 최우선에 넣는다(저장된 게 없을 때 1회).
@@ -4579,6 +4625,11 @@ def cafe24_post(site, title, content_html, skip_login=False):
         #    로컬크롬은 실제 IP라 CF는 넘지만 /article/ 탐지가 안 돌아 '글쓰기 페이지 못찾음' 났음.)
         if bo.isdigit() and not _art_name:
             _art_name=_scrape_article_path() or _art_name
+        # ★로그인 세션이면 홈 메뉴에서 실제 write 경로를 뽑아 최우선(2026-09-20): 후보 board_no가 별칭이라 추측 URL이 전부 404인
+        #   케이스(예피아 board_no=7 실존X) 구제. 저장된 write_entry_url이 없을 때만(있으면 그게 최우선). 로컬크롬 로그인 세션 전제.
+        if mid and not _use_sbr and not str(site.get('write_entry_url') or '').startswith('http'):
+            try: _scrape_write_urls_from_home()
+            except Exception: pass
         _entry_deadline0=_entry_deadline
         _chal_stuck=0   # ★Turnstile을 풀었는데도 챌린지에 머문 횟수(2026-09-19 kuspoon: 후보 URL마다 유료 재풀이 방지)
         for wu in write_urls:
@@ -10383,6 +10434,11 @@ def api_pipeline_report():
             else:
                 msg=str(r.get('msg') or '')[:90]; is_temp=bool(r.get('is_temp'))
                 att=int(c.get('pipeline_attempts',0) or 0)+1
+                # ★가입 성공 계정 보존(2026-09-20 지메일 실측: cafe24 가입축하 메일 17통, 원사이언스엔 계정 4개 — 발행 실패 시 mb_id를
+                #   버려 매 시도마다 재가입). 발행이 실패해도 노드가 만든 계정은 후보에 저장 → 다음 시도는 가입 대신 로그인.
+                if r.get('mb_id'):
+                    try: _cand_set(c['id'],mb_id=str(r.get('mb_id'))[:60],mb_pass=str(r.get('mb_pass') or ''),login_saved=True)
+                    except Exception: pass
                 if is_temp and att<5:
                     _cand_set(cid,status='ready',reject_reason=f'일시적 실패({att}/5): {msg}',pipeline_attempts=att,claimed_by='',claim_expire=0)
                     add_log(f'[발행 재시도] {name} ({att}/5) — {msg}')
