@@ -4951,7 +4951,7 @@ def cafe24_post(site, title, content_html, skip_login=False):
     #   덤프: 보이는 input/select/textarea의 name:type(*=required)(=∅ 비어있음) — 사이트별로 어떤 필수칸이 비는지 대량 실측용.
     try:
         _ff=d.execute_script(r"""
-            var out={checked:[],fields:[]}; var email=arguments[0]||'';
+            var out={checked:[],fields:[]}; var email=arguments[0]||''; var writer=arguments[1]||''; var phone=arguments[2]||'';
             function labelOf(el){ var lab=''; try{ if(el.id){var l=document.querySelector("label[for='"+el.id+"']"); if(l) lab=l.textContent||'';} }catch(e){}
               if(!lab){ var p=el.closest('label'); if(p) lab=p.textContent||''; } return lab; }
             document.querySelectorAll("input[type='checkbox']").forEach(function(cb){
@@ -4978,10 +4978,26 @@ def cafe24_post(site, title, content_html, skip_login=False):
               if(pick && !pick.checked){ pick.checked=true; pick.dispatchEvent(new Event('click',{bubbles:true})); pick.dispatchEvent(new Event('change',{bubbles:true})); }
               if(pick) out.checked.push((n+'=radio:'+(pick.value||'')).slice(0,28));
             });
-            // ★cafe24 분리형 이메일(email1@email2 + email3 select) 비어 있으면 채움
+            // ★cafe24 개인정보 필수필드(2026-09-20 kyk 실측: writer 외에 별도 name='성명'·phoneNo 필드가 안 채워져 '성명을 입력해주세요' 반려):
+            //   작성자를 writer뿐 아니라 name/user_name/nick에도, 전화번호는 phoneNo/phone/mobile/cellphone/hp에 넣는다(빈 칸만).
+            function setv(el,v){ if(el && !(el.value||'').trim()){ el.value=v; el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true})); return true;} return false; }
+            try{
+              document.querySelectorAll("input[type='text'],input:not([type])").forEach(function(el){
+                var n=(el.name||'').toLowerCase();
+                if(/^(writer|name|user_name|username|nick|nick_name|nickname|author|성명|이름)$/.test(n)) { if(setv(el,writer)) out.checked.push('name='+n); }
+              });
+              document.querySelectorAll("input").forEach(function(el){
+                var n=(el.name||'').toLowerCase(), tp=(el.type||'').toLowerCase();
+                if((tp==='tel'||tp==='text') && /phone|mobile|cellphone|^hp$|tel|연락처|휴대/.test(n)) { if(setv(el,phone)) out.checked.push('phone='+n); }
+              });
+            }catch(e){}
+            // ★cafe24 분리형 이메일(email1@email2 + email3 select) 비어 있으면 채움. ★단 email이 필수가 아니면 비워둔다
+            //   (2026-09-20 narustory 실측: cafe24 일부 쇼핑몰이 이메일 도메인의 'com'을 금지어로 잡아 '불량 단어 com' 반려 →
+            //    선택 이메일은 안 채우는 게 안전). email1이 required일 때만 채운다.
             try{
               var e1=document.querySelector("input[name='email1']"), e2=document.querySelector("input[name='email2']"), e3=document.querySelector("select[name='email3']");
-              if(email && e1 && e2 && !(e1.value||'').trim()){ var parts=email.split('@'); e1.value=parts[0]||''; e2.value=parts[1]||'';
+              var eReq = e1 && (e1.required || /required/i.test(e1.className||'') || (e1.closest('*[class*=required]')!=null));
+              if(email && e1 && e2 && eReq && !(e1.value||'').trim()){ var parts=email.split('@'); e1.value=parts[0]||''; e2.value=parts[1]||'';
                 [e1,e2].forEach(function(el){ el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true})); });
                 if(e3){ var dom=(parts[1]||'').toLowerCase(); var hit=false;
                   for(var i=0;i<e3.options.length;i++){ if((e3.options[i].value||'').toLowerCase()===dom){ e3.selectedIndex=i; hit=true; break; } }
@@ -4998,7 +5014,8 @@ def cafe24_post(site, title, content_html, skip_login=False):
               out.fields.push(((el.name||el.id||'?')+'').slice(0,18)+':'+t+(el.required?'*':'')+(v?'':'=∅'));
             });
             return out;
-        """, _brand_email(load_config(), site)) or {}
+        """, _brand_email(load_config(), site), (str(site.get('writer_name') or '').strip() or (load_config().get('brand') or '게시자')),
+             (lambda _c: format_phone(pick_phone(_c)))(load_config())) or {}
         add_log(f"[Cafe24폼필드] 동의체크={_ff.get('checked')} 필드={(_ff.get('fields') or [])[:16]}")
     except Exception as _e:
         add_log(f"[Cafe24폼필드] 덤프실패 {str(_e)[:50]}")
