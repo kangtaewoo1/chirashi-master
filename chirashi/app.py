@@ -2032,9 +2032,14 @@ def detect_captcha(d):
         return False
     has_cap_input=_has_visible("#captcha_key,input[name='captcha_key'],input[name*='captcha'],"
                                "input[id*='captcha'],input[name='wr_key'],input[name*='secText'],"
-                               "input[name*='보안'],#secret_text")
+                               "input[name*='보안'],#secret_text,"
+                               # ★cafe24 글쓰기 폼(2026-09-21 vanillajem 실측): 입력칸 name='captcha' id='captcha',
+                               #   이미지 id='captcha_Write' src='/Exec/Front/Board/Captcha/?...'. 표시=<tr class='captcha '>,
+                               #   숨김=<tr class='captcha displaynone'>라 is_displayed로 자동 구분됨.
+                               "input#captcha,input[name='captcha']")
     has_cap_img=_has_visible("img#captcha_img,img#captcha_image,img[src*='captcha'],img[src*='kcaptcha'],"
-                             "img[src*='/captcha'],img[alt*='captcha'],img[alt*='보안']")
+                             "img[src*='/captcha'],img[alt*='captcha'],img[alt*='보안'],"
+                             "img[id*='captcha'],img[id*='Captcha'],img[src*='/Captcha'],img[src*='Board/Captcha']")
     if has_cap_input or has_cap_img:
         return 'kcaptcha'
     return ''   # 보이는 캡차 요소 없음 → 캡차 없음(로그인 회원 글쓰기 등)
@@ -2171,6 +2176,8 @@ def _captcha_image_data(d):
 
     # 1) 명시적 CSS 셀렉터: 가장 구체적 → 가장 일반적 (gnuboard/XE/Rhymix/Cafe24/일반)
     SELECTORS = [
+        # ★cafe24 글쓰기 폼 캡차(2026-09-21 vanillajem 실측): img id='captcha_Write' src='/Exec/Front/Board/Captcha/?...'
+        "img#captcha_Write", "img[id^='captcha_'][src*='Captcha']", "img[src*='/Board/Captcha']", "img[src*='Front/Board/Captcha']",
         # kcaptcha src가 교체된 진짜 이미지 (dot.gif 플레이스홀더 배제)
         "img#captcha_img[src*='kcaptcha_image.php']",
         "img#captcha_img[src*='captcha.php']",
