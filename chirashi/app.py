@@ -4892,6 +4892,26 @@ def cafe24_post(site, title, content_html, skip_login=False):
         """, editor_content)
         if fr:
             filled=True; add_log(f'[Cafe24본문] Froala 입력({fr})')
+            # ★본문 sync 검증·강제 재동기화(2026-09-21 실측 '본문 미입력 반려(alert 빈값)'): Froala div엔 들어갔는데 cafe24가 제출 시 읽는
+            #   원본 textarea(content/contents/board_content)가 비어 반려되는 케이스 → 실제 제출 textarea가 비었으면 Froala HTML을 다시 주입.
+            try:
+                _len=d.execute_script("""
+                    var content=arguments[0];
+                    function taFilled(){
+                      var tas=document.querySelectorAll("textarea[name='content'],textarea[name='contents'],textarea#content,textarea[name='board_content'],textarea[name='ir1']");
+                      for(var i=0;i<tas.length;i++){ if((tas[i].value||'').trim().length>10) return tas[i].value.length; }
+                      return 0;
+                    }
+                    if(taFilled()>0) return taFilled();
+                    // 비었으면 강제 재동기화: Froala 인스턴스 html → 모든 후보 textarea에 직접 주입 + change 이벤트
+                    var html=content;
+                    try{ if(window.FroalaEditor && FroalaEditor.INSTANCES && FroalaEditor.INSTANCES.length){ var h=FroalaEditor.INSTANCES[0].html.get(); if(h && h.length>10) html=h; } }catch(e){}
+                    var tas=document.querySelectorAll("textarea[name='content'],textarea[name='contents'],textarea#content,textarea[name='board_content'],textarea[name='ir1']");
+                    for(var i=0;i<tas.length;i++){ tas[i].value=html; tas[i].dispatchEvent(new Event('input',{bubbles:true})); tas[i].dispatchEvent(new Event('change',{bubbles:true})); }
+                    return taFilled();
+                """, editor_content)
+                add_log(f'[Cafe24본문] 제출 textarea 확인 len={_len}' + ('' if (_len or 0)>10 else ' — 비어 재동기화 시도'))
+            except Exception: pass
     except Exception as _fe:
         pass
     if not filled:
