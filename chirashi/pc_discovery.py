@@ -222,15 +222,18 @@ def do_search(query, prov="ddg"):
         return google_search(query)
     if prov == "brave" and BRAVE_KEY:
         return brave_search(query)
-    # 무료 발굴: DDG 먼저(가끔 됨), 막히거나 빈 결과면 네이버 웹문서로 폴백.
-    # ★네이버 재활성화(2026-09-18 대표님 '발굴 0건'): DDG는 서버·이 IP에서 봇차단(연결차단/결과0)이 잦고,
-    #   Brave는 402(크레딧 소진)라 무료 경로가 사실상 죽어 신규 후보 0건이었음. 노드는 대표님 실제 IP라
-    #   네이버가 안 막히고, 개선된 where=web가 실제 게시판을 대량 반환(로컬 실측 6쿼리 83개). DDG만 쓰던
-    #   옛 정책(네이버 폴백 제거)은 DDG가 살아있을 때 얘기 — 지금은 네이버가 유일한 무료 산출원.
-    r = ddg_search(query)
+    if prov == "naver":
+        # ★무료 주력(2026-09-22 대표님 'Brave 돈 아까움·무료 파싱'): 네이버 웹문서만 사용.
+        #   실측(다변화 쿼리 8개→기지 밖 신규 게시판형 56개, 워크플로 34지역→발행후보 152개)으로
+        #   '다변화 + 네이버 무료 = Brave 대체 가능' 확인. DDG는 이 IP·서버 IP 둘 다 봇차단(202)이라 스킵.
+        return naver_search(query)
+    # 무료 발굴 폴백: 네이버 먼저(안정), 비면 DDG 시도.
+    # ★네이버 우선(2026-09-22): DDG는 서버·노드 IP 둘 다 봇차단(연결차단/202/결과0)이 잦아 시간만 낭비.
+    #   노드는 대표님 실제 IP라 네이버가 안 막히고, where=web가 실제 게시판을 대량 반환. DDG는 최후 보조.
+    r = naver_search(query)
     if r:
         return r
-    return naver_search(query)
+    return ddg_search(query)
 
 
 def domain_of(url):
@@ -469,9 +472,10 @@ def run_once(max_queries):
     found = {}     # domain → url (도메인당 1개만; 서버가 게시판 축약)
     global _BRAVE_402; _BRAVE_402=False
     for i, q in enumerate(queries, 1):
-        # ★Brave 크레딧 소진(402) 감지되면 즉시 DDG로 전환해 이번 실행을 살린다(대표님 실측 2026-09-12).
+        # ★Brave 크레딧 소진(402) 감지되면 즉시 네이버(무료)로 전환해 이번 실행을 살린다.
+        #   (2026-09-22 대표님 'Brave 돈 아까움': DDG는 이 IP서 죽어 무의미 → 네이버로 폴백)
         if prov == "brave" and _BRAVE_402:
-            prov = "ddg"; log("  → Brave 크레딧 소진 감지: 이번 실행 DDG(무료)로 전환")
+            prov = "naver"; log("  → Brave 크레딧 소진 감지: 이번 실행 네이버(무료)로 전환")
         urls = do_search(q, prov)
         new_here = 0
         for u in urls:
@@ -483,8 +487,7 @@ def run_once(max_queries):
             found[d] = u; new_here += 1
         if new_here:
             log(f"  [{i}/{len(queries)}] +{new_here}  «{q[:36]}»")
-        # ★DDG 봇차단(403) 방지: 요청 간격을 넉넉히(prov=ddg면 2.5s, 키검색은 1.1s).
-        #   짧게 연속 요청하면 DDG가 403을 낸다(대표님 화면 실측).
+        # ★요청 간격: DDG만 봇차단(403) 방지로 2.5s. 네이버/키검색은 1.1s(네이버는 내부 3페이지 0.4s 대기 포함).
         time.sleep(2.5 if prov == "ddg" else 1.1)
 
     urls = list(found.values())

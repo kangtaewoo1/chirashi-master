@@ -10759,7 +10759,15 @@ def api_discovery_queries():
        (쿼리 로직이 서버에만 있어 PC스크립트와 드리프트 안 남.)"""
     cfg=load_config()
     provider=(cfg.get('search_provider') or 'brave').lower()
-    try: qs=_board_finder_queries(provider)
+    # ★무료 발굴 자동전환(2026-09-22 대표님 'Brave 돈 아까움·무료 파싱'): brave 지정인데 키가 없으면
+    #   naver(무료)로 내려준다. 실측(다변화 쿼리→네이버 신규 게시판형 56·워크플로 152)으로 대체 가능 확인.
+    #   쿼리는 평문(지역×업종×게시판신호)이라 네이버 where=web로 그대로 검색됨(inurl: 불필요).
+    #   대표님이 UI에서 search_provider=naver로 명시하거나 brave 키를 비우면 무료 모드가 유지된다.
+    if provider=='brave' and not (cfg.get('brave_api_key') or '').strip():
+        provider='naver'
+    # 쿼리 생성은 평문형(brave 분기)을 쓴다 — naver/ddg 모두 평문 검색이라 동일 쿼리로 적중.
+    _qprov='brave' if provider in ('brave','naver','ddg') else provider
+    try: qs=_board_finder_queries(_qprov)
     except Exception as e:
         return jsonify({'ok':False,'error':f'쿼리 생성 실패: {str(e)[:80]}'})
     # 이미 등록·탈락한 도메인은 PC가 스킵하도록 함께 전달(중복 검색·전송 방지).
