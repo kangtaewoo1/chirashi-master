@@ -4910,16 +4910,28 @@ def cafe24_post(site, title, content_html, skip_login=False):
                     for(var i=0;i<tas.length;i++){ tas[i].value=html; tas[i].dispatchEvent(new Event('input',{bubbles:true})); tas[i].dispatchEvent(new Event('change',{bubbles:true})); }
                     return taFilled();
                 """, editor_content)
-                add_log(f'[Cafe24본문] 제출 textarea 확인 len={_len}' + ('' if (_len or 0)>10 else ' — 비어 재동기화 시도'))
+                # ★에디터 오판 폴백(2026-09-22 젠힐링샵 실측): 폼필드 덤프에 본문 textarea가 아예 없는데(subject/ucc/password만)
+                #   코드가 Froala 인스턴스 있다고 오판(froala-instance) → 본문이 엉뚱한 데 들어가 제출 textarea 비어 '본문 미입력'.
+                #   재동기화 후에도 제출 textarea가 비면(len<10) filled를 False로 되돌려 아래 iframe(SmartEditor)·textarea 폴백을 실행한다.
+                if (_len or 0)<10:
+                    filled=False
+                    add_log(f'[Cafe24본문] 제출 textarea 확인 len={_len} — Froala 오판 추정, iframe/textarea 폴백으로')
+                else:
+                    add_log(f'[Cafe24본문] 제출 textarea 확인 len={_len}')
             except Exception: pass
     except Exception as _fe:
         pass
     if not filled:
         try:
-            iframe=d.find_element(By.CSS_SELECTOR,"iframe[id*='content'],iframe.cke_wysiwyg_frame,iframe[title*='Rich'],iframe[title*='편집']")
+            # ★cafe24 SmartEditor iframe 포함 폭넓게(2026-09-22): se2_iframe·oframe·editorframe·smarteditor 등.
+            iframe=d.find_element(By.CSS_SELECTOR,
+                "iframe[id*='content'],iframe.cke_wysiwyg_frame,iframe[title*='Rich'],iframe[title*='편집'],"
+                "iframe.se2_input_wysiwyg,iframe[id*='se2'],iframe[id*='editor'],iframe[id*='Editor'],"
+                "iframe[name*='editor'],iframe[title*='에디터'],iframe[title*='본문'],iframe[class*='editor']")
             d.switch_to.frame(iframe)
             d.execute_script("document.body.innerHTML=arguments[0]",editor_content)
             d.switch_to.default_content(); filled=True
+            add_log('[Cafe24본문] iframe 에디터 폴백 입력')
         except Exception:
             d.switch_to.default_content()
     if not filled:
