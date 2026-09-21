@@ -6873,10 +6873,54 @@ _FINDER_SVCS=['노래방','가라오케','셔츠룸','룸싸롱','하이퍼블�
               '마사지','출장마사지','출장안마','스웨디시','건마','타이마사지','1인샵','왁싱']
 _FINDER_SIGNALS=['bbs/board.php 홍보','게시판 010 홍보','자유게시판 후기','article 홍보','mod=document 홍보']
 
+# ★발굴 순증 0 해소(2026-09-22 대표님 '검색 쿼리 다변화'): 고정 39지역만 반복 → 매번 같은 검색결과(중복).
+#   regions_full.json의 전국 시군구(249)+읍면동(2,870)을 지역 풀에 편입해 검색 결과 공간을 근본 확대.
+#   실검증(WebSearch '아산 셔츠룸 …'): 기지목록에 없던 pttennis.co.kr(아산 홍보글 실재)·asanstory 등 신규 게시판 산출 확인.
+_finder_pool_cache=[None]
+def _finder_region_pool():
+    """확장 지역 풀 = 검증된 대표지역(_FINDER_REGIONS) 우선 + 전국 시군구·읍면동(regions_full.json).
+       파일 1회 파싱 후 모듈 캐시. 중복 제거·순서 유지(대표지역이 앞)."""
+    if _finder_pool_cache[0] is not None:
+        return _finder_pool_cache[0]
+    pool=list(_FINDER_REGIONS)   # 검증된 우물을 맨 앞에 유지
+    try:
+        data=load_json(REGIONS_FILE,{}) or {}
+        gu=[]; dong=[]
+        for _sido,gus in data.items():
+            if not isinstance(gus,dict): continue
+            for gname,dongs in gus.items():
+                # 시군구명은 '구/시/군' 접미어를 떼 검색어로(예: '천안시서북구'→'서북구'는 애매 → gname 그대로도 추가)
+                g=str(gname).strip()
+                if g: gu.append(g)
+                if isinstance(dongs,list):
+                    for dn in dongs:
+                        dn=str(dn).strip()
+                        if dn: dong.append(dn)
+        # 시군구 먼저(광역·중밀도), 읍면동 뒤(롱테일). 접미어 '동/읍/면' 그대로 검색(실제 홍보글이 그 표기로 존재).
+        pool.extend(gu); pool.extend(dong)
+    except Exception:
+        pass
+    pool=list(dict.fromkeys(p for p in pool if p))   # 중복 제거·순서 유지
+    _finder_pool_cache[0]=pool
+    return pool
+
 def _region_service_queries():
-    """지역×업종×게시판신호 대량 조합 검색어. (예: '강남 하이퍼블릭 bbs/board.php 홍보')"""
+    """지역×업종×게시판신호 대량 조합 검색어. (예: '강남 하이퍼블릭 bbs/board.php 홍보')
+       ★일별 회전: 확장 지역 풀을 연중일(tm_yday) 기준으로 회전시켜 매일 다른 구간이 앞에 오게 한다.
+       PC 커서 로테이션(pc_discovery)과 결합해 2,870+ 읍면동까지 며칠에 걸쳐 넓게 순회 → 신규 유입 지속."""
+    pool=_finder_region_pool()
+    # 대표지역(검증된 우물)은 항상 앞에 고정, 확장 지역만 일별 회전
+    head=list(_FINDER_REGIONS)
+    ext=[p for p in pool if p not in set(head)]
+    if ext:
+        try:
+            off=datetime.now().timetuple().tm_yday % len(ext)
+        except Exception:
+            off=0
+        ext=ext[off:]+ext[:off]
+    regions=head+ext
     qs=[]
-    for rg in _FINDER_REGIONS:
+    for rg in regions:
         for sv in _FINDER_SVCS:
             qs.append(f'{rg}{sv} 홍보 게시판')            # 예: 강남하이퍼블릭 홍보 게시판
             for sig in _FINDER_SIGNALS[:2]:
@@ -10725,9 +10769,14 @@ def api_discovery_queries():
         raw=load_json(REJECTED_DOMAINS_FILE,{})
         rej=set((raw.get('domains') if isinstance(raw,dict) else raw) or [])
     except Exception: rej=set()
-    # ★검색어 무제한(대표님 지시 2026-09-08 '400개 이후로 추가 안되냐 무제한으로'): 상한 제거.
-    #   중복만 제거해 전량 전달(PC가 커서로 나눠 순회). known/rejected도 상한 대폭 상향(중복발굴 방지).
+    # ★검색어 무제한(대표님 지시 2026-09-08 '400개 이후로 추가 안되냐 무제한으로').
+    #   단 2026-09-22 지역 다변화로 쿼리가 13만+로 늘어 전량 JSON(5.8MB)이 노드 부하 → 회전 슬라이스로 축소.
+    #   '무제한' 의도는 유지: 지역풀이 일별 회전(_region_service_queries)하므로 매일 다른 구간이 앞에 오고,
+    #   여기서 상위 QCAP개만 잘라도 며칠에 걸쳐 전체 쿼리를 순회한다(누락 없음).
     qs=list(dict.fromkeys(qs))   # 중복 제거(순서 유지)
+    QCAP=15000
+    if len(qs)>QCAP:
+        qs=qs[:QCAP]
     # ★PC도 Brave로 발굴(대표님 지시 2026-09-11: DDG 차단됨). provider=brave면 서버가 가진 Brave 키를
     #   토큰 인증된 이 응답으로만 내려준다(관리자 UI에선 마스킹됨 — 노출면 최소화). PC는 이 키로 brave 검색.
     _bk=''
