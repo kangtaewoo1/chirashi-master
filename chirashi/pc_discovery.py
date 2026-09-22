@@ -28,6 +28,7 @@
   Windows(PowerShell):  $env:CHIRASHI_TOKEN="..."; $env:BRAVE_KEY="..."; python pc_discovery.py
 """
 import os, sys, time, argparse, urllib.parse, re, socket
+from concurrent.futures import ThreadPoolExecutor   # crt.sh 게시판 확인 병렬화(2026-09-22)
 
 try:
     import requests
@@ -263,7 +264,7 @@ def looks_like_board(url):
 #   실측(2026-09-18): .or.kr(협회·비영리) 그누보드 수율 ~13%(3582도메인), cafe24 쇼핑몰은 ~0%(게시판 없음),
 #   .ac.kr(대학)도 0%(자체CMS). → .or.kr>.co.kr>.kr 우선, .ac.kr·cafe24쇼핑몰 제외.
 #   crt.sh는 TLD당 1회 조회가 무거움(~1MB)이라 여러 발굴루프에 1회만(_CRTSH_EVERY), TLD는 커서로 순환.
-_CRTSH_TLDS = [".or.kr", ".co.kr", ".kr"]   # 게시판 수율 순(대학 .ac.kr 제외, .go.kr은 crt.sh 404+정부기관이라 제외)
+_CRTSH_TLDS = [".co.kr", ".kr", ".or.kr"]   # ★2026-09-22 .co.kr(상업) 우선 — .or.kr(협회·비영리)은 그누보드 홍보판 수율 낮음(실측 표본40 게시판0). .ac.kr·.go.kr 제외(대학/정부·404)
 _CRTSH_CURSOR_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".pc_discovery_crtsh")
 _CRTSH_SEEN_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".pc_discovery_crtsh_seen")
 
@@ -289,23 +290,30 @@ def _crtsh_save_seen(seen):
     except Exception: pass
 
 def _crtsh_domains(tld):
-    """crt.sh에서 해당 TLD 도메인 목록(고유·대표도메인만). 실패 시 []."""
-    try:
-        r = requests.get(f"https://crt.sh/?q=%25{tld}&output=json", headers=UA, timeout=60, verify=False)
-        if r.status_code != 200 or not (r.text or "").strip():
-            log(f"  crt.sh {tld} HTTP {r.status_code}"); return []
-        import json as _json
-        data = _json.loads(r.text)
-        doms = set()
-        for e in data:
-            for d in str(e.get("name_value", "")).split("\n"):
-                d = d.strip().lower()
-                # 대표 도메인만: 와일드카드·모바일미러(m.) 제외, 서브도메인 깊이 제한
-                if d.endswith(tld) and not d.startswith("*") and not d.startswith("m.") and d.count(".") <= 3:
-                    doms.add(d)
-        return list(doms)
-    except Exception as e:
-        log(f"  crt.sh {tld} 예외: {str(e)[:80]}"); return []
+    """crt.sh에서 해당 TLD 도메인 목록(고유·대표도메인만). 실패 시 [].
+       ★502 재시도(2026-09-22): crt.sh는 무료라 큰 TLD 쿼리에 502(Bad Gateway) 간헐 발생 → 백오프 3회."""
+    import json as _json
+    for _att in range(3):
+        try:
+            r = requests.get(f"https://crt.sh/?q=%25{tld}&output=json", headers=UA, timeout=70, verify=False)
+            if r.status_code == 502 or r.status_code == 503:
+                if _att < 2: time.sleep(5); continue
+                log(f"  crt.sh {tld} HTTP {r.status_code}(과부하) — 이번 회 스킵"); return []
+            if r.status_code != 200 or not (r.text or "").strip():
+                log(f"  crt.sh {tld} HTTP {r.status_code}"); return []
+            data = _json.loads(r.text)
+            doms = set()
+            for e in data:
+                for d in str(e.get("name_value", "")).split("\n"):
+                    d = d.strip().lower()
+                    # 대표 도메인만: 와일드카드·모바일미러(m.) 제외, 서브도메인 깊이 제한
+                    if d.endswith(tld) and not d.startswith("*") and not d.startswith("m.") and d.count(".") <= 3:
+                        doms.add(d)
+            return list(doms)
+        except Exception as e:
+            if _att < 2: time.sleep(5); continue
+            log(f"  crt.sh {tld} 예외: {str(e)[:80]}"); return []
+    return []
 
 _ERR_WORDS = ("오류안내", "존재하지 않", "없는 게시판", "페이지를 찾을 수 없", "잘못된 접근", "비정상적인", "권한이 없")
 _BO_TRY = ("free", "qa", "notice", "community", "board", "bbs", "sboard", "gallery")
@@ -373,9 +381,12 @@ def _has_board(dom):
         return "", 0   # 그누보드 사이트지만 열린 게시판 못 찾음
     return "", 0
 
-def crtsh_discover(skip_domains, max_check=60):
+def crtsh_discover(skip_domains, max_check=300):
     """crt.sh 1개 TLD를 훑어 신규 도메인 중 게시판 있는 것만 서버로 ingest.
-       skip_domains: 서버가 아는 도메인(중복 제외). max_check: 이번 회 게시판 확인할 신규 도메인 수(부하 관리)."""
+       skip_domains: 서버가 아는 도메인(중복 제외). max_check: 이번 회 게시판 확인할 신규 도메인 수.
+       ★2026-09-22 대표님 'crt.sh 훑기 키워': 병렬화(ThreadPool)+max_check 60→300 상향.
+         _has_board는 대부분 도메인을 홈 1회로 빨리 스킵(그누보드 아님)하므로 병렬이면 300개도 ~1분.
+         노드 IP 부하는 동시 12스레드로 제한(0.5s 순차 대기 제거 — 병렬 자체가 분산)."""
     tld = _CRTSH_TLDS[_crtsh_read_cursor() % len(_CRTSH_TLDS)]
     _crtsh_write_cursor(_crtsh_read_cursor() + 1)
     log(f"[crt.sh 발굴] {tld} 도메인 수집 중…")
@@ -385,17 +396,21 @@ def crtsh_discover(skip_domains, max_check=60):
     seen = _crtsh_load_seen()
     # 아직 판정 안 한 신규 도메인만(서버 known + 로컬 seen 제외)
     fresh = [d for d in doms if d not in skip_domains and d not in seen and d.replace("www.", "") not in skip_domains]
-    log(f"[crt.sh 발굴] {tld} 총 {len(doms)}개 · 미판정 {len(fresh)}개 → 이번 회 {min(len(fresh), max_check)}개 게시판 확인")
+    batch = fresh[:max_check]
+    log(f"[crt.sh 발굴] {tld} 총 {len(doms)}개 · 미판정 {len(fresh)}개 → 이번 회 {len(batch)}개 게시판 확인(병렬)")
+    for d in batch:
+        seen.add(d)
     found = []   # (url, monopoly_score)
     checked = 0
-    for d in fresh[:max_check]:
-        seen.add(d)
-        bu, score = _has_board(d)
-        if bu:
-            found.append((bu, score))
-            log(f"  ✅게시판 발견(독점점수 {score}): {bu}")
-        checked += 1
-        time.sleep(0.5)   # 노드 IP 부하·차단 방지
+    def _check(d):
+        try: return _has_board(d)
+        except Exception: return "", 0
+    with ThreadPoolExecutor(max_workers=12) as _ex:
+        for d, (bu, score) in zip(batch, _ex.map(_check, batch)):
+            checked += 1
+            if bu:
+                found.append((bu, score))
+                log(f"  ✅게시판 발견(독점점수 {score}): {bu}")
     _crtsh_save_seen(seen)
     # ★독점점수 높은 순 정렬(2026-09-18 대표님 '독점 가능 사이트 우선'): 경쟁없는 방치판을 먼저 전송·발행.
     found.sort(key=lambda x: x[1], reverse=True)
@@ -526,7 +541,7 @@ def main():
     ap.add_argument("--once", action="store_true", help="한 번만 실행하고 종료")
     ap.add_argument("--interval", type=int, default=300, help="반복 간격(초, 기본 300=5분)")
     ap.add_argument("--max-queries", type=int, default=30, help="한 회당 검색어 수(기본 30)")
-    ap.add_argument("--crtsh-every", type=int, default=4, help="crt.sh 발굴을 몇 발굴루프마다 1회(기본 4=약20분마다)")
+    ap.add_argument("--crtsh-every", type=int, default=2, help="crt.sh 발굴을 몇 발굴루프마다 1회(기본 2=약10분마다). ★2026-09-22 병렬화로 회당 300개 ~1분이라 빈도 상향(4→2)")
     a = ap.parse_args()
     log(f"찌라시 PC 발굴 시작 — 서버 {SERVER}")
     if a.once:
