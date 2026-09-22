@@ -10720,7 +10720,11 @@ def api_pipeline_report_site():
                                  'workroom_id':str(r.get('workroom_id') or ''),'workroom_name':str(r.get('workroom_name') or ''),   # ★작업실별 이력(2026-09-15)
                                  'status':'done','result_url':url,'message':url,'attempts':0,'node':node_id,'alive':'yes'})
                     finalize_post(_site,True)
-                add_log(f'[Cafe24 발행성공] {str(_nm)[:24]} — PC로컬({node_id}) → {url}'.rstrip())
+                # ★라벨 정정(2026-09-22 대표님 'cafe24 실패 절반' 혼란 해소): 이 회신 경로는 노드가 위임받은
+                #   전 플랫폼(gnuboard·cafe24·kboard) 공통이라 gnuboard 성공도 'Cafe24'로 찍혀 혼란 → 실제 platform으로.
+                _plat=(_site or {}).get('platform') or ''
+                _plabel='Cafe24' if _plat=='cafe24' else ('KBoard' if _plat=='kboard' else '그누보드')
+                add_log(f'[{_plabel} 발행성공] {str(_nm)[:24]} — PC로컬({node_id}) → {url}'.rstrip())
             else:
                 set_site_flag(sid,write_test_status='failed',pc_claim_by='',pc_claim_expire=0)
                 if _site: finalize_post(_site,False,str(r.get('msg') or '')[:120])
@@ -10745,7 +10749,9 @@ def api_pipeline_report_site():
                         add_log(f'[가입포기] {str(_nm)[:24]} — 자동가입 {_sfc}회 실패, 이후 가입 재시도 안 함(노드 시간 절약)')
                     else:
                         set_site_flag(sid,signup_fail_count=_sfc)
-                add_log(f'[Cafe24 발행실패] {str(_nm)[:24]} — {str(r.get("msg") or "")[:80]}')
+                _platf=(_site or {}).get('platform') or ''
+                _plabelf='Cafe24' if _platf=='cafe24' else ('KBoard' if _platf=='kboard' else '그누보드')
+                add_log(f'[{_plabelf} 발행실패] {str(_nm)[:24]} — {str(r.get("msg") or "")[:80]}')
             applied+=1
         except Exception as e:
             add_log(f'[PC노드 사이트회신오류] {str(e)[:60]}')
