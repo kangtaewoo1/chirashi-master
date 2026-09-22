@@ -8130,8 +8130,13 @@ def auto_signup(site, submit=True):
     if len(nick)<4: nick=(nick+secrets.token_hex(3))[:8]
     _kor_name=re.sub(r'[^가-힣]','',str(cfg.get('brand') or ''))   # 브랜드에서 한글만
     name=_kor_name if len(_kor_name)>=2 else '홍길동'
+    # ★그누보드 필수필드 미입력 실패 해결(2026-09-22 대표님 '자동가입 성공률↑' 실측): 성별·생년월일·휴대전화가
+    #   필수인 커스텀 스킨에서 '성별/휴대전화/생년월일 항목은 필수' alert로 반려됐음(vals_by_role에 없어 미입력).
+    #   순수 숫자 11자리 전화(하이픈 없이 — 그누보드 valid_mb_hp가 /^01[0-9]{8,9}$/), 생년월일 YYYYMMDD.
+    _phone_digits=re.sub(r'\D','',str(format_phone(pick_phone(cfg)) or '') or '01082755736') or '01082755736'
+    if not _phone_digits.startswith('01'): _phone_digits='010'+_phone_digits[-8:]
     vals_by_role={'id':mid,'password':pw,'password_confirm':pw,'email':email,
-                  'nickname':nick,'name':name}
+                  'nickname':nick,'name':name,'phone':_phone_digits[:11],'birth':'19900315'}
     d=get_driver()
     # 그누보드 가입은 register.php(약관) → 동의 → register_form.php(실제 폼) 2단계다.
     # register_form.php를 GET으로 직접 열면 약관 화면이라 필드가 없다 → 약관부터 진행.
@@ -8240,10 +8245,68 @@ def auto_signup(site, submit=True):
         'email':"#reg_mb_email,input[name='mb_email'],input[name='email'],input[name='user_email'],input[type='email']",
         'name':"input[name='mb_name'],input[name='name'],input[name='user_name']",
         'nickname':"#reg_mb_nick,input[name='mb_nick'],input[name='nickname'],input[name='nick']",
+        # ★필수 추가필드(2026-09-22): 단일 input형 전화·생년월일. 라디오형 성별·분할형은 아래서 별도 처리.
+        'phone':"#reg_mb_hp,input[name='mb_hp'],input[name='mb_tel'],#reg_mb_tel,input[name='hp'],input[name='phone'],input[name='mobile'],input[name='tel']",
+        'birth':"#reg_mb_birth,input[name='mb_birth'],input[name='birth'],input[name='birthday']",
     }
     for role,sel in GNU_STD.items():
         if role not in filled:
             _fill(role, sel)
+    # ★성별(mb_sex) 라디오/셀렉트 — send_keys 불가라 별도 처리(2026-09-22 워크플로 처방).
+    #   value 하드코딩 금지(사이트별 M/F·1/2·남/여) — 존재하는 옵션 중 하나를 그대로 선택.
+    try:
+        _sex_radios=_safe_find(d,"input[type='radio'][name='mb_sex'],input[type='radio'][name='sex'],input[type='radio'][name='gender']")
+        if _sex_radios:
+            for _r in _sex_radios:
+                try:
+                    if _r.is_displayed():
+                        d.execute_script('arguments[0].click()',_r); break
+                except Exception: pass
+        else:
+            for _selname in ('mb_sex','sex','gender'):
+                _sels=_safe_find(d,f"select[name='{_selname}']")
+                if _sels:
+                    try:
+                        from selenium.webdriver.support.ui import Select as _Sel
+                        _opts=[o for o in _sels[0].find_elements(By.TAG_NAME,'option') if (o.get_attribute('value') or '').strip()]
+                        if _opts: _Sel(_sels[0]).select_by_value(_opts[0].get_attribute('value'))
+                    except Exception: pass
+                    break
+    except Exception: pass
+    # ★생년월일 3분할 select 폴백(단일 input은 위 GNU_STD에서 처리됨). 년/월/일 select면 각각 채움.
+    try:
+        if not _safe_find(d,"input[name='mb_birth']"):
+            for _yn,_yv in (("birth_year","1990"),("mb_birth_y","1990"),("year","1990")):
+                _ys=_safe_find(d,f"select[name='{_yn}']")
+                if _ys:
+                    try:
+                        from selenium.webdriver.support.ui import Select as _Sel2
+                        _Sel2(_ys[0]).select_by_value(_yv)
+                    except Exception:
+                        try:
+                            _oo=[o for o in _ys[0].find_elements(By.TAG_NAME,'option') if (o.get_attribute('value') or '').strip()]
+                            if _oo: _Sel2(_ys[0]).select_by_index(len(_oo)//2)
+                        except Exception: pass
+                    break
+            for _mn in ("birth_month","mb_birth_m","month"):
+                _ms=_safe_find(d,f"select[name='{_mn}']")
+                if _ms:
+                    try:
+                        from selenium.webdriver.support.ui import Select as _Sel3
+                        _oo=[o for o in _ms[0].find_elements(By.TAG_NAME,'option') if (o.get_attribute('value') or '').strip()]
+                        if _oo: _Sel3(_ms[0]).select_by_index(0)
+                    except Exception: pass
+                    break
+            for _dn in ("birth_day","mb_birth_d","day"):
+                _ds=_safe_find(d,f"select[name='{_dn}']")
+                if _ds:
+                    try:
+                        from selenium.webdriver.support.ui import Select as _Sel4
+                        _oo=[o for o in _ds[0].find_elements(By.TAG_NAME,'option') if (o.get_attribute('value') or '').strip()]
+                        if _oo: _Sel4(_ds[0]).select_by_index(0)
+                    except Exception: pass
+                    break
+    except Exception: pass
     # 3.5b) ★cafe24 표준 회원가입 필드(2026-09-12 대표님 실측: 구씨공방 가입폼에 주소·휴대전화·비번확인·이름이 필수인데
     #   그누보드 필드명만 채워 미입력→가입실패). cafe24 실제 name들(member_id/passwd/user_passwd_confirm/name/email1/
     #   phone[]/mobile[]/postcode1/addr1)을 직접 채운다. 전화·주소는 더미 유효값(가입만 통과하면 됨).
@@ -11834,7 +11897,9 @@ def _signup_credentials(site, rules=None):
     mid=(prefix+suffix)[:max_id]
     if len(mid)<min_id: mid=(mid+secrets.token_hex(8))[:min_id]
     plen=max(8,min(64,int(rules.get('password_min',10) or 10)))
-    special=str(rules.get('password_specials') or '!@#$%')
+    # ★특수문자 화이트리스트 확대(2026-09-22 워크플로 처방): 커스텀 스킨 정규식이 !@#$% 밖 특수문자를 요구하는
+    #   경우 대비. 대부분 스킨이 허용하는 안전집합 !@#$%^&*. (learn_signup_profile이 pattern 파싱하면 그게 우선)
+    special=str(rules.get('password_specials') or '!@#$%^&*')
     alphabet='abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789'
     chars=[secrets.choice('abcdefghjkmnpqrstuvwxyz'),secrets.choice('ABCDEFGHJKMNPQRSTUVWXYZ'),
            secrets.choice('23456789')]
