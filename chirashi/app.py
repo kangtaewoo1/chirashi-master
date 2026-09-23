@@ -9902,7 +9902,7 @@ def chk():
     #  /api/test/* = 발행 테스트 트리거(등록 사이트에 실제 글1건 발행해 검증).
     _p=request.path
     if _p=='/api/version': return  # 배포 SHA 확인 — 공개(민감정보 없음)
-    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/sites/unlock-cafe24','/api/sites/unlock-verified','/api/sites/purge-fake-cafe24','/api/sites/mark-login-required','/api/sites/unmark-login-required','/api/candidates/rescreen-cafe24','/api/candidates/revive-rejected','/api/candidates/unrevive-nonillegal','/api/regions/normalize-existing','/api/site-board','/api/history','/api/ops-dashboard','/api/imap/test','/api/openai/usage','/api/twocaptcha/usage','/api/config/clear-key','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/candidates/reject-unworkable','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/report-site','/api/unlocker/test','/api/sbr/test','/api/diag') or _p.startswith('/api/test/'):
+    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/sites/unlock-cafe24','/api/sites/unlock-verified','/api/sites/purge-fake-cafe24','/api/sites/mark-login-required','/api/sites/unmark-login-required','/api/sites/retry-signup','/api/candidates/rescreen-cafe24','/api/candidates/revive-rejected','/api/candidates/unrevive-nonillegal','/api/regions/normalize-existing','/api/site-board','/api/history','/api/ops-dashboard','/api/imap/test','/api/openai/usage','/api/twocaptcha/usage','/api/config/clear-key','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/candidates/reject-unworkable','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/report-site','/api/unlocker/test','/api/sbr/test','/api/diag') or _p.startswith('/api/test/'):
         tok=(request.args.get('token') or '').strip()
         cfgtok=(load_config().get('log_token') or '').strip()
         if cfgtok and tok==cfgtok:
@@ -10430,6 +10430,29 @@ def api_unmark_login_required():
         if hit and not dry: save_sites(sites)
     add_log(f'[로그인필요 오마킹 복구] {"(미리보기)" if dry else ""} {len(hit)}곳 비회원 발행 재개','정리')
     return jsonify({'ok':True,'dry_run':dry,'unmarked':len(hit),'sites':hit})
+
+@app.route('/api/sites/retry-signup',methods=['POST'])
+def api_sites_retry_signup():
+    """★자동가입 재시도 촉진(2026-09-24 대표님 '남은 로그인벽 사이트 자동가입 재시도'): signup_exhausted=True로
+       가입 포기된(3회 실패) 사이트의 signup_exhausted·signup_fail_count·fail_streak를 리셋해 노드가 다시
+       자동가입을 시도하게 한다. login_required는 유지(진짜 로그인 필요한 곳이므로 비회원 발행 아님).
+       어제 보강한 자동가입(성별·전화·생년 필드) 반영 후 재시도용. body {dry_run?}.
+       대상: login_required=True·mb_id 없음·permission=True·verified http·signup_exhausted=True."""
+    d=request.get_json(silent=True) or {}
+    dry=bool(d.get('dry_run'))
+    hit=[]
+    with POST_LOCK:
+        sites=load_sites()
+        for s in sites:
+            if not s.get('login_required') or str(s.get('mb_id') or '').strip() or not s.get('permission'): continue
+            if str(s.get('verified_post_url') or '')[:4]!='http': continue
+            if not s.get('signup_exhausted'): continue
+            hit.append((s.get('name') or s.get('site_url') or '')[:34])
+            if not dry:
+                s['signup_exhausted']=False; s['signup_fail_count']=0; s['fail_streak']=0
+        if hit and not dry: save_sites(sites)
+    add_log(f'[자동가입 재시도] {"(미리보기)" if dry else ""} {len(hit)}곳 가입포기 해제 → 노드 재시도','정리')
+    return jsonify({'ok':True,'dry_run':dry,'retried':len(hit),'sites':hit})
 
 @app.route('/api/sites/unlock-verified',methods=['POST'])
 def api_sites_unlock_verified():
