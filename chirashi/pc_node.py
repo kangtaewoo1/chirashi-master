@@ -195,17 +195,24 @@ def _report(results):
 
 
 def _claim_sites(n):
-    """★등록 Cafe24 사이트(집 IP 필요)를 서버에서 claim. 반환: 사이트 리스트(비번 포함)."""
-    try:
-        r = requests.post(f"{SERVER}/api/pipeline/claim-sites?token={SERVER_TOKEN}",
-                          json={"node_id": NODE_ID, "n": n}, headers=UA, timeout=30, verify=False)
-        if r.status_code != 200:
+    """★등록 Cafe24 사이트(집 IP 필요)를 서버에서 claim. 반환: 사이트 리스트(비번 포함).
+       ★2026-09-24 claim 타임아웃 완화(대표님 '노드가 claim 자주 놓침'): 서버(Vultr)가 6워커 발행+발굴로
+       순간 응답이 밀리면 30/60초 타임아웃에 claim을 놓쳐 그 사이클 발행 0이 됐음(로그 'Read timed out').
+       → 타임아웃 45초 + 타임아웃/네트워크 오류 시 1회 재시도(짧은 대기)로 순간 지연 흡수."""
+    for _att in range(2):
+        try:
+            r = requests.post(f"{SERVER}/api/pipeline/claim-sites?token={SERVER_TOKEN}",
+                              json={"node_id": NODE_ID, "n": n}, headers=UA, timeout=45, verify=False)
+            if r.status_code != 200:
+                return []
+            d = r.json() or {}
+            if isinstance(d.get("llm"), dict): _SERVER_LLM.update(d["llm"])   # 서버 LLM 설정 보관
+            return d.get("sites") or []
+        except Exception:
+            if _att < 1:
+                time.sleep(3); continue   # 순간 지연 → 3초 후 1회 재시도
             return []
-        d = r.json() or {}
-        if isinstance(d.get("llm"), dict): _SERVER_LLM.update(d["llm"])   # 서버 LLM 설정 보관
-        return d.get("sites") or []
-    except Exception:
-        return []
+    return []
 
 
 def _report_sites(results):

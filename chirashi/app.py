@@ -10648,7 +10648,12 @@ def api_pipeline_claim_sites():
                 #   → 스팸/금지어(영구)·금지단어 차단은 재위임 안 함, 그 외 잠긴 사이트는 6시간(locked_retry_sec)에 1회만.
                 _lfr=str(s.get('last_fail_reason') or '')
                 if any(k in _lfr for k in ('스팸/금지어','금지단어','영구 제외')): return False
+                # ★fail_streak 높은 잠긴 사이트 재위임 백오프 강화(2026-09-24 대표님 '금지어 반복 낭비'):
+                #   렌탈샵(fs 370)처럼 last_fail이 '글쓰기 못찾음'으로 찍혔지만 실제 금지어 벽인 cafe24가
+                #   6h마다 재시도돼 워커·Turnstile 낭비. fail_streak 50+ 잠긴 사이트는 더 긴 백오프(24h)로.
+                _fs=int(s.get('fail_streak',0) or 0)
                 _lrs=max(1800,int(_cfg.get('locked_retry_sec',21600) or 21600))
+                if _fs>=50: _lrs=max(_lrs,86400)   # 50회+ 실패 = 사실상 영구벽 → 하루 1회만
                 return float(s.get('pc_last_try',0) or 0) < now-_lrs
             # ★정기 발행도 노드가(2026-09-11): 검증·허용된 Cafe24는 서버(CF 차단 IP) 대신 노드가 계속 발행.
             #   서버 큐는 _cafe24_node_only로 제외됨. 사이트별 1일 한도·최소 간격은 서버와 같은 규칙.
