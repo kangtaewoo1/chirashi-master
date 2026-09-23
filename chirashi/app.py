@@ -12006,19 +12006,24 @@ def api_wk_stats():
     # 500곳 목표 진행률: 실게시 검증된 발행 가능 사이트 수 집계
     try:
         cfg=load_config(); goal=int(cfg.get('site_goal',500) or 500)
-        ADMIN=('manual_admin','admin_bulk','legacy_admin','candidate_registered','verified_test')
         sites=load_sites()
-        publishable=sum(1 for s in sites if s.get('permission') and s.get('registration_source') in ADMIN
-                        and s.get('status')!='rejected' and s.get('write_test_status')=='passed'
-                        and str(s.get('verified_post_url') or '').startswith(('http://','https://')))
+        # ★표기 정확화(2026-09-24 대표님 '발행가능 33뿐?' — 실측: 발행처 110곳인데 화면 33): 옛 카운트가
+        #   write_test_status=='passed' + registration_source ADMIN을 요구해, 발행이력(verified_post_url) 있는
+        #   62/72 사이트가 그 플래그 없다는 이유로 빠져 실제(110)보다 훨씬 작게 표기됐음. 발행 판정과 같은
+        #   is_autopostable(verified_post_url http면 인정) 기준으로 통일해 실제 '발행 가능한' 사이트 수를 센다.
+        #   (발행 로직은 안 건드림 — 카운트 표기만 정확화.)
+        publishable=sum(1 for s in sites if is_autopostable(s))
+        # ★발행처 총수(발행허용=permission)도 함께 — 화면에 '발행가능 N · 발행처 M'으로 보여 오해 방지.
+        site_perm=sum(1 for s in sites if s.get('permission') and s.get('status')!='rejected'
+                      and str(s.get('verified_post_url') or '').startswith(('http://','https://')))
     except Exception:
-        goal=500; publishable=0
+        goal=500; publishable=0; site_perm=0
     # 실제 발행 주체는 작업실 워커(_WR_SLOTS의 독립 크롬 스레드)다. 살아있는 슬롯 수를 센다.
     try: wr_workers=sum(1 for t in _WR_SLOTS.values() if t and t.is_alive())
     except Exception: wr_workers=0
     return jsonify({**wk_stats,'active':wk_active,'paused':wk_paused,
                     'wr_workers':wr_workers,
-                    'site_goal':goal,'site_done':publishable})
+                    'site_goal':goal,'site_done':publishable,'site_perm':site_perm})
 
 @app.route('/api/workers/reset',methods=['POST'])
 def api_wk_reset():
@@ -14173,7 +14178,7 @@ async function purgeDeadSites(){
 // ---- 통계/진행률 폴링 ----
 async function poll(){const r=await api('/workers/stats','GET');if(!r)return;
 $('q').textContent=r.queued||0;$('ok').textContent=r.success||0;$('fl').textContent=r.fail||0;$('sk').textContent=r.skipped||0;
-if(r.site_goal){const sg=$('siteGoal');if(sg){const done=r.site_done||0,goal=r.site_goal;const pct=Math.round(done/goal*100);sg.textContent=done+'/'+goal+' ('+pct+'%)';sg.style.color=done>=goal?'var(--g)':'var(--p)'}}
+if(r.site_goal){const sg=$('siteGoal');if(sg){const done=r.site_done||0,perm=r.site_perm||done,goal=r.site_goal;const pct=Math.round(perm/goal*100);sg.textContent=done+'곳 · 발행처 '+perm+'/'+goal+' ('+pct+'%)';sg.style.color=perm>=goal?'var(--g)':'var(--p)'}}
 const wn=(r.wr_workers==null?null:r.wr_workers);if(wn!=null){$('ws').textContent=wn>0?(wn+'개 발행중'):'정지';$('ws').style.color=wn>0?'var(--g)':'var(--d)';}else{const wstate=r.paused?'PAUSE':(r.active?'ON':'OFF');$('ws').textContent=wstate;$('ws').style.color=r.paused?'var(--y)':(r.active?'var(--g)':'var(--d)');}
 const total=r.total||0,done=r.done||0;
 if(total>0){$('progCard').style.display='block';const pct=Math.round(done/total*100);$('progBar').style.width=pct+'%';$('progText').textContent=`${done} / ${total} (${pct}%)`+(r.skipped?` · 스킵 ${r.skipped}`:'')}else{$('progCard').style.display='none'}
