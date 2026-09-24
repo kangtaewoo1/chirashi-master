@@ -5490,6 +5490,37 @@ def discover_login(d, base):
         return {'login_url':base+path,'id_sel':_css_for(texts[0]),'pw_sel':_css_for(pws[0]),'login_btn':discover_submit(d)}
     return None
 
+_LAST_POST_QUALITY={}   # thread_name -> {'title_in_head':bool,'body_kw':int,'body_len':int,'score':int}
+def _measure_post_quality(d, title):
+    """★발행 품질 측정(2026-09-25 대표님 '상위노출' — 실측: 우리 3위 글은 본문 356자·제목 title 미반영으로
+       2위 경쟁사(본문4965자·17회)에 밀렸음). 발행 성공 직후 '실제로 상위노출될 글인지'를 점수화한다.
+       측정: ①제목 앞부분이 게시판 <title>에 반영됐나(구글 SERP 제목=이게 결정) ②본문에 메인키워드가
+       충분히 실렸나 ③본문이 온전한 길이인가(스킨이 우리 글 삼키면 짧음). 점수 0~3. 순위 잘 나올 게시판 선별용.
+       실패해도 발행 판정엔 영향 없음(순수 품질 신호)."""
+    from selenium.webdriver.common.by import By
+    q={'title_in_head':False,'body_kw':0,'body_len':0,'score':0}
+    try:
+        # 메인키워드 = 제목 맨 앞 지역+업종 토큰(공백/번호 전까지)
+        _t=str(title or '').strip()
+        _main=re.split(r'[\s\[\]()【】《》〈〉『』「」▷◀▶◁0-9O]', _t)[0][:12] if _t else ''
+        # ① <title> 반영
+        try:
+            _head=(d.title or '')
+            if _main and _main in _head: q['title_in_head']=True
+        except Exception: pass
+        # ②③ 본문 텍스트
+        try:
+            _body=d.find_element(By.TAG_NAME,'body').text or ''
+        except Exception: _body=''
+        q['body_len']=len(_body)
+        if _main: q['body_kw']=_body.count(_main)
+        # 점수: title반영(1) + 키워드3회+(1) + 본문800자+(1)
+        q['score']=(1 if q['title_in_head'] else 0)+(1 if q['body_kw']>=3 else 0)+(1 if q['body_len']>=800 else 0)
+    except Exception: pass
+    try: _LAST_POST_QUALITY[threading.current_thread().name]=q
+    except Exception: pass
+    return q
+
 def _confirm_posted(d, title=None, base=None, bo=None):
     """★가짜 성공 차단 + 제목 재조회 구제(2026-09-12 대표님 approved 정체 실측):
        개별 글 상세 URL(wr_id>0·read/view·/article/명/bo/숫자{3,})이거나 완료문구면 성공.
@@ -5502,6 +5533,8 @@ def _confirm_posted(d, title=None, base=None, bo=None):
     _c24_detail=('read.html' in cl or 'view.html' in cl or 'board_view' in cl
                  or re.search(r'/article/[^/]+/\d+/\d{3,}', cl) is not None)
     if (not _is_write) and (_wr_ok or _c24_detail):
+        try: _measure_post_quality(d, title)   # 상세페이지 도달 = 발행 품질 측정(순위 잘 나올 글인지)
+        except Exception: pass
         return True,curl
     try: body=d.find_element(By.TAG_NAME,'body').text[:1500]
     except Exception: body=''
@@ -9440,10 +9473,31 @@ def _publish_combo_to_site(s, kw, wname, rid, cfg, writer_name=''):
             try: set_site_flag(fresh.get('id'),secret_forced=True,secret_at=_kst_now().strftime('%Y-%m-%d %H:%M'))
             except Exception: pass
             ok=False; reason_ko='비밀글(구글 색인불가)'; reason='secret_post'
+        # ★발행 품질 기록(2026-09-25 대표님 '상위노출'): 성공 시 _confirm_posted가 측정한 품질점수를
+        #   사이트에 누적한다. title 반영·본문 키워드·본문 길이 = 구글 순위에 직결(실측: 우리 3위 글은
+        #   본문 356자·title 미반영으로 2위에 밀렸음). 저품질(score<=1) 게시판은 발행돼도 상위노출 안 되므로
+        #   post_quality_avg로 나중에 선별(고품질 게시판에 발행 집중). 발행 판정엔 영향 없음.
+        _q=None
+        if ok and str(msg).startswith('http'):
+            try:
+                _q=_LAST_POST_QUALITY.get(threading.current_thread().name)
+            except Exception: _q=None
+            if isinstance(_q,dict):
+                try:
+                    _sc=int(_q.get('score',0))
+                    _prev_n=int(fresh.get('quality_n',0) or 0); _prev_s=float(fresh.get('quality_sum',0) or 0)
+                    set_site_flag(fresh.get('id'),
+                        quality_n=_prev_n+1, quality_sum=_prev_s+_sc,
+                        quality_avg=round((_prev_s+_sc)/(_prev_n+1),2),
+                        quality_last=_sc,
+                        quality_title_ok=bool(_q.get('title_in_head')),
+                        quality_body_len=int(_q.get('body_len',0)))
+                except Exception: pass
         history_update(jid,status='done' if ok else 'failed',
             result_url=(msg if ok and str(msg).startswith('http') else ''),
             fail_reason=('' if ok else reason),fail_reason_ko=('' if ok else reason_ko),
             post_password=_pw, is_secret=_secret,      # 이력에 비번·비밀글여부 저장
+            post_quality=(int(_q.get('score')) if isinstance(_q,dict) else ''),
             alive=('yes' if ok and str(msg).startswith('http') else ''),message=str(msg)[:300])
         with STATS_LOCK:
             if ok: wk_stats['success']+=1
