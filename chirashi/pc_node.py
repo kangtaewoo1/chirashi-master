@@ -255,7 +255,9 @@ def _process_site(s, cfg):
             kw = {"지역": _srv_kw.get("지역",""), "서비스": _srv_kw.get("서비스",""), "브랜드": _srv_kw.get("브랜드","")}
         else:
             pool = app.collect_all_keywords()
-            kw = app.pick_keywords(pool, cfg) if pool else {"지역": "인천", "서비스": "노래방", "브랜드": cfg.get("brand", "") or "테스트"}
+            # ★인천홍마니 폴백 제거(2026-09-25 대표님 '인천홍마니 글 자꾸 쓰네'): cfg.brand=인천홍마니라
+            #   폴백 시 제목에 인천홍마니가 박혔음. app._local_brand로 지역+업종 자동 브랜드 사용.
+            kw = app.pick_keywords(pool, cfg) if pool else {"지역": "인천", "서비스": "노래방", "브랜드": app._local_brand("인천","노래방")}
         # ★작업실 이미지 사용(2026-09-18 대표님 '저장해둔 이미지 쓰라했는데 랜덤이미지 나옴'): 이미지·작업실
         #   데이터는 서버 data/에만 있고 노드 로컬엔 없으므로, 서버가 claim때 실어보낸 image_urls(그 작업실
         #   저장이미지 절대URL)를 generate_article에 직접 넘긴다. 없으면 이미지 없이(picsum 랜덤 폴백 안 함).
@@ -332,7 +334,7 @@ def _process_one(cand, cfg, pool):
     res = {"cand_id": cid, "ok": False, "result_url": "", "mb_id": "", "mb_pass": "",
            "bo_table": tmp["bo_table"], "msg": "", "is_temp": False}
     try:
-        kw = app.pick_keywords(pool, cfg) if pool else {"지역": "인천", "서비스": "셔츠룸", "브랜드": cfg.get("brand", "") or "테스트"}
+        kw = app.pick_keywords(pool, cfg) if pool else {"지역": "인천", "서비스": "셔츠룸", "브랜드": app._local_brand("인천","셔츠룸")}   # 인천홍마니 폴백 제거(2026-09-25)
         # 후보(미승격)엔 작업실이 대개 없지만, 있으면 그 작업실 저장 이미지 사용(없으면 None→이미지 없이 or 전역풀).
         html, title = app.generate_article(kw, cfg, unique=True, workroom_id=cand.get("workroom_id") or None)
         _just_signed = False
@@ -566,7 +568,7 @@ def cafe24_test(url, mb_id="", mb_pass=""):
     log(f"Cafe24 로컬크롬 발행 테스트 — {base} (bo={site['bo_table']}) · {'계정 로그인' if _login else '비회원(계정없음)'}")
     log("크롬 띄우는 중... CF 통과 시도(실제 IP라 데이터센터보다 유리). 최대 1~2분.")
     try:
-        kw = {"지역": "인천", "서비스": "노래방", "브랜드": cfg.get("brand", "") or "테스트"}
+        kw = {"지역": "인천", "서비스": "노래방", "브랜드": app._local_brand("인천","노래방")}   # 인천홍마니 폴백 제거(2026-09-25)
         html, title = app.generate_article(kw, cfg, unique=True)
         ok, msg = app.cafe24_post(site, title, html, skip_login=not _login)  # 계정 주면 로그인 발행
         if ok and str(msg).startswith(("http://", "https://")):
