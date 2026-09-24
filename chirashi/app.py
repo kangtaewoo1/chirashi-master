@@ -1138,7 +1138,10 @@ def build_title(r,s,b,cfg,raw=None):
         _chk = r if any(r.endswith(x) for x in _kw_service_suffixes()) else f'{r}{s}'
         check_region_suspect(_chk)
     except Exception: pass
-    base=f'{r} {ph} {s} {b}'.strip()
+    # ★제목 번호 위치(2026-09-24 대표님 '노송동+쓰리노가 붙어야지 그리고나서 번호'): 예전 '{r} {ph} {s}'는
+    #   지역과 업종 사이에 번호가 껴 메인키워드(노송동쓰리노)가 쪼개졌음 → '지역+업종' 붙여 맨 앞에 두고 번호는 그 뒤로.
+    #   메인키워드가 제목 맨 앞 15자 안에 온전히 모여 구글 SEO·가독성 유리.
+    base=f'{r}{s} {ph} {b}'.strip()
     angle=random.choice(TITLE_ANGLES)
     cand=f'{base} {angle}'
     return (cand if len(cand)<=140 else base)[:140], raw
