@@ -7285,6 +7285,42 @@ def _post_read_block_reason(url):
         return '본문 없음(빈 페이지)'
     return ''
 
+_ROBOTS_CACHE={}   # origin -> True(전체차단) / False / None(판정불가)
+def _robots_blocks_all(page_url):
+    """★robots.txt 전체차단 판별(2026-09-25 대표님 '색인 안 될 사이트 구분 — 굳이 글쓸 필요없잖아'):
+       도메인 robots.txt가 Googlebot 또는 전체(*)에 'Disallow: /'면 이 사이트 글은 절대 구글 색인 안 됨.
+       발행 전에 걸러 헛발행 방지. 도메인별 캐시(같은 도메인 재조회 안 함). 판정불가/오류는 False(안전하게 통과)."""
+    try:
+        from urllib.parse import urlsplit
+        pr=urlsplit(page_url); origin=f'{pr.scheme}://{pr.netloc}'
+        if origin in _ROBOTS_CACHE: return bool(_ROBOTS_CACHE[origin])
+        import urllib.request as _u, ssl as _s
+        _ctx=_s.create_default_context(); _ctx.check_hostname=False; _ctx.verify_mode=_s.CERT_NONE
+        req=_u.Request(origin+'/robots.txt',headers={'User-Agent':'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)'})
+        txt=_u.urlopen(req,timeout=8,context=_ctx).read(20000).decode('utf-8','ignore')
+        # User-agent 블록 파싱: * 또는 googlebot 그룹에 'Disallow: /' 단독(전체차단)이 있나
+        blocked=False; cur_agents=[];
+        for line in txt.splitlines():
+            l=line.split('#')[0].strip()
+            if not l: continue
+            m=re.match(r'(?i)user-agent:\s*(.+)',l)
+            if m:
+                if not cur_agents or _robots_just_saw_rule[0]: cur_agents=[]  # 새 그룹 시작
+                cur_agents.append(m.group(1).strip().lower()); _robots_just_saw_rule[0]=False; continue
+            dm=re.match(r'(?i)disallow:\s*(.*)',l)
+            if dm:
+                _robots_just_saw_rule[0]=True
+                path=dm.group(1).strip()
+                if path=='/' and any(a in ('*','googlebot') for a in cur_agents):
+                    blocked=True; break
+        _ROBOTS_CACHE[origin]=blocked
+        return blocked
+    except Exception:
+        try: _ROBOTS_CACHE[origin]=False
+        except Exception: pass
+        return False
+_robots_just_saw_rule=[False]
+
 def _index_block_reason(html, page_url, resp_headers=None):
     """글 상세페이지 HTML을 보고 '구글이 색인 못할 신호'가 있으면 사유 문자열, 없으면 ''.
        ★대표님 지시 2026-09-11 '며칠 지나도 색인 안 되는 글 많다 — 발행 전 미리 판별'.
@@ -7294,6 +7330,11 @@ def _index_block_reason(html, page_url, resp_headers=None):
     if not html: return ''
     h=html
     try:
+        # 0) robots.txt 전체차단 — 가장 확실한 색인 불가 신호(2026-09-25). 도메인 자체가 구글봇을 막음.
+        try:
+            if page_url and _robots_blocks_all(page_url):
+                return 'robots.txt 전체차단(Disallow: /) — 구글이 크롤 자체 불가(발행해도 SEO0)'
+        except Exception: pass
         # 1) meta robots / X-Robots-Tag 의 noindex — 구글에게 '색인하지 마' 명시. 가장 확실.
         mm=re.search(r'<meta[^>]+name=["\']robots["\'][^>]*>', h, re.I)
         if mm and re.search(r'noindex', mm.group(0), re.I):
