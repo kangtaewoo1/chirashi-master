@@ -1123,6 +1123,29 @@ def _img_alt_caption(r, s, b, p, i):
     cap=f'{rv} {angle} · {ph}'.strip(' ·') if ph else f'{rv} {angle}'
     return alt, cap
 
+_NEARBY_CACHE={}
+def _nearby_regions(r, n=2):
+    """★제목 다중지역 롱테일(2026-09-25 대표님 '②번처럼 인근지역 넣어 상위노출' — 인근2개):
+       메인지역 r의 '같은 구 인접 동 1개' + '인근 역 1개'를 반환(최대 n개). 한 글이 여러 지역 검색에 노출.
+       근거: regions_full(같은 구의 다른 동)·_STATIONS(인근 역). 실존 지역만(가짜 생성 안 함).
+       예: 용현동 → ['도화동','제물포역']. 못 찾으면 빈 리스트(안전)."""
+    r=str(r or '').strip()
+    if not r: return []
+    if r in _NEARBY_CACHE: return _NEARBY_CACHE[r][:n]
+    out=[]
+    base=re.sub(r'(역|동|읍|면|리|가|구|시|군)$','',r) or r
+    # ★인근 '역'만 사용(2026-09-25 수정): 인근 '동' 매칭은 전국 동명 중복(도화동=인천·서울 둘 다,
+    #   강남→소양동 등)으로 엉뚱한 지역을 뽑아 SEO 역효과 → 폐기. 역명은 전국 고유라 정확하므로 역만 쓴다.
+    #   base로 시작하는 _STATIONS 역(r 자신 제외). 예: 용현→(없음), 청담→청담역, 수원→수원역·수원시청역.
+    try:
+        st=[x for x in _STATIONS if x!=r and len(base)>=2 and x.startswith(base)]
+        random.shuffle(st)
+        out.extend(st[:n])
+    except Exception: pass
+    out=list(dict.fromkeys([x for x in out if x]))
+    _NEARBY_CACHE[r]=out
+    return out[:n]
+
 def build_title(r,s,b,cfg,raw=None):
     """★제목: 메인키워드1 + 번호 + 키워드2 + 키워드3 + (앵글변수). 순서·키워드 유지(대표님 2026-09-08 고정)하되,
        ★2026-09-18 대표님 '묶음발행 제목 다똑같다': 같은 메인키워드로 여러 사이트 발행 시 번호표기만 달라
@@ -1141,10 +1164,18 @@ def build_title(r,s,b,cfg,raw=None):
     # ★제목 번호 위치(2026-09-24 대표님 '노송동+쓰리노가 붙어야지 그리고나서 번호'): 예전 '{r} {ph} {s}'는
     #   지역과 업종 사이에 번호가 껴 메인키워드(노송동쓰리노)가 쪼개졌음 → '지역+업종' 붙여 맨 앞에 두고 번호는 그 뒤로.
     #   메인키워드가 제목 맨 앞 15자 안에 온전히 모여 구글 SEO·가독성 유리.
-    base=f'{r}{s} {ph} {b}'.strip()
+    # ★다중지역 롱테일(2026-09-25 대표님 '인근지역 2개 추가'): 메인 '{지역}{업종}'+번호 뒤에
+    #   인근 동·역의 '{인근}{업종}'을 2개까지 붙여 한 글이 여러 지역 검색에 노출(②번 글 강점 복제).
+    #   메인키워드는 맨 앞 고정 유지. 너무 길면(140자) 롱테일부터 줄인다.
+    _near=[f'{x}{s}' for x in _nearby_regions(r,2)]
+    _long=(' '+' '.join(_near)) if _near else ''
+    base=f'{r}{s} {ph}{_long} {b}'.strip()
     angle=random.choice(TITLE_ANGLES)
     cand=f'{base} {angle}'
-    return (cand if len(cand)<=140 else base)[:140], raw
+    if len(cand)>140:
+        # 앵글 → 롱테일 순으로 줄여 길이 맞춤(메인키워드·번호·브랜드는 보존)
+        cand=base if len(base)<=140 else f'{r}{s} {ph} {b}'
+    return cand[:140], raw
 
 # ==================== 키워드 풀 (엑셀/CSV 랜덤 치환) ====================
 REGION_ORDER=('인천','경기','서울','충남','충북','세종','전북','전남','경상','경북','강원','제주')
