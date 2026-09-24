@@ -1805,28 +1805,44 @@ def generate_rich_html(keywords, cfg, workroom_id=None, image_urls=None):
     #   '맨 앞 = 메인키워드({r}{s})'로 시작 + 지역SEO 메타 형식. H1 바로 뒤(TOC보다 위)에 배치해
     #   검색결과 스니펫이 이 문장이 되게 한다. 매 글 유니크(변형 풀 랜덤 조합).
     meta_intro=_build_meta_intro(r,s,b,p,mood,cfg)
-    html=(head
-        + f'<p style="font-size:16px;margin:0 0 22px;line-height:1.95;color:#222;">{meta_intro}</p>'
-        + IMG(0, f'{r} {s}의 {mood.split()[0]} 공간')
-        + toc_box                                    # ★상단 목차 박스
-        + SEC('📍',f'{r} {s} 안내')
-        + f'<p style="font-size:16px;margin:16px 0;line-height:1.95;">{intro}</p>'
-        + f'<p style="font-size:15px;margin:14px 0;line-height:1.95;color:#333;">{para2}</p>'
-        + price_box
-        + numbered_faq                               # ★번호 매긴 H2 FAQ(01. 02. 03. 04.)
-        + SEC('📊',f'{r} {s} 서비스 비교') + compare_table
-        + ''.join(blocks)
-        + SEC('🧭',f'{r} {s} 이용 흐름') + steps_html
-        + SEC('#️⃣','핵심 키워드')
-        + f'<div style="margin:12px 0 6px;line-height:2.4;">{hashtags}</div>'
-        + f'<div style="margin:38px 0 8px;padding:24px;background:#1f2733;color:#e8edf4;border-radius:12px;text-align:center;">'
+    # 공통 조각(변형 템플릿들이 골라 쓰는 부품)
+    _p_intro=f'<p style="font-size:16px;margin:16px 0;line-height:1.95;">{intro}</p>'
+    _p_para2=f'<p style="font-size:15px;margin:14px 0;line-height:1.95;color:#333;">{para2}</p>'
+    _p_metaintro=f'<p style="font-size:16px;margin:0 0 22px;line-height:1.95;color:#222;">{meta_intro}</p>'
+    _cta=(f'<div style="margin:38px 0 8px;padding:24px;background:#1f2733;color:#e8edf4;border-radius:12px;text-align:center;">'
           f'<p style="font-size:17px;font-weight:bold;color:#fff;margin:0 0 14px;">🎁 {r} {s} 예약 혜택</p>'
           f'<div style="display:inline-grid;gap:6px;text-align:center;font-size:14px;color:#cbd5e1;margin-bottom:14px;">'
           f'<div>일반 예약</div><div style="color:{c2};font-size:18px;">⚡</div><div>당일 예약</div>'
           f'<div style="color:{c2};font-size:18px;">⚡</div><div style="font-weight:bold;color:#ffe082;">VIP 서비스</div></div>'
           f'<p style="font-size:24px;font-weight:bold;color:#fff;margin:0;background:#0f1621;padding:12px;border-radius:8px;"><a href="{tel_href(rawphone)}" style="color:#fff;text-decoration:none;display:block;">📞 {p}</a></p>'
-          f'<p style="font-size:13px;color:#cbd5e1;margin:8px 0 0;">📱 터치하면 바로 연결</p></div>'
-        + f'<p style="font-size:12px;color:#999;text-align:right;margin:16px 0 8px;">최신 업데이트 · {_upd} 기준</p>')
+          f'<p style="font-size:13px;color:#cbd5e1;margin:8px 0 0;">📱 터치하면 바로 연결</p></div>')
+    _foot=f'<p style="font-size:12px;color:#999;text-align:right;margin:16px 0 8px;">최신 업데이트 · {_upd} 기준</p>'
+    _sec_review=SEC('🌟',f'{r} {s} 이용 후기')+reviews
+    _sec_faqnum=numbered_faq
+    _sec_faqdl=SEC('💬',f'{r} {s} 자주 묻는 질문')+f'<dl style="font-size:15px;margin:14px 0;">{faqs}</dl>'
+    _sec_compare=SEC('📊',f'{r} {s} 서비스 비교')+compare_table
+    _sec_steps=SEC('🧭',f'{r} {s} 이용 흐름')+steps_html
+    _sec_price=price_box
+    _sec_tags=SEC('#️⃣','핵심 키워드')+f'<div style="margin:12px 0 6px;line-height:2.4;">{hashtags}</div>'
+    _sec_guide=SEC('📍',f'{r} {s} 안내')+_p_intro+_p_para2
+    # ★글 템플릿 4종 다양화(2026-09-24 대표님 '글이 너무 단순 패턴·이쁘게 안쓰네' + 색인율 개선):
+    #   지금까지 '동일 스켈레톤 + 문장풀 랜덤'이라 글 지문이 거의 같아 구글이 '얇은 중복'으로 색인 거부('크롤링됨-색인안됨').
+    #   → 구조 자체가 다른 템플릿 4종을 랜덤 선택해 글마다 뼈대를 바꾼다(_build_meta_intro 첫문단=스니펫은 전 템플릿 공통 유지).
+    #   T1 종합형(현행) / T2 후기·서사 우선형 / T3 Q&A 백서형 / T4 간결 가이드형(TOC 없음).
+    _tmpl=random.choice(['t1','t2','t3','t4'])
+    if _tmpl=='t1':      # 종합형(현행 순서)
+        body=[_p_metaintro, IMG(0,f'{r} {s}의 {mood.split()[0]} 공간'), toc_box, _sec_guide,
+              _sec_price, _sec_faqnum, _sec_compare, ''.join(blocks), _sec_steps, _sec_tags]
+    elif _tmpl=='t2':    # 후기·서사 우선형 — 후기를 상단에, 서사 문단 강조, 비교표는 뒤
+        body=[_p_metaintro, _sec_review, IMG(0,f'{r} {s} 이용 후기 공간'), _sec_guide,
+              _sec_faqdl, ''.join([b_ for b_ in blocks if '이용 후기' not in b_]), _sec_price, _sec_steps, _sec_compare, _sec_tags]
+    elif _tmpl=='t3':    # Q&A 백서형 — 번호 FAQ를 메인 구조로 앞세우고 안내는 짧게
+        body=[_p_metaintro, _sec_faqnum, IMG(0,f'{r} {s} 안내'), _sec_guide,
+              _sec_faqdl, _sec_price, _sec_compare, _sec_steps, _sec_tags]
+    else:                # t4 간결 가이드형 — TOC/비교표 생략, 핵심 섹션만 담백하게
+        body=[_p_metaintro, IMG(0,f'{r} {s}의 {mood.split()[0]} 공간'), _sec_guide, _sec_price,
+              ''.join(random.sample(blocks,min(3,len(blocks)))), _sec_steps, _sec_faqdl, _sec_tags]
+    html=head+''.join(body)+_cta+_foot
     return html, title
 
 # ==================== GPT 본문 생성 (선택) ====================
