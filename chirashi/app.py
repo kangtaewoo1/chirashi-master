@@ -9394,6 +9394,9 @@ def _pick_next_combo(rooms):
         room=rooms[_WR_RR[0]%len(rooms)]; _WR_RR[0]=(_WR_RR[0]+1)%max(1,len(rooms))
         combos=_workroom_combos(room); rid=room.get('id','')
         if not combos: return None
+        # ★전국 랜덤 분산(2026-09-25): 조합 많으면 매번 무작위 1개 → 연속 몰림 제거(_pick_combo_for_room과 동일).
+        if len(combos)>=20:
+            return (room, combos[random.randrange(len(combos))], 0, len(combos))
         order=_WR_ORDER.get(rid)
         if not order or len(order)!=len(combos):
             order=list(range(len(combos))); random.shuffle(order); _WR_ORDER[rid]=order
@@ -9411,6 +9414,13 @@ def _pick_combo_for_room(room):
     with _WR_PICK_LOCK:
         combos=_workroom_combos(room); rid=room.get('id','')
         if not combos: return None
+        # ★전국 랜덤 분산(2026-09-25 대표님 '싹 다 연속나열 — 전국 랜덤 분산'): 예전엔 셔플순열을 커서로
+        #   순차 소진(cur,cur+1,…)해 6워커가 인접 위치를 동시에 집어 같은 지역이 몇 분간 몰렸음(봉동·녹번동
+        #   반복). → 조합이 많으면(20개+) 매 발행마다 '전체에서 무작위 1개'를 뽑아 연속 몰림을 원천 제거.
+        #   조합이 적으면(<20) 기존 순열소진 유지(적은 풀에서 랜덤은 중복 잦음).
+        if len(combos)>=20:
+            idx=random.randrange(len(combos))
+            return (room, combos[idx], 0, len(combos))
         order=_WR_ORDER.get(rid)
         if not order or len(order)!=len(combos):
             order=list(range(len(combos))); random.shuffle(order); _WR_ORDER[rid]=order
