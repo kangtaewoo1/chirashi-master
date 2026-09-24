@@ -1613,10 +1613,21 @@ def _build_meta_intro(r, s, b, p, mood, cfg=None):
     # 맨 앞 글자 = 메인키워드(<strong>). 구글 스니펫이 메인키워드로 시작하게.
     return f'<strong>{main}</strong>{lead} {desc}. {phone_sent} {loc}{close}'
 
+def _local_brand(r, s):
+    """★브랜드 미지정 시 '인천홍마니' 대신 지역+관련업종 기반 자연 브랜드 생성
+       (2026-09-24 대표님 '인천홍마니 글 자꾸 쓰네' — 전국 노래방/마사지 글에 인천홍마니가 박혀 어색).
+       예: 강남+쓰리노 → '강남가라오케'. 지역성 유지하면서 업종은 다른 관련업종으로."""
+    r=str(r or '').strip(); s=str(s or '').strip()
+    _msg=any(k in s for k in ('마사지','안마','스웨디시','건마','왁싱','홈타이','출장','타이','1인샵','아로마','로미','테라피'))
+    _mpool=['출장마사지','스웨디시','타이마사지','건마','1인샵','아로마','왁싱']
+    _ypool=[x for x in RELATED_POOL if x not in _mpool]
+    pool=[x for x in (_mpool if _msg else (_ypool or RELATED_POOL)) if x!=s] or (RELATED_POOL)
+    return (r+random.choice(pool)) if r else (s or '')
+
 def generate_rich_html(keywords, cfg, workroom_id=None, image_urls=None):
     r=(keywords.get('지역') or '서울').strip()
     s=(keywords.get('서비스') or '셔츠룸').strip()
-    b=(keywords.get('브랜드') or cfg.get('brand') or '인천홍마니').strip()
+    b=(keywords.get('브랜드') or '').strip() or _local_brand(r,s)
     # 제목: 키워드1 + 랜덤변형 번호 + 키워드2 + 키워드3  / 본문: 선택된 번호의 정상 표기
     title,rawphone=build_title(r,s,b,cfg)
     p=format_phone(rawphone)
@@ -1875,7 +1886,7 @@ def generate_post_gpt(keywords, cfg, workroom_id=None, image_urls=None):
     """OpenAI로 키워드1 중심의 장문 HTML 본문 생성. 실패 시 템플릿으로 폴백."""
     import requests as _rq
     r=(keywords.get('지역') or '서울').strip(); s=(keywords.get('서비스') or '셔츠룸').strip()
-    b=(keywords.get('브랜드') or cfg.get('brand') or '인천홍마니').strip()
+    b=(keywords.get('브랜드') or '').strip() or _local_brand(r,s)   # 인천홍마니 하드코딩 제거(대표님 2026-09-24)
     _rawph=pick_phone(cfg); p=format_phone(_rawph)
     # ★제공자 분기(대표님 2026-09-11): nvidia면 build.nvidia.com 무료 엔드포인트(OpenAI 호환 형식). 비용 $0.
     _prov=(cfg.get('llm_provider') or 'openrouter').strip().lower()
