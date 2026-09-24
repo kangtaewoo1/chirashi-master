@@ -1566,8 +1566,19 @@ def _build_meta_intro(r, s, b, p, mood, cfg=None):
     lead=random.choice(lead_pool)
     close=random.choice(close_pool)
     loc=(f'{ctx_str} 인근에 위치하며, ' if ctx_str else '')
+    # ★번호 위치 자연화(2026-09-24 대표님 '번호 위치 왜 저래' — 실제 발행글에서 번호가 두 문장 사이에
+    #   맥락 없이 '…도움이 됩니다. 010·5603·7569 중요한 자리를 위한…'처럼 붕 떠 어색했음).
+    #   → 번호를 자연스러운 연결 문장으로 감싼다(문구 풀로 반복 방지). 메인키워드 <strong>은 그대로 맨 앞 1회.
+    phone_pool=[
+        f'문의는 {phone} 로 주시면 됩니다.',
+        f'예약·상담은 {phone} 에서 안내해 드립니다.',
+        f'자세한 내용은 {phone} 로 연락 주세요.',
+        f'궁금하신 점은 {phone} 로 문의하시면 됩니다.',
+        f'예약 문의는 {phone} 입니다.',
+    ]
+    phone_sent=random.choice(phone_pool)
     # 맨 앞 글자 = 메인키워드(<strong>). 구글 스니펫이 메인키워드로 시작하게.
-    return f'<strong>{main}</strong>{lead} {phone} {desc}. {loc}{close}'
+    return f'<strong>{main}</strong>{lead} {desc}. {phone_sent} {loc}{close}'
 
 def generate_rich_html(keywords, cfg, workroom_id=None, image_urls=None):
     r=(keywords.get('지역') or '서울').strip()
@@ -3893,10 +3904,19 @@ def gnuboard_post(site, title, content_html, skip_login=False):
     # ★간헐 'wr_subject 없음' 실패 해결(2026-09-15 대표님 '왜 가끔만 성공'): 폼은 있는데 병렬발행 부하·
     #   느린 서버로 렌더 전에 1회 조회해 빈 결과→즉시 실패했음(실측: msdv·jinsungware는 폼 정상 존재인데
     #   fail_streak 84~113). 최대 ~5초 폴링(0.5s×10)해 렌더되면 진행 → 간헐실패 대폭 감소.
+    # ★셀렉터 확장(2026-09-24 대표님 '로그인 실패 꼭 해결'): 표준 wr_subject 외에도 비표준 스킨의
+    #   제목 필드(name='subject')·write_update.php를 action으로 갖는 글쓰기 form을 폼 존재로 인정.
+    #   실측(p029.4in1.co.kr 등): write_update 폼은 실재하는데 wr_subject만 찾다 false '폼 없음' 처리됨.
+    _WR_SEL="input[name='wr_subject'],input#wr_subject,input[name='subject'],textarea[name='wr_content'],form[name='fwrite'],form#fwrite"
+    # ★진짜 로그인필요 정확분류(2026-09-24): openestimate·완주군 등은 login.php로 리다이렉트하지 않고
+    #   HTTP 200 페이지에서 JS로 alert('글을 쓸 권한이 없습니다. 회원이시라면 로그인 후...')만 띄운다.
+    #   alert 감지(3870)가 타이밍상 놓치면 여기까지 흘러 'wr_subject 없음'으로 오분류됐음(83건 중 다수).
+    #   → 폴링마다 page_source에서 권한없음/로그인후이용 문구를 확인해 진짜 로그인필요로 정확 반환.
+    _NEED_LOGIN_TXT=('글을 쓸 권한이 없','권한이 없습니다','회원이시라면 로그인','로그인 후 이용','로그인 후 이용해','회원만 글쓰기','회원만 작성','로그인이 필요')
     _wr_found=False
     for _ in range(10):
         try:
-            if d.find_elements(By.CSS_SELECTOR,"input[name='wr_subject'],input#wr_subject"):
+            if d.find_elements(By.CSS_SELECTOR,_WR_SEL):
                 _wr_found=True; break
         except Exception:
             return False,'글쓰기 폼 확인 중 세션 오류 — 로그인 필요 추정'
@@ -3905,8 +3925,18 @@ def gnuboard_post(site, title, content_html, skip_login=False):
             if 'login' in (d.current_url or '').lower():
                 return False,'로그인이 필요한 게시판입니다 — 비회원 글쓰기 불가'
         except Exception: pass
+        # ★JS 권한없음 스킨 감지: 리다이렉트 없이 200으로 온 '회원 전용' 안내를 잡아 자동가입으로 넘긴다.
+        try:
+            _ps=(d.page_source or '')
+            if (not d.find_elements(By.CSS_SELECTOR,_WR_SEL)) and any(t in _ps for t in _NEED_LOGIN_TXT):
+                return False,'로그인이 필요한 게시판입니다 — 비회원 글쓰기 불가(권한없음 안내)'
+        except Exception: pass
         time.sleep(0.5)
     if not _wr_found:
+        # 마지막으로 남은 alert도 확인해 로그인/권한 문구면 로그인필요로 정확 분류
+        _la=' '.join(dismiss_alerts(d) or [])
+        if any(k in _la for k in ('권한이 없','권한 없','로그인','회원만','회원가입')):
+            return False,'로그인이 필요한 게시판입니다 — 비회원 글쓰기 불가(권한 alert)'
         return False,'글쓰기 폼(wr_subject) 없음 — 로그인 필요/비표준 스킨'
 
     # 보안 차단은 즉시 중단한다. CAPTCHA는 내용을 채운 뒤 사람이 입력한다.
