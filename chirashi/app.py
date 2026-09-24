@@ -9671,7 +9671,7 @@ def run_member_job(mid, minute_key):
         for _ in range(cnt):
             kw=pick_keywords(pool,cfg)
             total+=enqueue_generated(sites,{'지역':kw.get('지역',''),'서비스':kw.get('서비스',''),
-                                            '브랜드':kw.get('브랜드','') or cfg.get('brand','')},cfg,
+                                            '브랜드':kw.get('브랜드','') or _local_brand(kw.get('지역',''),kw.get('서비스',''))},cfg,
                                      {'region':kw.get('지역',''),'service':kw.get('서비스',''),'member':nm})[0]
         # 실행 기록
         mem=load_members()
@@ -9844,7 +9844,7 @@ def handle_tg_command(cfg,text):
             if not pool: reply('형식: /발행 지역,서비스[,브랜드]\n또는 키워드 풀을 등록하면 /발행 만으로 랜덤 발행'); return
             kw=pick_keywords(pool,cfg)
         else:
-            kw={'지역':parts[0],'서비스':parts[1],'브랜드':(parts[2] if len(parts)>2 and parts[2] else cfg.get('brand',''))}
+            kw={'지역':parts[0],'서비스':parts[1],'브랜드':(parts[2] if len(parts)>2 and parts[2] else _local_brand(parts[0],parts[1]))}
         try:
             n=enqueue_generated(sites,{'지역':kw.get('지역',''),'서비스':kw.get('서비스',''),'브랜드':kw.get('브랜드','')},cfg,{'region':kw.get('지역',''),'service':kw.get('서비스','')})[0]
             if n and not wk_active: start_workers(cfg.get('workers',2))
@@ -11484,7 +11484,7 @@ def api_member_run(mid):
     for _ in range(cnt):
         kw=pick_keywords(pool,cfg)
         total+=enqueue_generated(sites,{'지역':kw.get('지역',''),'서비스':kw.get('서비스',''),
-                                        '브랜드':kw.get('브랜드','') or cfg.get('brand','')},cfg,
+                                        '브랜드':kw.get('브랜드','') or _local_brand(kw.get('지역',''),kw.get('서비스',''))},cfg,
                                  {'region':kw.get('지역',''),'service':kw.get('서비스',''),'member':nm})[0]
     mem=load_members()
     for x in mem:
@@ -11763,7 +11763,7 @@ def api_post():
     allowed=[s for s in sites if is_permitted(s)]
     # 2개 이상 사이트 + 키워드 있으면 사이트마다 유니크 재생성(중복 방지). 단일 사이트는 검토한 원문 그대로.
     if len(allowed)>1 and region and service:
-        q,blocked=enqueue_generated(sites,{'지역':region,'서비스':service,'브랜드':brand or cfg.get('brand','')},cfg,meta)
+        q,blocked=enqueue_generated(sites,{'지역':region,'서비스':service,'브랜드':brand or _local_brand(region,service)},cfg,meta)
         note='사이트별 유니크 본문 재생성'
     else:
         if title and content: remember_if_unique(title,content)   # 원문도 중복DB에 기록
@@ -12824,7 +12824,7 @@ def api_site_dryrun(sid):
     cfg=load_config()
     # ★실제 작업실 키워드 사용(2026-09-18 대표님 '인천 셔츠룸 테스트 그만'): 풀 있으면 랜덤, 없어도 검증만 하는 드라이런이라 최소 폴백.
     _pool=collect_all_keywords()
-    kw=pick_keywords(_pool,cfg) if _pool else {'지역':'인천','서비스':'노래방','브랜드':cfg.get('brand','') or ''}
+    kw=pick_keywords(_pool,cfg) if _pool else {'지역':'인천','서비스':'노래방','브랜드':_local_brand('인천','노래방')}
     html,title=generate_article(kw,cfg,unique=False)   # 중복DB 오염 방지
     try:
         ok,steps=dryrun_post(site,title,html)
