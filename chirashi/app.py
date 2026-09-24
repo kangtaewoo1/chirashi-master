@@ -1242,7 +1242,10 @@ def _kw_service_suffixes():
             '일본출장','태국출장','러시아출장','한국출장','콜걸','아가씨','홈타이','기모노룸','미러룸','레깅스룸',
             '란제리룸','텐프로','쩜오','3no','풀싸롱','퍼블릭','보도','룸빵','터치룸','하퍼','노래빠','가요주점',
             '비즈니스바','노래클럽','유흥주점','다국적노래방','하이퍼블릭','룸싸롱','셔츠룸','쓰리노','노래방',
-            '가라오케','마사지','스웨디시','건마','왁싱','호빠'},key=len,reverse=True)
+            '가라오케','마사지','스웨디시','건마','왁싱','호빠',
+            # ★마사지 계열 누락 보강(2026-09-24 짬뽕 수정): '1인샵'·'타이마사지'·'아로마'·'로미로미' 등이 없어
+            #   '일산1인샵'이 통째 지역화됐음.
+            '1인샵','타이마사지','아로마','로미로미','스포츠마사지','감성마사지','왁싱샵','1인샵마사지'},key=len,reverse=True)
     return _KW_SERVICE_SUF
 
 def _region_is_real(reg):
@@ -1453,11 +1456,31 @@ SERVICE_SUFFIXES=['하이퍼블릭','다국적노래방','가요주점','비즈�
 def _split_main_keyword(main):
     """메인 키워드에서 (지역=구/동, 업종) 분리. 업종 접미사를 뒤에서부터 최장일치로 찾는다.
        예) '교동노래방'→('교동','노래방'), '강남하이퍼블릭'→('강남','하이퍼블릭'),
-           업종을 못 찾으면 지역=전체, 업종='' 반환."""
+           업종을 못 찾으면 지역=전체, 업종='' 반환.
+       ★짬뽕 키워드 근본수정(2026-09-24 대표님 '사파한국출장동 짬뽕이 뭐냐'): 세 가지 버그 해결.
+         ①짧은 SERVICE_SUFFIXES(23개) 대신 완전목록 `_kw_service_suffixes()`(출장샵·한국출장·터치룸 등 포함)
+           을 써서 '사파한국출장'→지역'사파'·업종'한국출장'으로 정확 분리(예전엔 통째 지역화→무작위 업종 부착).
+         ②끝에 행정접미사(동/역/구 등)가 업종 뒤에 붙은 경우(사파한국출장'동')도 떼고 재시도.
+         ③업종이 문자열 중간에 박힌 경우 그 앞을 지역으로."""
     m=str(main or '').strip()
-    for suf in sorted(SERVICE_SUFFIXES,key=len,reverse=True):
+    sufs=_kw_service_suffixes()   # 완전 업종목록(길이 내림차순 정렬돼 있음)
+    # ① 끝에서 최장일치
+    for suf in sufs:
         if m.endswith(suf) and len(m)>len(suf):
             return m[:-len(suf)].strip(), suf
+    # ② 끝 행정접미사 떼고 재시도 (사파한국출장'동' → 사파한국출장 → 사파/한국출장)
+    m2=re.sub(r'(동|읍|면|리|가|구|시|군|역)$','',m)
+    if m2 and m2!=m:
+        for suf in sufs:
+            if m2.endswith(suf) and len(m2)>len(suf):
+                return m2[:-len(suf)].strip(), suf
+    # ③ 업종이 문자열 중간에 박힌 경우: 가장 앞에 나타나는 업종 앞부분을 지역으로
+    best=None
+    for suf in sufs:
+        i=m.find(suf)
+        if i>0 and (best is None or i<best[0]): best=(i,suf)
+    if best:
+        return m[:best[0]].strip(), best[1]
     return m, ''
 
 def _fix_dong(region):
@@ -1506,8 +1529,14 @@ def _auto_subkeywords(main):
     if region and not re.search(r'(동|읍|면|리|가|구|시|군|역)$',region) and not re.search(r'\d$',region):
         region=region+'동'
     svc=service or random.choice(RELATED_POOL)
-    # 브랜드: 그 동/구에 매칭된 다른 관련 업종을 붙여 지역성 유지(중복 방지 위해 svc와 다르게)
-    pool=[x for x in RELATED_POOL if x!=svc] or RELATED_POOL
+    # ★카테고리 일치(2026-09-24 대표님 '사파한국출장 짬뽕이 뭐냐' — 마사지 서비스에 유흥 브랜드(노래빠)가
+    #   붙어 짬뽕이 됐음): 서비스가 마사지 계열이면 브랜드도 마사지 계열에서, 유흥이면 유흥에서 뽑는다.
+    _MASSAGE_POOL=['출장마사지','출장안마','스웨디시','건마','타이마사지','1인샵','왁싱','홈타이','아로마','로미로미','태국출장','한국출장']
+    _YU_POOL=[x for x in RELATED_POOL if x not in _MASSAGE_POOL]
+    _is_massage=any(k in str(svc) for k in ('마사지','안마','스웨디시','건마','왁싱','홈타이','출장','타이','아로마','1인샵','로미'))
+    catpool=_MASSAGE_POOL if _is_massage else (_YU_POOL or RELATED_POOL)
+    # 브랜드: 같은 카테고리의 다른 업종을 붙여 지역성·업종 일관성 유지(중복 방지 위해 svc와 다르게)
+    pool=[x for x in catpool if x!=svc] or catpool
     brand=region+random.choice(pool)
     return {'지역':region,'서비스':svc,'브랜드':brand}
 
