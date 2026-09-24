@@ -9384,6 +9384,27 @@ _WR_ORDER={}    # workroom_id -> 섞은 조합 인덱스 순열(지역 편중 �
 _WR_RR=[0]      # 작업실 라운드로빈 포인터(모든 작업실을 번갈아 동시 진행)
 _WR_PICK_LOCK=threading.Lock()  # ★워크스틸링: 여러 워커가 '다음 조합'을 겹치지 않게 뽑도록 보호(대표님 '하이브리드')
 
+def _combo_region_ok(combo):
+    """★쓸모없는 지역 제외(2026-09-25 대표님 '유동인구 없는 지역 제외 — 단 지방은 함(전국)'):
+       조합의 지역이 실존(regions_full 정식 동/역·시·구)이면 발행, 아니면 스킵.
+       실측: 봉동·칠북동·불정동 등 대표님이 지목한 쓸모없는 지역은 regions_full에 없음(면 소속 '리'를
+       '동'으로 잘못 만든 가짜/초시골). _region_is_real이 True면 유지(지방 소도시·군 정식 동도 실존이면 통과 = 전국 유지)."""
+    try:
+        r=str((combo.get('지역') if isinstance(combo,dict) else '') or '').strip()
+        if not r: return True
+        if combo.get('_main_only'): r=_split_main_keyword(combo.get('_main',''))[0] or r
+        return _region_is_real(r)
+    except Exception:
+        return True
+
+def _rand_real_combo(combos):
+    """조합 목록에서 '실존 지역' 조합을 무작위로 1개(최대 8회 재추첨). 다 실패하면 그냥 무작위 1개(발행 멈춤 방지)."""
+    n=len(combos)
+    for _ in range(8):
+        c=combos[random.randrange(n)]
+        if _combo_region_ok(c): return c
+    return combos[random.randrange(n)]
+
 def _pick_next_combo(rooms):
     """★공유풀 워크스틸링(대표님 지시 2026-09-09): 고정 담당 없이, 모든 워커가 이 함수로
        '다음 발행할 (작업실, 조합)'을 잠금 하에 하나씩 꺼낸다 → 놀지 않고 서로 도와 발행.
@@ -9394,9 +9415,9 @@ def _pick_next_combo(rooms):
         room=rooms[_WR_RR[0]%len(rooms)]; _WR_RR[0]=(_WR_RR[0]+1)%max(1,len(rooms))
         combos=_workroom_combos(room); rid=room.get('id','')
         if not combos: return None
-        # ★전국 랜덤 분산(2026-09-25): 조합 많으면 매번 무작위 1개 → 연속 몰림 제거(_pick_combo_for_room과 동일).
+        # ★전국 랜덤 분산 + 쓸모없는 지역 제외(2026-09-25): 조합 많으면 매번 '실존 지역' 무작위 1개.
         if len(combos)>=20:
-            return (room, combos[random.randrange(len(combos))], 0, len(combos))
+            return (room, _rand_real_combo(combos), 0, len(combos))
         order=_WR_ORDER.get(rid)
         if not order or len(order)!=len(combos):
             order=list(range(len(combos))); random.shuffle(order); _WR_ORDER[rid]=order
@@ -9419,8 +9440,7 @@ def _pick_combo_for_room(room):
         #   반복). → 조합이 많으면(20개+) 매 발행마다 '전체에서 무작위 1개'를 뽑아 연속 몰림을 원천 제거.
         #   조합이 적으면(<20) 기존 순열소진 유지(적은 풀에서 랜덤은 중복 잦음).
         if len(combos)>=20:
-            idx=random.randrange(len(combos))
-            return (room, combos[idx], 0, len(combos))
+            return (room, _rand_real_combo(combos), 0, len(combos))
         order=_WR_ORDER.get(rid)
         if not order or len(order)!=len(combos):
             order=list(range(len(combos))); random.shuffle(order); _WR_ORDER[rid]=order
