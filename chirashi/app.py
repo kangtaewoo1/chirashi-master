@@ -12198,9 +12198,19 @@ def api_history():
     # ★작업실별 균형 반환(대표님 지시 2026-09-09): 예전엔 최신 500건만 → 발행 많은 작업실(노래방)이
     #   500건을 독차지해 다른 작업실(마사지)이 안 보였음. 작업실마다 최신 300건씩 모아 반환.
     h=list(reversed(load_json(HISTORY_FILE,[])))   # 최신순
+    # ★비활성 작업실 이력 숨김(2026-09-24 대표님 '발행현황에 아직 동탄·인천 보인다 → 마사지·노래방만'):
+    #   비활성화(키워드 #주석)한 작업실은 발행을 멈췄어도 과거 이력이 작업실당 300건씩 계속 노출됐음.
+    #   현재 '활성 조합이 있는 작업실'의 이력만 보여준다(데이터는 history.json에 보존 — 되살리면 다시 보임).
+    try:
+        _active_wn={str(r.get('name') or '') for r in (load_json(WORKROOMS_FILE,[]) or []) if _workroom_combos(r)}
+    except Exception:
+        _active_wn=set()
     per={}; out=[]
     for r in h:
         wn=r.get('workroom_name') or '직접 입력'
+        # 비활성 작업실(활성목록에 없고, 실제 작업실명인 것)은 건너뜀. 직접입력·통합풀 등은 유지.
+        if _active_wn and wn not in _active_wn and wn not in ('직접 입력','통합풀',''):
+            continue
         c=per.get(wn,0)
         if c<300:   # 작업실당 최신 300건까지
             per[wn]=c+1; out.append(r)
