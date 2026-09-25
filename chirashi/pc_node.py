@@ -431,6 +431,13 @@ def run(once=False, workers=None, idle=30):
     _last_orphan_sweep = [0.0]
     while True:
         try:
+            # ★자동재시작 heartbeat(2026-09-26 대표님 '노드 자동재시작' — 사무실 노트북 5대 무인운영):
+            #   루프마다 타임스탬프 파일 기록. watchdog.bat가 이 파일이 N분 이상 안 바뀌면(=행) 파이썬을
+            #   kill하고 재시작한다. 프로세스가 죽는 것뿐 아니라 '살아있는데 멈춘(행)' 상태도 복구.
+            try:
+                with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),'.node_heartbeat'),'w',encoding='utf-8') as _hb:
+                    _hb.write(str(int(time.time())))
+            except Exception: pass
             cfg = app.load_config()
             pool = app.collect_all_keywords()
             # ★임시 크롬프로필 누수 정리(10분마다, 1시간+ 미사용분만) — 디스크 참으로 인한 발행 전멸 방지.
