@@ -8355,7 +8355,15 @@ def auto_signup(site, submit=True):
     # ★그누보드 필수필드 미입력 실패 해결(2026-09-22 대표님 '자동가입 성공률↑' 실측): 성별·생년월일·휴대전화가
     #   필수인 커스텀 스킨에서 '성별/휴대전화/생년월일 항목은 필수' alert로 반려됐음(vals_by_role에 없어 미입력).
     #   순수 숫자 11자리 전화(하이픈 없이 — 그누보드 valid_mb_hp가 /^01[0-9]{8,9}$/), 생년월일 YYYYMMDD.
-    _phone_digits=re.sub(r'\D','',str(format_phone(pick_phone(cfg)) or '') or '01082755736') or '01082755736'
+    # ★가입용 전화 분리(2026-09-28 대표님 '가입할때 5603-7569 말고 다른번호 — 카톡알림 폭탄'):
+    #   예전엔 발행번호(pick_phone=대표님 실번호)를 가입 휴대전화칸에도 써서 가입 인증문자·알림이 대표님
+    #   카톡/폰으로 쏟아졌음. 가입칸은 대부분 인증 안 하는 단순 입력이라(위 주석), config signup_phone이
+    #   있으면 그걸, 없으면 대표님 실번호가 아닌 더미(010-0000-0000 형식은 valid_mb_hp 통과하되 실번호 아님)를 쓴다.
+    _sp=re.sub(r'\D','',str(cfg.get('signup_phone') or '').strip())
+    if _sp and _sp.startswith('01') and len(_sp)>=10:
+        _phone_digits=_sp[:11]
+    else:
+        _phone_digits='01000000000'   # 더미(실번호 아님) — 가입 통과용. 실제 연락처는 본문 CTA에만 대표님 번호.
     if not _phone_digits.startswith('01'): _phone_digits='010'+_phone_digits[-8:]
     vals_by_role={'id':mid,'password':pw,'password_confirm':pw,'email':email,
                   'nickname':nick,'name':name,'phone':_phone_digits[:11],'birth':'19900315'}
@@ -9393,6 +9401,12 @@ def _combo_region_ok(combo):
         r=str((combo.get('지역') if isinstance(combo,dict) else '') or '').strip()
         if not r: return True
         if combo.get('_main_only'): r=_split_main_keyword(combo.get('_main',''))[0] or r
+        # ★깨진 키워드 제외(2026-09-28 대표님 '낙월면안마출장소동 같은 깨진 키워드 필터 강화'):
+        #   지역명에 업종어가 박혀 있으면(예 '낙월면안마출장소동' = 낙월면+안마출장소+동) = 재생성 때 지역+업종이
+        #   잘못 뭉친 가짜 지역. _region_is_real은 '낙월면'으로 시작해 실존으로 오판·통과시켰음. 업종어 포함이면 스킵.
+        _bad=('안마','마사지','출장','노래방','가라오케','셔츠룸','하이퍼블릭','쓰리노','룸싸롱','풀싸롱','스웨디시',
+              '건마','왁싱','홈타이','1인샵','아로마','퍼블릭','다국적','텐프로','쩜오','콜걸','안마출장소')
+        if any(w in r for w in _bad): return False   # 지역명에 업종어 = 깨진 키워드 → 발행 안 함
         return _region_is_real(r)
     except Exception:
         return True
