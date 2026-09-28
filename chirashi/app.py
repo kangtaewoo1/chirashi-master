@@ -9412,11 +9412,34 @@ _WR_ORDER={}    # workroom_id -> 섞은 조합 인덱스 순열(지역 편중 �
 _WR_RR=[0]      # 작업실 라운드로빈 포인터(모든 작업실을 번갈아 동시 진행)
 _WR_PICK_LOCK=threading.Lock()  # ★워크스틸링: 여러 워커가 '다음 조합'을 겹치지 않게 뽑도록 보호(대표님 '하이브리드')
 
+def _is_rural_myeon_eup(r):
+    """★유동인구 없는 시골 면(面)·읍(邑) 소재지면 True=발행제외(2026-09-29 대표님 '아영노래방은 뭔지역이냐;;'
+       → '면·읍 둘 다 제외' 결정). 아영면·우천면·봉동읍 같은 시골은 노래방/유흥 SEO 무의미.
+       단 번화가·역세권(서면·수영·해운대)·동·구·시는 유지. 판정 우선순위:
+       ①region+역이 지하철역이면 번화가 → 유지  ②동/구/시로 실존하면 도시 → 유지
+       ③그 외 면/읍으로 끝나거나 region+면/읍이 실존이면 → 제외."""
+    try:
+        r=str(r or '').strip()
+        if not r: return False
+        names=set(_all_region_names())
+        # ① 역세권(번화가) → 유지
+        if r in _STATIONS or (r+'역') in _STATIONS: return False
+        # ② 도시(동/구/시로 실존) → 유지
+        if (r+'동') in names or (r+'구') in names or (r+'시') in names: return False
+        if r in names and not r.endswith(('면','읍')): return False   # 정확일치가 면/읍 아니면 유지(동·리·가 등)
+        # ③ 면/읍 소재지 → 제외
+        if r.endswith(('면','읍')): return True
+        if (r+'면') in names or (r+'읍') in names: return True
+        return False
+    except Exception:
+        return False
+
 def _combo_region_ok(combo):
     """★쓸모없는 지역 제외(2026-09-25 대표님 '유동인구 없는 지역 제외 — 단 지방은 함(전국)'):
        조합의 지역이 실존(regions_full 정식 동/역·시·구)이면 발행, 아니면 스킵.
        실측: 봉동·칠북동·불정동 등 대표님이 지목한 쓸모없는 지역은 regions_full에 없음(면 소속 '리'를
-       '동'으로 잘못 만든 가짜/초시골). _region_is_real이 True면 유지(지방 소도시·군 정식 동도 실존이면 통과 = 전국 유지)."""
+       '동'으로 잘못 만든 가짜/초시골). _region_is_real이 True면 유지(지방 소도시·군 정식 동도 실존이면 통과 = 전국 유지).
+       ★2026-09-29 추가: 실존하더라도 시골 면/읍(아영면·봉동읍 등)은 제외(대표님 '면·읍 둘 다 제외'). _is_rural_myeon_eup 참조."""
     try:
         r=str((combo.get('지역') if isinstance(combo,dict) else '') or '').strip()
         # ★_main_only(메인 한 줄) 모드는 '지역'칸이 비어 있으니 _main에서 먼저 지역을 뽑는다.
@@ -9435,6 +9458,7 @@ def _combo_region_ok(combo):
         _bad=('안마','마사지','출장','노래방','가라오케','셔츠룸','하이퍼블릭','쓰리노','룸싸롱','풀싸롱','스웨디시',
               '건마','왁싱','홈타이','1인샵','아로마','퍼블릭','다국적','텐프로','쩜오','콜걸','안마출장소')
         if any(w in r for w in _bad): return False   # 지역명에 업종어 = 깨진 키워드 → 발행 안 함
+        if _is_rural_myeon_eup(r): return False       # ★시골 면/읍(아영면·봉동읍 등) 제외(2026-09-29 대표님)
         return _region_is_real(r)
     except Exception:
         return True
@@ -11083,7 +11107,12 @@ def api_pipeline_claim_sites():
                     if isinstance(_kw,dict) and _kw.get('_main_only'):
                         _kw=_auto_subkeywords(_kw.get('_main',''))
                     _pl['workroom_id']=_rm.get('id',''); _pl['workroom_name']=_rm.get('name','')
-                    _pl['kw']={'지역':_kw.get('지역',''),'서비스':_kw.get('서비스',''),'브랜드':_kw.get('브랜드','')}
+                    # ★전개된 지역 재검증(2026-09-29 대표님 '아영노래방은 뭔지역이냐' — 면/읍 제외): <20조합 방은
+                    #   _pick_next_combo가 필터를 안 타므로, _auto_subkeywords로 푼 뒤 실존·면읍제외를 여기서 한 번 더 본다.
+                    #   실존 아니거나 시골 면/읍이면 kw를 안 실어 노드가 그 사이트를 스킵(억지 발행 방지).
+                    _rok=_kw.get('지역','')
+                    if _rok and not _is_rural_myeon_eup(_rok) and _region_is_real(_rok):
+                        _pl['kw']={'지역':_rok,'서비스':_kw.get('서비스',''),'브랜드':_kw.get('브랜드','')}
                     _pl['writer_name']=str(_rm.get('writer_name') or '').strip()
                     # ★작업실 저장 이미지를 노드에 함께 전달(2026-09-18 대표님 '저장이미지 쓰라했는데 랜덤이미지'):
                     #   이미지·작업실 데이터는 서버 data/에만 있고 노드 로컬엔 없어, 노드가 workroom_id만 받아도
