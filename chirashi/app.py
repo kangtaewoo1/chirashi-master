@@ -1437,6 +1437,11 @@ def pool_columns(pool):
 def pick_keywords(pool, cfg):
     """키워드1(지역)을 먼저 뽑고, 키워드2·3은 반드시 같은 지역 행 안에서만 조합한다."""
     if not pool: return {'지역':'','서비스':'','브랜드':''}
+    # ★쓸모없는/깨진 지역 제외(2026-09-29 대표님 '정남동 등 실존 안 하는 지역 발행됨'):
+    #   노드는 서버배정 풀을 pick_keywords로 뽑는데 여기엔 실존검사가 없어 정남동·봉동 같은 가짜동이 새어나갔다.
+    #   (_combo_region_ok는 서버 조합선택 경로에만 걸림) → 여기서도 실존 지역 행만 남긴다. 비면 원본 유지(발행 멈춤 방지).
+    real=[x for x in pool if _combo_region_ok(x)]
+    if real: pool=real
     row=random.choice(pool)
     if cfg.get('mix_keywords',True):
         region=(row.get('지역') or '').strip()
@@ -9412,12 +9417,14 @@ def _combo_region_ok(combo):
         return True
 
 def _rand_real_combo(combos):
-    """조합 목록에서 '실존 지역' 조합을 무작위로 1개(최대 8회 재추첨). 다 실패하면 그냥 무작위 1개(발행 멈춤 방지)."""
-    n=len(combos)
-    for _ in range(8):
-        c=combos[random.randrange(n)]
-        if _combo_region_ok(c): return c
-    return combos[random.randrange(n)]
+    """조합 목록에서 '실존 지역' 조합을 무작위로 1개.
+       ★2026-09-29 하드닝(대표님 '정남동 등 가짜지역 발행됨'): 예전엔 8회 재추첨 후 실패하면
+       그냥 무작위 1개를 반환 → 가짜지역 비중 높은 방에선 정남동 같은 게 새어나갔다.
+       이제 실존 조합만 먼저 걸러 그 안에서 무작위 → 실존이 하나라도 있으면 절대 가짜를 안 뽑는다.
+       실존이 0개일 때만(발행 멈춤 방지) 원본에서 무작위 1개."""
+    real=[c for c in combos if _combo_region_ok(c)]
+    pool=real if real else combos
+    return pool[random.randrange(len(pool))]
 
 def _pick_next_combo(rooms):
     """★공유풀 워크스틸링(대표님 지시 2026-09-09): 고정 담당 없이, 모든 워커가 이 함수로
