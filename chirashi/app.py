@@ -9404,8 +9404,16 @@ def _combo_region_ok(combo):
        '동'으로 잘못 만든 가짜/초시골). _region_is_real이 True면 유지(지방 소도시·군 정식 동도 실존이면 통과 = 전국 유지)."""
     try:
         r=str((combo.get('지역') if isinstance(combo,dict) else '') or '').strip()
+        # ★_main_only(메인 한 줄) 모드는 '지역'칸이 비어 있으니 _main에서 먼저 지역을 뽑는다.
+        #   (2026-09-29 버그수정: 이 순서가 뒤라서 '지역'이 빈 main_only는 아래 not r에서 무조건 통과 →
+        #    흑산면홍도출장소동 같은 깨진 메인키워드가 필터를 우회했음. _main 기준 검사도 여기서 겸함.)
+        if combo.get('_main_only'):
+            _m=str(combo.get('_main','') or '').strip()
+            # ★깨진 메인 원문 자체 차단(2026-09-29): '출장소동/출장소'는 재생성 오류로 지역+업종이 뭉친 표식
+            #   (흑산면홍도출장소동·낙월면안마출장소동). split이 낙월면/안마로 '수리'해도 원문이 오염이면 스킵.
+            if '출장소' in _m: return False
+            r=_split_main_keyword(_m)[0] or _m or r
         if not r: return True
-        if combo.get('_main_only'): r=_split_main_keyword(combo.get('_main',''))[0] or r
         # ★깨진 키워드 제외(2026-09-28 대표님 '낙월면안마출장소동 같은 깨진 키워드 필터 강화'):
         #   지역명에 업종어가 박혀 있으면(예 '낙월면안마출장소동' = 낙월면+안마출장소+동) = 재생성 때 지역+업종이
         #   잘못 뭉친 가짜 지역. _region_is_real은 '낙월면'으로 시작해 실존으로 오판·통과시켰음. 업종어 포함이면 스킵.
