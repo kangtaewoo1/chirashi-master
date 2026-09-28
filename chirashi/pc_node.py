@@ -255,9 +255,15 @@ def _process_site(s, cfg):
             kw = {"지역": _srv_kw.get("지역",""), "서비스": _srv_kw.get("서비스",""), "브랜드": _srv_kw.get("브랜드","")}
         else:
             pool = app.collect_all_keywords()
-            # ★인천홍마니 폴백 제거(2026-09-25 대표님 '인천홍마니 글 자꾸 쓰네'): cfg.brand=인천홍마니라
-            #   폴백 시 제목에 인천홍마니가 박혔음. app._local_brand로 지역+업종 자동 브랜드 사용.
-            kw = app.pick_keywords(pool, cfg) if pool else {"지역": "인천", "서비스": "노래방", "브랜드": app._local_brand("인천","노래방")}
+            # ★인천노래방 폴백 제거(2026-09-29 대표님 '인천노래방 테스트용으로 계속되냐'): 서버가 kw를 안
+            #   실어준 사이트에서, 노드 로컬엔 작업실(workrooms.json)이 없어 collect_all_keywords가 빈 풀 →
+            #   {인천/노래방} 고정 폴백으로 엉뚱한 '인천노래방'이 대량 발행됐음(마사지 워커까지). 이제 kw도
+            #   pool도 없으면 억지 발행하지 말고 이 사이트를 건너뛴다(정상 글은 서버가 kw 실어준 사이트로 계속).
+            if pool:
+                kw = app.pick_keywords(pool, cfg)
+            else:
+                res["msg"] = "키워드 없음(서버 kw 미배정+로컬 풀 빔) — 인천노래방 폴백 대신 스킵"
+                return res
         # ★작업실 이미지 사용(2026-09-18 대표님 '저장해둔 이미지 쓰라했는데 랜덤이미지 나옴'): 이미지·작업실
         #   데이터는 서버 data/에만 있고 노드 로컬엔 없으므로, 서버가 claim때 실어보낸 image_urls(그 작업실
         #   저장이미지 절대URL)를 generate_article에 직접 넘긴다. 없으면 이미지 없이(picsum 랜덤 폴백 안 함).
