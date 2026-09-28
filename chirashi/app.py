@@ -1569,8 +1569,23 @@ def _auto_subkeywords(main):
     if not region: region=str(main or '').strip()
     # ★대표님 지시(2026-09-08): 자동생성 지역명에 '동'이 빠지는 문제 → 행정구역 접미사(동/읍/면/리/가/구/시)로
     #   끝나지 않으면 '동'을 붙인다. 이미 부여'읍'처럼 접미사가 있으면 그대로 둔다. 숫자로 끝나면(계화동24시 등) 예외.
+    # ★시/광역시명에 '동' 붙이는 오류 차단(2026-09-29 대표님 '왜 인천노래방 계속 하냐' 조사 중 발견):
+    #   메인키워드가 '인천노래방'·'수원가라오케'처럼 시/광역시 단위면 _split_main_keyword가 지역='인천'을 주는데,
+    #   여기서 '동'을 붙여 '인천동'·'수원동'(실존X)으로 오염됐음. 규칙 세분화:
+    #   ①광역시/도명(인천·서울…)은 그대로 ②'~동'이 실존 동명이면 붙임(부평→부평동, 강남→강남동: 대표님 2026-09-08 의도 유지)
+    #   ③그 외 이미 실존 지역(시·구·역·서면 등)은 그대로 ④나머지 짧은 동후보만 '동' 보정.
     if region and not re.search(r'(동|읍|면|리|가|구|시|군|역)$',region) and not re.search(r'\d$',region):
-        region=region+'동'
+        _METRO_NAMES={'경기','서울','인천','부산','대구','대전','광주','울산','강원','충남','충북','세종','전북','전남','경북','경상','제주'}
+        try: _rnames=set(_all_region_names())
+        except Exception: _rnames=set()
+        if region in _METRO_NAMES:
+            pass   # 광역시/도 → 그대로(인천 노래방)
+        elif (region+'동') in _rnames or (region+'동') in _STATIONS:
+            region=region+'동'   # 진짜 동이 있으면 동 붙임(부평→부평동)
+        elif _region_is_real(region):
+            pass   # 시·구·역 등 이미 실존 → 그대로
+        else:
+            region=region+'동'   # 그 외 짧은 동후보만 보정
     svc=service or random.choice(RELATED_POOL)
     # ★카테고리 일치(2026-09-24 대표님 '사파한국출장 짬뽕이 뭐냐' — 마사지 서비스에 유흥 브랜드(노래빠)가
     #   붙어 짬뽕이 됐음): 서비스가 마사지 계열이면 브랜드도 마사지 계열에서, 유흥이면 유흥에서 뽑는다.
@@ -11060,6 +11075,13 @@ def api_pipeline_claim_sites():
                 _picked=_pick_next_combo([_room])
                 if _picked:
                     _rm,_kw,_cur,_tot=_picked
+                    # ★인천노래방 폴백 근본수정(2026-09-29 대표님 '왜 인천노래방 계속 하냐'): 작업실을 '메인 한 줄'
+                    #   (콤마 없이 지역명 하나)로 넣으면 _workroom_combos가 {_main,_main_only}만 만들어(지역/서비스 키 없음),
+                    #   여기서 _pl['kw']를 {지역:'',서비스:'',브랜드:''}로 비워 노드에 넘겼음 → 노드가 빈 kw→로컬풀 빔→
+                    #   인천노래방 폴백. 서버 자체 발행경로(_publish_combo_to_site L9518)는 _auto_subkeywords로 풀어 쓰는데
+                    #   노드 위임 경로만 이 처리를 빼먹은 불일치가 뿌리. → 서버와 동일하게 여기서도 _main을 풀어 전달.
+                    if isinstance(_kw,dict) and _kw.get('_main_only'):
+                        _kw=_auto_subkeywords(_kw.get('_main',''))
                     _pl['workroom_id']=_rm.get('id',''); _pl['workroom_name']=_rm.get('name','')
                     _pl['kw']={'지역':_kw.get('지역',''),'서비스':_kw.get('서비스',''),'브랜드':_kw.get('브랜드','')}
                     _pl['writer_name']=str(_rm.get('writer_name') or '').strip()
