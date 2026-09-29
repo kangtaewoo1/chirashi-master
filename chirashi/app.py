@@ -9550,7 +9550,7 @@ def _workroom_combos(room):
 _WR_SLOTS={}   # slot_index -> Thread (작업실 발행 슬롯 워커 = 동시 크롬)
 _MEM_WARN=['']   # VPS 메모리 축소 경고 중복 방지용(마지막 경고 상태)
 
-def _publish_combo_to_site(s, kw, wname, rid, cfg, writer_name=''):
+def _publish_combo_to_site(s, kw, wname, rid, cfg, writer_name='', chrome_sem=None):
     """한 조합(kw)을 '한 사이트'에 유니크 글로 발행. _publish_one_combo가 사이트마다 병렬 호출.
        각 호출은 자기 스레드의 크롬(get_driver는 스레드명 기반)을 써서 서로 간섭 안 함.
        ★같은 사이트 동시발행은 _site_lock으로 방지(도배·간격 우회 방지)."""
@@ -9576,6 +9576,12 @@ def _publish_combo_to_site(s, kw, wname, rid, cfg, writer_name=''):
             'brand':pub_kw.get('브랜드',''),
             'workroom_id':rid,'workroom_name':wname,'status':'posting','result_url':'','message':'','attempts':0})
         ok=False; msg=''; _t0=time.time()
+        # ★크롬 슬롯은 실제 브라우저 작업(do_post)에만(2026-09-30 대표님 '발행량 늘려야해' 실측): 예전엔 _publish_one_combo
+        #   가 전역 크롬 세마포어를 스레드 시작부터 잡아 위의 generate_article(LLM 20~60초) 동안도 슬롯을 점유 →
+        #   12개 크롬 슬롯의 절반가량이 브라우저 없이 LLM 대기에 소모. 발행 직전에 잡고 발행 루프 끝에서 풀어 생성은 슬롯 밖에서.
+        _cs_held=False
+        if chrome_sem is not None:
+            chrome_sem.acquire(); _cs_held=True
         for attempt in range(1,4):
             try:
                 ok,msg=do_post(fresh,title,html)
@@ -9589,6 +9595,10 @@ def _publish_combo_to_site(s, kw, wname, rid, cfg, writer_name=''):
             if '등록 확인 불가' in str(msg): break
             if time.time()-_t0>300: break
             if attempt<3: time.sleep(min(5*attempt,15))
+        if _cs_held:
+            try: chrome_sem.release()
+            except Exception: pass
+            _cs_held=False   # 아래 finally의 안전해제가 중복 release 안 하게
         reason=reason_ko=''
         if not ok: reason,reason_ko,_=classify_fail(msg)
         # ★하이브리드 오분류 교정(2026-09-18): login_required=False로 알고 서버가 발행했는데 '로그인 필요' alert이면
@@ -9655,6 +9665,10 @@ def _publish_combo_to_site(s, kw, wname, rid, cfg, writer_name=''):
         add_log(f"[작업실:{wname}] {'성공' if ok else '실패:'+reason_ko} {fresh.get('name') or (fresh.get('site_url','') or '')[:20]}"
                 +(f" 🔒비밀글→발행중단(구글 색인불가)" if _secret else ''))
     finally:
+        # 크롬 세마포어 안전해제(예외로 발행 루프 뒤 release를 못 지났을 때만; acquire 전 return이면 _cs_held 미정의→건너뜀)
+        if locals().get('_cs_held') and chrome_sem is not None:
+            try: chrome_sem.release()
+            except Exception: pass
         _slk.release()
 
 def _publish_one_combo(kw, wname, rid, cfg, writer_name='', nonlogin_only=False):
@@ -9672,8 +9686,10 @@ def _publish_one_combo(kw, wname, rid, cfg, writer_name='', nonlogin_only=False)
     _gsem=_global_chrome_sem()             # 전역 크롬 상한(모든 슬롯 통틀어)
     threads=[]
     def _one(site):
-        with _sem, _gsem:                  # 조합 내 상한 + 전역 크롬 상한 둘 다 만족해야 발행
-            try: _publish_combo_to_site(site,kw,wname,rid,cfg,writer_name=writer_name)
+        # ★전역 크롬 세마포어(_gsem)는 여기서 잡지 않고 _publish_combo_to_site에 넘겨 do_post 직전에만 잡는다
+        #   (2026-09-30 실측: 스레드 시작부터 잡으면 generate_article LLM 대기 20~60초 동안 크롬 슬롯이 놀아 처리량 반감).
+        with _sem:                         # 조합 내 동시 스레드(=LLM 생성 동시수) 상한
+            try: _publish_combo_to_site(site,kw,wname,rid,cfg,writer_name=writer_name,chrome_sem=_gsem)
             except Exception as e: add_log(f"[작업실:{wname}] 발행스레드 오류 {str(e)[:50]}")
             finally:
                 # ★이 발행스레드의 크롬 정리(스레드명 기반 캐시라 스레드 죽으면 누수 → 명시 종료).
