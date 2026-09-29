@@ -11109,11 +11109,14 @@ def api_pipeline_claim_sites():
         #   배치당 registered_signup_per_claim(기본1)곳만 섞고, 사이트별 registered_signup_cooldown_sec(기본6h)에 1회 시도
         #   → 노드 _need_signup 경로가 자동가입→성공 시 new_mb_id 회신→이후 로그인 발행. 실패는 signup_fail_count 누적
         #   →3회면 signup_exhausted로 자동 제외(자기제한). 정규 발행 슬롯은 n-1개 유지.
+        # ★기본 0=끔(2026-09-30 실측: 편입 후 40분간 21곳 시도 0 성공, 노드 로그 누적 73시도/0성공 — 타임아웃 48·가입폼없음 23.
+        #   이 사이트들은 자가입 자체가 안 되는 곳(본인인증·승인제·가입폼 없음)이라 배치당 60초 슬롯만 낭비).
+        #   config registered_signup_per_claim=1~3 으로 켜면 재활성(가입 되는 후보가 생기면 사용).
         try:
-            _k=max(0,min(3,int(_cfg.get('registered_signup_per_claim',1) or 0)))
+            _k=max(0,min(3,int(_cfg.get('registered_signup_per_claim',0) or 0)))
             _scd=max(1800,int(_cfg.get('registered_signup_cooldown_sec',21600) or 21600))
         except Exception:
-            _k=1; _scd=21600
+            _k=0; _scd=21600
         if _k>0 and _node_all:
             _eids={s.get('id') for s in elig}
             sign_elig=[s for s in sites
