@@ -51,8 +51,10 @@ if %NODES% GTR 0 goto ALREADY
 
 REM --- init heartbeat, then start the node in its own minimized window (output -> pc_node.log) ---
 powershell -NoProfile -Command "[IO.File]::WriteAllText('%HB%',[string][DateTimeOffset]::UtcNow.ToUnixTimeSeconds())" 2>nul
-echo starting node - workers 2
-start "chirashi-node" /min cmd /c "py pc_node.py --workers 2 >> pc_node.log 2>&1"
+REM NODE_WORKERS env (default 2): raise to 3-4 only when the PC has >= 1.5 GB free RAM per extra worker
+if "%NODE_WORKERS%"=="" set NODE_WORKERS=2
+echo starting node - workers %NODE_WORKERS%
+start "chirashi-node" /min cmd /c "py pc_node.py --workers %NODE_WORKERS% >> pc_node.log 2>&1"
 goto WATCH
 
 :ALREADY
