@@ -11077,6 +11077,34 @@ def api_pipeline_claim_sites():
         #   (교동2차·Samjin만 계속 돌고 나머지 70곳 방치, 고장난 Samjin이 매 배치 슬롯 낭비) 해소.
         #   전 사이트를 골고루 발행하고, 방금 시도(실패 포함)한 사이트는 뒤로 밀려 반복실패 낭비도 줄인다.
         elig.sort(key=lambda s: float(s.get('pc_last_try',0) or 0))
+        # ★로그인필요·계정없음 등록사이트 자동가입 편입(2026-09-30 대표님 '발행량 늘려야해'): 실측 발행가능 107곳 중
+        #   65곳이 오늘 0건, 그중 46곳이 login_required+mb_id 없음 → _node_ready가 제외해 노드가 24h+ 한 번도 안 건드림.
+        #   과거 발행성공(verified_post_url) 사이트라 자동가입만 되면 즉시 발행처가 된다(가입 성공률 실측 84%, 2026-09-22).
+        #   배치당 registered_signup_per_claim(기본1)곳만 섞고, 사이트별 registered_signup_cooldown_sec(기본6h)에 1회 시도
+        #   → 노드 _need_signup 경로가 자동가입→성공 시 new_mb_id 회신→이후 로그인 발행. 실패는 signup_fail_count 누적
+        #   →3회면 signup_exhausted로 자동 제외(자기제한). 정규 발행 슬롯은 n-1개 유지.
+        try:
+            _k=max(0,min(3,int(_cfg.get('registered_signup_per_claim',1) or 0)))
+            _scd=max(1800,int(_cfg.get('registered_signup_cooldown_sec',21600) or 21600))
+        except Exception:
+            _k=1; _scd=21600
+        if _k>0 and _node_all:
+            _eids={s.get('id') for s in elig}
+            sign_elig=[s for s in sites
+                       if s.get('id') not in _eids and _plat_ok(s)
+                       and s.get('permission') and s.get('status')!='rejected'
+                       and s.get('login_required') and not str(s.get('mb_id') or '').strip()
+                       and str(s.get('verified_post_url') or '')[:4]=='http'
+                       and not s.get('secret_forced') and not _is_error_or_demo_site(s)
+                       and not s.get('signup_exhausted') and int(s.get('signup_fail_count',0) or 0)<3
+                       and not _cooling(s)
+                       and not (s.get('pc_claim_by') and float(s.get('pc_claim_expire',0) or 0)>now)
+                       and float(s.get('pc_last_try',0) or 0) < now-_scd]
+            sign_elig.sort(key=lambda s: float(s.get('pc_last_try',0) or 0))
+            _take=sign_elig[:_k]
+            if _take:
+                elig=elig[:max(0,n-len(_take))]+_take
+                add_log(f'[PC노드] 자동가입 편입 {len(_take)}곳(로그인필요·계정없음, 대기 {len(sign_elig)}곳)','파이프라인')
         # ★작업실 이력 유지(2026-09-15 대표님 '노드 발행+작업실 이력 유지'): 노드가 gnuboard도 발행하되
         #   이력이 '직접입력'으로 뭉치지 않게, 각 사이트에 작업실을 라운드로빈 배정해 그 작업실 키워드로 발행·기록.
         #   서버(DC IP)가 로그인실패 대량생산하던 걸 노드(집 IP)로 옮기면서도 작업실별 이력을 살린다.
