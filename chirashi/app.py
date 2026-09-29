@@ -898,6 +898,16 @@ def load_config():
         c['parallel_boost_v1']=True
         try: save_json(CONFIG_FILE,c)
         except Exception: pass
+    # ★1회 마이그레이션 v2(2026-09-30 대표님 '발행량 늘려야해'): 실측 시간당 ~190건, 활성 42곳×분당1건 한도(2520/h)에
+    #   한참 못 미침 = 사이트 한도가 아니라 동시 크롬 수가 병목. 최근 로그에 [VPS 경고] 메모리 축소 0건(여유 있음).
+    #   v1 값(chromes 8·fanout 8)이면만 chromes 12·fanout 10으로 상향(대표님 조정값은 존중). workroom_workers는 6 유지
+    #   (mem_cap 가드가 슬롯을 자동 축소하므로 안전). 크롬 1개 ~400MB → +4개 ≈ +1.6GB.
+    if not c.get('parallel_boost_v2'):
+        if int(c.get('publish_max_chromes',0) or 0)==8: c['publish_max_chromes']=12
+        if int(c.get('publish_fanout',0) or 0)==8: c['publish_fanout']=10
+        c['parallel_boost_v2']=True
+        try: save_json(CONFIG_FILE,c)
+        except Exception: pass
     return c
 
 def get_proxies(cfg=None):
