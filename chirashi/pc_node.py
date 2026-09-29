@@ -446,8 +446,28 @@ def run(once=False, workers=None, idle=30):
             except Exception: pass
             cfg = app.load_config()
             pool = app.collect_all_keywords()
-            # ★임시 크롬프로필 누수 정리(10분마다, 1시간+ 미사용분만) — 디스크 참으로 인한 발행 전멸 방지.
-            if time.time() - _last_prof_clean > 600:
+            # ★임시 크롬프로필 누수 정리(10분마다, 20분+ 미사용분만) — 디스크 참으로 인한 발행 전멸 방지.
+            # ★디스크 압박 즉시정리(2026-09-30 대표님 '문제 전부 조치' — 디스크 0.25GB로 노드 10시간 정지 실측):
+            #   여유 1GB 미만이면 10분 간격을 안 기다리고 60초+ 미변경 프로필 전부 정리 + 좀비크롬 kill.
+            #   그래도 0.5GB 미만이면 이번 루프 발행을 건너뛰어(60초 대기) 프로필 폭주→'No space left'로
+            #   가입·발행·prefs 쓰기까지 전멸하는 걸 막는다(디스크 회복되면 자동 재개).
+            try:
+                import shutil as _shu
+                _free_gb = _shu.disk_usage(os.path.dirname(os.path.abspath(__file__))).free / (1024 ** 3)
+            except Exception:
+                _free_gb = 99.0
+            if _free_gb < 1.0:
+                _rm = _cleanup_stale_chrome_profiles(older_than_sec=60)
+                _kill_orphan_chrome()
+                _last_prof_clean = time.time()
+                try: _free_gb = _shu.disk_usage(os.path.dirname(os.path.abspath(__file__))).free / (1024 ** 3)
+                except Exception: pass
+                log(f"[디스크부족] 여유 {_free_gb:.2f}GB — 크롬프로필 {_rm}개 즉시정리")
+                if _free_gb < 0.5:
+                    log("[디스크부족] 0.5GB 미만 — 이번 루프 발행 건너뜀(60초 대기, 프로필 폭주 방지)")
+                    time.sleep(60)
+                    continue
+            elif time.time() - _last_prof_clean > 600:
                 _last_prof_clean = time.time()
                 _rm = _cleanup_stale_chrome_profiles()
                 if _rm: log(f"임시 크롬프로필 {_rm}개 정리(디스크 누수 방지)")
