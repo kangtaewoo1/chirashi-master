@@ -1,61 +1,88 @@
 @echo off
 REM ============================================================
-REM  chirashi 발행노드 자동재시작 watchdog (사무실 노트북 5대 무인운영)
-REM  - 노드가 죽으면 자동 재시작
-REM  - 노드가 살아있는데 멈추면(heartbeat 5분 정체) 강제 kill 후 재시작
-REM  - 부팅 시 자동실행하려면: 이 파일 바로가기를  shell:startup  폴더에 넣기
-REM  사용: 이 파일만 더블클릭(START_NODE.bat 대신). 창을 닫으면 감시도 멈춤.
+REM  chirashi publish-node watchdog (unattended office laptops)
+REM  - starts the node if none is running (never starts a duplicate)
+REM  - restarts the node if it dies
+REM  - if the node hangs (heartbeat stale >= STALE sec), kills it and restarts
+REM  - autostart at boot: put a shortcut to this file in  shell:startup
+REM  - ASCII ONLY on purpose: cmd.exe mis-reads batch files that mix chcp 65001
+REM    with non-ASCII bytes (line offsets shift -> random fragments executed).
+REM  - no parenthesized if-blocks: powershell one-liners contain ')' which would
+REM    close a cmd block early. goto-style only.
+REM  - liveness is checked by COMMAND LINE (pc_node.py) + image name python*
+REM    because the interpreter may be python.exe or python3.13.exe (Store build).
+REM  - epoch via [DateTimeOffset]::UtcNow: Windows PowerShell 5.1 Get-Date -UFormat %s is local-time based
+REM    (+9h in KST) while the node writes a UTC epoch -> false hang detection every 30 s.
+REM  - SKIP_PULL=1 : start with local files, do not download (use right after
+REM    a git push while raw/master CDN is still stale for a few minutes)
 REM ============================================================
 cd /d "%~dp0"
-chcp 65001 >nul
-title chirashi 노드 watchdog (%PC_NODE_ID%)
+title chirashi node watchdog %PC_NODE_ID%
 
 set RAW=https://raw.githubusercontent.com/kangtaewoo1/chirashi-master/master/chirashi
 set HB=.node_heartbeat
 set STALE=300
-REM STALE=heartbeat가 이 초(300=5분) 이상 안 바뀌면 행으로 보고 재시작
+set PYTHONIOENCODING=utf-8
+REM (PYTHONIOENCODING keeps node log printing safe; never use PYTHONUTF8=1 - it breaks cp949 tasklist decoding)
 
 :START
 echo ================================
-echo  [%date% %time%] 노드 시작/재시작  node_id=%PC_NODE_ID%
+echo  [%date% %time%] watchdog start/restart cycle  node_id=%PC_NODE_ID%
 echo ================================
 
-REM 최신 코드 받기(오프라인이면 로컬 사용)
-powershell -Command "try{Invoke-WebRequest -Uri '%RAW%/app.py' -OutFile 'app.py'; Invoke-WebRequest -Uri '%RAW%/pc_node.py' -OutFile 'pc_node.py'; Invoke-WebRequest -Uri '%RAW%/pc_discovery.py' -OutFile 'pc_discovery.py'; Write-Host 'update ok'}catch{Write-Host 'update skipped (offline?) - using local'}" 2>nul
+REM --- pull latest code (skipped when SKIP_PULL=1, or offline -> keep local) ---
+if "%SKIP_PULL%"=="1" goto NOPULL
+powershell -NoProfile -Command "$ProgressPreference='SilentlyContinue'; try{Invoke-WebRequest -Uri '%RAW%/app.py' -OutFile 'app.py'; Invoke-WebRequest -Uri '%RAW%/pc_node.py' -OutFile 'pc_node.py'; Invoke-WebRequest -Uri '%RAW%/pc_discovery.py' -OutFile 'pc_discovery.py'; Write-Host 'update ok'}catch{Write-Host ('update skipped - ' + $_.Exception.Message)}" 2>nul
+goto PULLDONE
+:NOPULL
+echo update skipped - SKIP_PULL=1 - using local files
+set SKIP_PULL=
+:PULLDONE
 
-REM 이전 잔여 드라이버 정리(재시작 시 좀비 방지). chrome.exe 전체는 안 죽임 — 대표님 크롬/Claude-in-Chrome 보존
-REM (좀비 selenium 크롬은 노드 자체 _kill_orphan_chrome이 정리)
+REM --- kill leftover chromedriver only (NOT chrome.exe: keep the owner's Chrome alive) ---
 taskkill /F /IM chromedriver.exe >nul 2>&1
 
-REM 디스크 압박 시 크롬 임시프로필 즉시 정리(2026-09-30: 디스크 0.25GB로 노드 10시간 정지 실측 — 재시작해도 또 죽던 원인)
-powershell -Command "$f=(Get-PSDrive C).Free/1GB; if($f -lt 1){Get-ChildItem (Join-Path $env:LOCALAPPDATA 'Temp') -Directory -Force -EA SilentlyContinue | Where-Object {($_.Name -like 'chr_*' -or $_.Name -like 'scoped_dir*') -and $_.LastWriteTime -lt (Get-Date).AddMinutes(-1)} | Remove-Item -Recurse -Force -EA SilentlyContinue; Write-Host ('disk low - chrome profiles cleaned, free=' + [math]::Round((Get-PSDrive C).Free/1GB,2) + 'GB')}" 2>nul
+REM --- low disk: purge temp chrome profiles right away (disk full = node dies with 'No space left') ---
+powershell -NoProfile -Command "$f=(Get-PSDrive C).Free/1GB; if($f -lt 1){Get-ChildItem (Join-Path $env:LOCALAPPDATA 'Temp') -Directory -Force -EA SilentlyContinue | Where-Object {($_.Name -like 'chr_*' -or $_.Name -like 'scoped_dir*') -and $_.LastWriteTime -lt (Get-Date).AddMinutes(-1)} | Remove-Item -Recurse -Force -EA SilentlyContinue; Write-Host ('disk low - chrome profiles purged, free=' + [math]::Round((Get-PSDrive C).Free/1GB,2) + 'GB')}" 2>nul
 
-REM heartbeat 초기화
-powershell -Command "[IO.File]::WriteAllText('%HB%',[string][int][double]::Parse((Get-Date -UFormat %%s)))" 2>nul
+REM --- guard: if a node is already running, do not start another one ---
+call :COUNTNODE
+if %NODES% GTR 0 goto ALREADY
 
-REM 노드를 백그라운드로 시작하고 PID 확보
-echo 노드 프로세스 시작(워커 2)...
-start "chirashi-node" /min py pc_node.py --workers 2
+REM --- init heartbeat, then start the node in its own minimized window (output -> pc_node.log) ---
+powershell -NoProfile -Command "[IO.File]::WriteAllText('%HB%',[string][DateTimeOffset]::UtcNow.ToUnixTimeSeconds())" 2>nul
+echo starting node - workers 2
+start "chirashi-node" /min cmd /c "py pc_node.py --workers 2 >> pc_node.log 2>&1"
+goto WATCH
 
-REM ── 감시 루프: 30초마다 heartbeat 확인 ──
+:ALREADY
+echo node already running - %NODES% process - watching only
+goto WATCH
+
+REM --- watch loop: every 30 s (ping = works without a console stdin, unlike timeout) ---
 :WATCH
-timeout /t 30 /nobreak >nul
-
-REM 노드 프로세스(py/python)가 살아있나?
-tasklist /FI "IMAGENAME eq python.exe" 2>nul | find /I "python.exe" >nul
-if errorlevel 1 (
-  echo [%time%] 노드 프로세스 없음 — 재시작
-  goto START
-)
-
-REM heartbeat 정체(행) 확인
-for /f %%H in ('powershell -Command "$now=[int][double]::Parse((Get-Date -UFormat %%s)); try{$hb=[int](Get-Content '%HB%' -Raw)}catch{$hb=$now}; ($now-$hb)"') do set AGE=%%H
+ping -n 31 127.0.0.1 >nul
+call :COUNTNODE
+if %NODES% EQU 0 goto MISSING
+for /f %%H in ('powershell -NoProfile -Command "$now=[DateTimeOffset]::UtcNow.ToUnixTimeSeconds(); try{$hb=[int](Get-Content '%HB%' -Raw)}catch{$hb=$now}; ($now-$hb)"') do set AGE=%%H
 if not defined AGE set AGE=0
-if %AGE% GEQ %STALE% (
-  echo [%time%] heartbeat %AGE%초 정체 ^(행 상태^) — 강제 재시작
-  taskkill /F /IM python.exe >nul 2>&1
-  taskkill /F /IM py.exe >nul 2>&1
-  goto START
-)
+if %AGE% GEQ %STALE% goto HANG
 set AGE=
 goto WATCH
+
+:MISSING
+echo [%time%] node process missing - restart
+goto START
+
+:HANG
+echo [%time%] heartbeat stale %AGE%s - hang - force restart
+powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^(python|py)' -and $_.CommandLine -like '*pc_node.py*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -EA SilentlyContinue }" 2>nul
+set AGE=
+goto START
+
+REM --- subroutine: NODES = number of python* processes running pc_node.py ---
+:COUNTNODE
+set NODES=0
+for /f %%N in ('powershell -NoProfile -Command "(Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^python' -and $_.CommandLine -like '*pc_node.py*' } | Measure-Object).Count"') do set NODES=%%N
+if not defined NODES set NODES=0
+goto :EOF
