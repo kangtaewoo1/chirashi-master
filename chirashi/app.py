@@ -1978,7 +1978,7 @@ def generate_rich_html(keywords, cfg, workroom_id=None, image_urls=None):
 
 # ==================== GPT 본문 생성 (선택) ====================
 _META_LEAK_RE=re.compile(r'(키워드\s*[123]?\s*(인|은|는|를|을|로)\b|메인\s*키워드|보조\s*키워드|보조적인 맥락|흐름을 이어간다|중립적으로 설명|'
-                         r'사용 빈도를 조절|이 글은 .{0,40}(안내한다|설명한다|다룬다|정리한다)|메인 주제를 흐리|작성 지침|프롬프트|톤앤매너|'
+                         r'사용 빈도를 조절|이 글(은|에서는) .{0,120}(안내한다|설명한다|다룬다|정리한다|살펴본다|소개한다)|메인 주제를 흐리|작성 지침|프롬프트|톤앤매너|'
                          r'앵글에 맞춰|소제목.{0,10}구성.{0,10}자유롭게|본문에 포함한다)')
 def _strip_meta_sentences(html_body):
     """★AI 본문에서 '글쓰기 지시문'이 새어 나온 문장 제거(2026-10-01 qwen free 실측: itinfo 글에 '키워드인 오치동 을
@@ -1992,7 +1992,9 @@ def _strip_meta_sentences(html_body):
             return ' '.join(keep)
         out=re.sub(r'(?<=>)([^<]+)(?=<)',lambda m:_fix_text(m.group(1)),html_body)
         out=re.sub(r'<(p|li|dd|h[2-4])[^>]*>\s*</\1>','',out,flags=re.I)   # 빈 문단 정리
-        return out if len(re.sub(r'<[^>]+>','',out).strip())>=200 else html_body
+        _n0=len(re.sub(r'<[^>]+>','',html_body).strip()); _n1=len(re.sub(r'<[^>]+>','',out).strip())
+        # 안전가드(상대 기준): 지운 뒤에도 원문의 60% 이상·120자 이상 남아야 채택(과잉 삭제면 원문 유지)
+        return out if (_n1>=120 and _n1>=0.6*_n0) else html_body
     except Exception:
         return html_body
 
