@@ -8470,8 +8470,12 @@ def auto_signup(site, submit=True):
     #   → 닉네임은 '영문 4자 이상' 순수 영숫자(항상 통과), 이름은 순수 한글 2자 이상만 사용(혼합 제거).
     nick=re.sub(r'[^a-zA-Z0-9]','',(mid or 'user'))[:16] or ('user'+secrets.token_hex(2))
     if len(nick)<4: nick=(nick+secrets.token_hex(3))[:8]
-    _kor_name=re.sub(r'[^가-힣]','',str(cfg.get('brand') or ''))   # 브랜드에서 한글만
-    name=_kor_name if len(_kor_name)>=2 else '홍길동'
+    # ★가입 이름=브랜드('인천홍마니') 제거(2026-10-01 대표님 '인천홍마니 이제 쓰지 말고 랜덤' — 실측 21:06 회원글 작성자가
+    #   가입 이름으로 노출됨). 계정은 전국 글에 쓰이므로 지역 키워드 없이 중립 한글 이름 랜덤(순수 한글 2~3자: 스킨 검증 통과).
+    _NAME_POOL=['김민준','이서준','박지후','최도윤','정하준','강시우','윤지호','임준서','한예준','오수호','서우진','신은우',
+                '김서연','이지우','박하은','최수아','정지아','강하린','윤서현','임채원','한다은','오유나','서지민','신소율']
+    _kor_name=re.sub(r'[^가-힣]','',str(cfg.get('signup_name') or ''))   # config signup_name 있으면 그걸(한글만)
+    name=_kor_name if len(_kor_name)>=2 else random.choice(_NAME_POOL)
     # ★그누보드 필수필드 미입력 실패 해결(2026-09-22 대표님 '자동가입 성공률↑' 실측): 성별·생년월일·휴대전화가
     #   필수인 커스텀 스킨에서 '성별/휴대전화/생년월일 항목은 필수' alert로 반려됐음(vals_by_role에 없어 미입력).
     #   순수 숫자 11자리 전화(하이픈 없이 — 그누보드 valid_mb_hp가 /^01[0-9]{8,9}$/), 생년월일 YYYYMMDD.
