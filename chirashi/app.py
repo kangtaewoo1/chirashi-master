@@ -9691,7 +9691,10 @@ def _publish_combo_to_site(s, kw, wname, rid, cfg, writer_name='', chrome_sem=No
     _slk=_site_lock(fresh.get('id'))
     if not _slk.acquire(blocking=False): return   # 다른 슬롯/조합이 이 사이트 발행 중 → 스킵
     try:
-        if writer_name: fresh['writer_name']=writer_name
+        # ★작업실 작성자명은 config writer_use_workroom=True일 때만 site에 심는다(2026-10-01 실측: otng·ktigers 템플릿 글의
+        #   meta author='홍만대표' — _pick_writer를 안 거치는 필러가 site['writer_name']을 직접 읽음). 기본은 랜덤 키워드 작성자.
+        if writer_name and cfg.get('writer_use_workroom',False): fresh['writer_name']=writer_name
+        else: fresh.pop('writer_name',None)
         if rid: fresh['workroom_id']=rid
         if not under_daily_limit(fresh,cfg): return
         if not under_min_interval(fresh)[0]: return
@@ -11302,7 +11305,7 @@ def api_pipeline_claim_sites():
                     _rok=_kw.get('지역','')
                     if _rok and not _is_rural_myeon_eup(_rok) and _region_is_real(_rok):
                         _pl['kw']={'지역':_rok,'서비스':_kw.get('서비스',''),'브랜드':_kw.get('브랜드','')}
-                    _pl['writer_name']=str(_rm.get('writer_name') or '').strip()
+                    _pl['writer_name']=(str(_rm.get('writer_name') or '').strip() if _cfg.get('writer_use_workroom',False) else '')   # 기본 랜덤 작성자(2026-10-01)
                     # ★작업실 저장 이미지를 노드에 함께 전달(2026-09-18 대표님 '저장이미지 쓰라했는데 랜덤이미지'):
                     #   이미지·작업실 데이터는 서버 data/에만 있고 노드 로컬엔 없어, 노드가 workroom_id만 받아도
                     #   자기 로컬에서 이미지를 못 찾아 picsum 폴백했음. 서버가 그 작업실의 이미지 URL을 절대경로로 실어보냄.
