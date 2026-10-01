@@ -6187,6 +6187,19 @@ def _global_chrome_sem():
         if _chrome_sem is None or _chrome_sem_n!=n:
             _chrome_sem=threading.BoundedSemaphore(n); _chrome_sem_n=n
         return _chrome_sem
+_gen_sem=None; _gen_sem_n=0; _gen_sem_guard=threading.Lock()
+def _global_gen_sem():
+    """★글 생성(LLM) 전역 동시수 상한(2026-10-01 실측 회귀 수정): 크롬 세마포어를 do_post 직전으로 옮기자(d71c1b6)
+       예전에 스레드 시작부터 잡던 크롬 상한(12)이 LLM 동시호출도 암묵적으로 묶어주던 효과가 사라져 슬롯6×fan10=최대 60개
+       동시 생성 → OpenRouter 크레딧 급소진·레이트리밋·대기 스레드 적체(20:29 '잔액소진→템플릿', 'posting' 42건 적체).
+       publish_max_gen(기본=publish_max_chromes=12)으로 생성 동시수를 예전 수준으로 복원. 크롬 슬롯 최적화는 유지."""
+    global _gen_sem,_gen_sem_n
+    _c=load_config()
+    n=max(1,min(32,int(_c.get('publish_max_gen',_c.get('publish_max_chromes',12)) or 12)))
+    with _gen_sem_guard:
+        if _gen_sem is None or _gen_sem_n!=n:
+            _gen_sem=threading.BoundedSemaphore(n); _gen_sem_n=n
+        return _gen_sem
 BULK_LOCK=threading.Lock()
 BULK_TASKS={}
 
@@ -9566,7 +9579,8 @@ def _publish_combo_to_site(s, kw, wname, rid, cfg, writer_name='', chrome_sem=No
         if not under_min_interval(fresh)[0]: return
         pub_kw=_auto_subkeywords(kw.get('_main','')) if kw.get('_main_only') else _fix_kw_dong(kw)
         try:
-            html,title=generate_article(pub_kw,cfg,unique=True,workroom_id=rid)
+            with _global_gen_sem():   # LLM 동시호출 상한(기본 12) — 크롬 슬롯과 별개로 생성 폭주 방지
+                html,title=generate_article(pub_kw,cfg,unique=True,workroom_id=rid)
         except Exception as e:
             add_log(f"[작업실:{wname}] 생성오류 {str(e)[:50]}"); return
         now=datetime.now().strftime('%Y-%m-%d %H:%M:%S'); jid=secrets.token_hex(8)
