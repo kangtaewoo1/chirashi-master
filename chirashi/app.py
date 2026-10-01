@@ -1693,8 +1693,10 @@ def _pick_writer(site):
        (예: 강남쓰리노실장·강남쓰리노예약). 작성자칸도 색인되는 게시판이 많아 키워드 노출에 유리하고,
        전국 글에 '인천홍마니'가 박히는 어색함 제거. 지역/업종을 못 뽑으면 '예약실장'."""
     try:
+        # 작업실 writer_name(홍만대표·마사지스팟 등 과거 설정)은 config writer_use_workroom=True일 때만 사용.
+        # 기본은 전부 랜덤 키워드 작성자명(2026-10-01 대표님 '노출에 유리한 걸로 랜덤' — 실측 21:01 글에 홍만대표가 남아 보완).
         w=str(site.get('writer_name') or '').strip()
-        if w and w!='인천홍마니': return w[:20]
+        if w and w!='인천홍마니' and load_config().get('writer_use_workroom',False): return w[:20]
         first=str(site.get('_cur_title') or '').strip().split(' ')[0]
         r,s=_split_main_keyword(first) if first else ('','')
         r=(r or '').strip(); s=(s or '').strip()
@@ -2047,6 +2049,22 @@ def generate_post_gpt(keywords, cfg, workroom_id=None, image_urls=None, model_ov
     # ★503/타임아웃 재시도(2026-09-18 대표님 스샷 'NVIDIA 503→템플릿'): 무료 NVIDIA(build.nvidia.com)는
     #   간헐 과부하로 503·타임아웃이 잦음(실측 2/3 성공). 바로 템플릿 폴백하면 AI 글이 자주 안 나오므로,
     #   503/타임아웃도 최대 2회 재시도(각 4초·8초 대기)해 흡수 → 템플릿 폴백 최소화.
+    # ★무료(:free) 모델 분당 한도 페이싱(2026-10-01 실측: qwen free 전환 직후 '429→60초 템플릿'이 1~2분마다 반복):
+    #   OpenRouter 무료는 계정당 분당 20회. 토큰버킷(기본 18/분, config openrouter_free_rpm)으로 호출 간격을 벌려
+    #   AI 글 비율을 최대화. 최대 25초만 기다리고 자리 없으면 그냥 호출(429면 기존 폴백 경로).
+    if _prov=='openrouter' and str(model).endswith(':free'):
+        try: _rpm=max(5,min(20,int(cfg.get('openrouter_free_rpm',18) or 18)))
+        except Exception: _rpm=18
+        _t_end=time.time()+25
+        while True:
+            with _FREE_RL_LOCK:
+                _now=time.time()
+                while _FREE_RL and _FREE_RL[0]<_now-60: _FREE_RL.popleft()
+                if len(_FREE_RL)<_rpm:
+                    _FREE_RL.append(_now); break
+                _wait=_FREE_RL[0]+60-_now
+            if time.time()>=_t_end: break
+            time.sleep(min(max(0.2,_wait),3))
     def _post_once():
         return _rq.post(_url,headers=_hdr,json=_body,timeout=_to)
     resp=None
@@ -2121,6 +2139,8 @@ def generate_post_gpt(keywords, cfg, workroom_id=None, image_urls=None, model_ov
 
 _GPT_SKIP_UNTIL=[0.0]   # time.time()까지 GPT 스킵(429 서킷브레이커)
 _NOKEY_LOGGED=[0.0]     # '키 없음→템플릿' 안내 마지막 시각(10분 1회)
+_FREE_RL=__import__('collections').deque()   # ★무료모델 호출 타임스탬프(최근 60초) — 분당 한도 페이싱용 토큰버킷
+_FREE_RL_LOCK=threading.Lock()
 _FREE_SKIP_UNTIL=[0.0]  # ★무료모델 폴백 서킷브레이커(전부 실패 시 60초 템플릿) — 2026-10-01 대표님 '무료버전 많지 않니'
 _FREE_LOGGED=[0.0]      # '무료모델 사용 중' 안내 마지막 시각(10분 1회)
 # 유료(openrouter_model) 잔액소진·429로 스킵 중일 때 순서대로 시도할 무료 모델. config openrouter_free_models(콤마구분)로 덮어씀.
