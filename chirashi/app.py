@@ -908,6 +908,15 @@ def load_config():
         c['parallel_boost_v2']=True
         try: save_json(CONFIG_FILE,c)
         except Exception: pass
+    # ★1회 마이그레이션(2026-10-01 대표님 '무료로만 가게 qwen free로 바꿔줘'): OpenRouter 주 모델을 무료 qwen으로.
+    #   유료(deepseek-v4-flash) 크레딧 소진으로 하루 종일 템플릿·처리량 붕괴 → 무료 모델로 AI 글 유지.
+    #   한도(OpenRouter): 무료 분당 20·일 50(충전이력 없음)/1000(누적 $10+) 초과 시 429→폴백체인→템플릿.
+    #   이후 설정 탭에서 모델을 바꾸면 그 값이 유지됨(플래그로 1회만 적용).
+    if not c.get('free_model_v1'):
+        c['openrouter_model']='qwen/qwen3.8-27b:free'
+        c['free_model_v1']=True
+        try: save_json(CONFIG_FILE,c)
+        except Exception: pass
     return c
 
 def get_proxies(cfg=None):
@@ -2134,6 +2143,8 @@ def _gen_once(keywords, cfg, workroom_id=None, image_urls=None):
     if cfg.get('use_gpt') and _llm_key and _pv=='openrouter' and time.time()<_GPT_SKIP_UNTIL[0] \
        and cfg.get('openrouter_free_fallback',True) and time.time()>=_FREE_SKIP_UNTIL[0]:
         _fms=[m.strip() for m in str(cfg.get('openrouter_free_models') or '').split(',') if m.strip()] or list(_FREE_MODELS_DEFAULT)
+        _primary=(cfg.get('openrouter_model') or '').strip()
+        _fms=[m for m in _fms if m!=_primary] or _fms   # 주 모델이 이미 무료(qwen)면 같은 걸 또 안 치고 다음 모델로
         _last=''
         for _fm in _fms:
             try:
