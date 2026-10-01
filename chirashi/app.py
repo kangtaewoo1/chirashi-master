@@ -1686,6 +1686,26 @@ def _build_meta_intro(r, s, b, p, mood, cfg=None):
     # 맨 앞 글자 = 메인키워드(<strong>). 구글 스니펫이 메인키워드로 시작하게.
     return f'<strong>{main}</strong>{lead} {desc}. {phone_sent} {loc}{close}'
 
+def _pick_writer(site):
+    """★게시판 작성자명(wr_name/닉네임) — 2026-10-01 대표님 '인천홍마니 이제 쓰지 말고 노출에 유리한 걸로 랜덤':
+       작업실에 명시한 writer_name이 있으면(단 '인천홍마니'는 미지정 취급) 그대로, 없으면 이 글의 지역+업종을
+       제목 첫 토큰(do_post가 site['_cur_title']에 심음)에서 뽑아 키워드가 들어간 작성자명을 랜덤 생성
+       (예: 강남쓰리노실장·강남쓰리노예약). 작성자칸도 색인되는 게시판이 많아 키워드 노출에 유리하고,
+       전국 글에 '인천홍마니'가 박히는 어색함 제거. 지역/업종을 못 뽑으면 '예약실장'."""
+    try:
+        w=str(site.get('writer_name') or '').strip()
+        if w and w!='인천홍마니': return w[:20]
+        first=str(site.get('_cur_title') or '').strip().split(' ')[0]
+        r,s=_split_main_keyword(first) if first else ('','')
+        r=(r or '').strip(); s=(s or '').strip()
+        if r and s:
+            pool=[f'{r}{s}',f'{r}{s}실장',f'{r}{s}예약',f'{r}{s}안내',f'{r}{s}추천',f'{r}{s}문의',f'{r}실장',f'{s}실장']
+            return random.choice(pool)[:20]
+        b=str(load_config().get('brand') or '').strip()
+        return b[:20] if b and b!='인천홍마니' else '예약실장'
+    except Exception:
+        return '예약실장'
+
 def _local_brand(r, s):
     """★브랜드 미지정 시 '인천홍마니' 대신 지역+관련업종 기반 자연 브랜드 생성
        (2026-09-24 대표님 '인천홍마니 글 자꾸 쓰네' — 전국 노래방/마사지 글에 인천홍마니가 박혀 어색).
@@ -3568,8 +3588,8 @@ def fill_required_post_fields(d,site):
     from selenium.webdriver.common.by import By
     cfg=load_config(); filled=[]; missing=[]
     brand=(cfg.get('brand') or '게시자').strip()
-    # 작성자 이름: 작업실별로 지정한 값(site.writer_name) 우선, 없으면 브랜드. 발행 직전 site에 심어짐.
-    writer=(str(site.get('writer_name') or '').strip() or brand)
+    # 작성자 이름: 작업실 writer_name 우선, 없으면(또는 '인천홍마니'면) 지역+업종 키워드 랜덤 작성자명(_pick_writer).
+    writer=_pick_writer(site)
     try: phone_val=format_phone(pick_phone(cfg))
     except Exception: phone_val=(cfg.get('phone') or '')
     guest_pw=_post_password(cfg)   # ★고정 비번(비밀글 복구용) — 랜덤 금지
@@ -3867,7 +3887,7 @@ def gnuboard_post_http(site, title, content_html):
     data={
         'uid':_hidden('uid'), 'w':_hidden('w',''), 'bo_table':bo, 'wr_id':_hidden('wr_id','0'),
         'sca':'','sfl':'','stx':'','spt':'','sst':'','sod':'','page':'',
-        'wr_name':(str(site.get('writer_name') or '').strip() or (cfg.get('brand') or '게시자').strip()),
+        'wr_name':_pick_writer(site),   # 지역+업종 키워드 랜덤 작성자명(인천홍마니 제거)
         'wr_password':_post_password(cfg),   # ★고정 비번(비밀글 복구용, 랜덤 금지 — 대표님 지시)
         'wr_email':_brand_email(cfg,site),
         'wr_homepage':(cfg.get('landing_url') or '').strip(),
@@ -5266,7 +5286,7 @@ def cafe24_post(site, title, content_html, skip_login=False):
               out.fields.push(((el.name||el.id||'?')+'').slice(0,18)+':'+t+(el.required?'*':'')+(v?'':'=∅'));
             });
             return out;
-        """, _brand_email(load_config(), site), (str(site.get('writer_name') or '').strip() or (load_config().get('brand') or '게시자')),
+        """, _brand_email(load_config(), site), _pick_writer(site),
              (lambda _c: format_phone(pick_phone(_c)))(load_config())) or {}
         add_log(f"[Cafe24폼필드] 동의체크={_ff.get('checked')} 필드={(_ff.get('fields') or [])[:16]}")
     except Exception as _e:
@@ -6138,6 +6158,8 @@ def do_post(site, title, content_html, skip_login=False):
        skip_login=True: 가입 직후 이미 로그인된 세션에서 재로그인 없이 바로 글쓰기(비표준 로그인폼 구제)."""
     # 비BMP(이모지 등) 제거 — ChromeDriver send_keys가 못 다뤄 발행 전체가 실패하던 문제 방지.
     title=_strip_non_bmp(title); content_html=_strip_non_bmp(content_html)
+    try: site['_cur_title']=title   # ★작성자명 랜덤 생성용(지역+업종은 제목 첫 토큰) — 서버·노드 공통 진입점이라 여기서 한 번만
+    except Exception: pass
     rec=site.get('learned')
     # 1) 저장된 학습 레시피 우선
     if rec and rec.get('write_url') and rec.get('subject_sel') and rec.get('content_sel'):
