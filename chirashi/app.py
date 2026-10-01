@@ -1946,7 +1946,7 @@ def generate_rich_html(keywords, cfg, workroom_id=None, image_urls=None):
     return html, title
 
 # ==================== GPT 본문 생성 (선택) ====================
-def generate_post_gpt(keywords, cfg, workroom_id=None, image_urls=None):
+def generate_post_gpt(keywords, cfg, workroom_id=None, image_urls=None, model_override=None):
     """OpenAI로 키워드1 중심의 장문 HTML 본문 생성. 실패 시 템플릿으로 폴백."""
     import requests as _rq
     r=(keywords.get('지역') or '서울').strip(); s=(keywords.get('서비스') or '셔츠룸').strip()
@@ -1958,7 +1958,7 @@ def generate_post_gpt(keywords, cfg, workroom_id=None, image_urls=None):
         key=(cfg.get('nvidia_api_key') or '').strip(); model=(cfg.get('nvidia_model') or 'nvidia/nemotron-3-ultra-550b-a55b').strip()
         if not key: raise RuntimeError('nvidia_api_key 없음 — 설정 탭에 NVIDIA 키(nvapi-…) 입력')
     elif _prov=='openrouter':
-        key=(cfg.get('openrouter_api_key') or '').strip(); model=(cfg.get('openrouter_model') or 'deepseek/deepseek-chat').strip()
+        key=(cfg.get('openrouter_api_key') or '').strip(); model=(model_override or cfg.get('openrouter_model') or 'deepseek/deepseek-chat').strip()
         if not key: raise RuntimeError('openrouter_api_key 없음 — 설정 탭에 OpenRouter 키(sk-or-…) 입력')
     else:
         key=cfg.get('openai_key',''); model=cfg.get('model') or 'gpt-4o-mini'
@@ -2092,6 +2092,11 @@ def generate_post_gpt(keywords, cfg, workroom_id=None, image_urls=None):
 
 _GPT_SKIP_UNTIL=[0.0]   # time.time()까지 GPT 스킵(429 서킷브레이커)
 _NOKEY_LOGGED=[0.0]     # '키 없음→템플릿' 안내 마지막 시각(10분 1회)
+_FREE_SKIP_UNTIL=[0.0]  # ★무료모델 폴백 서킷브레이커(전부 실패 시 60초 템플릿) — 2026-10-01 대표님 '무료버전 많지 않니'
+_FREE_LOGGED=[0.0]      # '무료모델 사용 중' 안내 마지막 시각(10분 1회)
+# 유료(openrouter_model) 잔액소진·429로 스킵 중일 때 순서대로 시도할 무료 모델. config openrouter_free_models(콤마구분)로 덮어씀.
+# 2026-10-01 OpenRouter 무료 20개 중 한국어 글쓰기 적합 순(deepseek 무료판은 현재 없음). 무료 한도: 분당 20, 일 50(충전이력 없음)/1000(누적 $10+).
+_FREE_MODELS_DEFAULT=['qwen/qwen3.8-27b:free','google/gemma-4-31b-it:free','nvidia/nemotron-3-super-120b-a12b:free','google/gemma-4-26b-a4b-it:free']
 
 def _gen_once(keywords, cfg, workroom_id=None, image_urls=None):
     # GPT 429(레이트리밋) 서킷브레이커: 429가 나면 5분간 GPT를 건너뛰고 템플릿 직행.
@@ -2122,6 +2127,25 @@ def _gen_once(keywords, cfg, workroom_id=None, image_urls=None):
         # 체크는 켜졌는데 선택 엔진의 키가 비면 조용히 템플릿으로 빠져 원인을 알 수 없었음 → 10분에 1번 알림
         _NOKEY_LOGGED[0]=time.time()
         add_log(f'[AI 생성 건너뜀→템플릿] {_pv.upper()} API 키가 비어 있음 — 설정 탭에서 {_pv.upper()} 키를 입력·저장해야 AI 글 생성')
+    # ★무료모델 폴백(2026-10-01 대표님 '무료버전 많지 않니'): 유료 모델이 잔액소진(402)·429로 스킵 중(_GPT_SKIP_UNTIL)이면
+    #   바로 템플릿으로 떨어지지 않고 OpenRouter 무료(:free) 모델을 순서대로 시도 → 실패 시 60초 템플릿 후 재시도.
+    #   실측: 10-01 20:29 크레딧 소진으로 하루 종일 템플릿·처리량 붕괴 — 무료 모델이면 AI 글 품질을 유지하며 버틴다.
+    #   한도(OpenRouter 문서): 무료 모델 분당 20회, 일 50회(충전이력 없음) / 1000회(누적 $10 이상). 초과 시 429→다음 모델→템플릿.
+    if cfg.get('use_gpt') and _llm_key and _pv=='openrouter' and time.time()<_GPT_SKIP_UNTIL[0] \
+       and cfg.get('openrouter_free_fallback',True) and time.time()>=_FREE_SKIP_UNTIL[0]:
+        _fms=[m.strip() for m in str(cfg.get('openrouter_free_models') or '').split(',') if m.strip()] or list(_FREE_MODELS_DEFAULT)
+        _last=''
+        for _fm in _fms:
+            try:
+                _r=generate_post_gpt(keywords,cfg,workroom_id=workroom_id,image_urls=image_urls,model_override=_fm)
+                if time.time()-_FREE_LOGGED[0]>600:
+                    _FREE_LOGGED[0]=time.time()
+                    add_log(f'[OPENROUTER 유료 스킵 중→무료모델 {_fm}] 크레딧 충전 전까지 무료 모델로 AI 글 유지(무료 한도 분당20·일50/1000 초과 시 템플릿)')
+                return _r
+            except Exception as _e2:
+                _last=str(_e2)[:70]; continue
+        _FREE_SKIP_UNTIL[0]=time.time()+60
+        add_log(f'[무료모델 폴백 전부 실패→60초 템플릿] {_last}')
     return generate_rich_html(keywords,cfg,workroom_id=workroom_id,image_urls=image_urls)
 
 def generate_article(keywords, cfg, unique=True, workroom_id=None, image_urls=None):
