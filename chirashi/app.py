@@ -3680,13 +3680,23 @@ def fill_required_post_fields(d,site):
     #   판정도 '본문 미입력'으로 오분류돼 원인이 숨어 있었음). 보이는 빈 칸만 채움(값 있으면 건드리지 않음).
     for sel,value,label in [
         ("#kboard-input-member-display,input[name='member_display']",writer,'member_display'),
-        ("input[name='name'],#name,input[name='writer'],input[name='writer_name'],input[name='nick_name'],input[name='user_name']",writer,'name'),
+        ("input[name='wr_name'],input[name='name'],#name,input[name='writer'],input[name='writer_name'],input[name='nick_name'],input[name='user_name']",writer,'name'),
         ("input[name='email'],#email",post_email,'email'),
         ("#kboard-input-password,input[name='password']",guest_pw,'password')]:
         try:
             elems=[x for x in d.find_elements(By.CSS_SELECTOR,sel) if _sel_vis(x)]
             if not elems: continue
             el=elems[0]
+            # ★작성자 칸은 값이 있어도 덮어쓴다(2026-10-01 실측 otng·adone: 그누보드가 비회원 이름을 쿠키로 기억해
+            #   글쓰기 폼에 '홍만대표/마사지스팟'을 미리 채워두고, 아래 '값 있으면 건너뜀' 규칙에 걸려 옛 이름이 그대로 제출됨).
+            #   이메일·비번은 기존대로 빈 칸만.
+            if label in ('name','member_display'):
+                if value:
+                    try: d.execute_script("arguments[0].value='';",el)
+                    except Exception: pass
+                    el.clear(); el.send_keys(value); filled.append(label)
+                else: missing.append(label)
+                continue
             if (el.get_attribute('value') or '').strip(): continue
             if value:
                 el.clear(); el.send_keys(value); filled.append(label)
