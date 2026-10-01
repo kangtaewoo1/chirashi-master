@@ -1977,6 +1977,25 @@ def generate_rich_html(keywords, cfg, workroom_id=None, image_urls=None):
     return html, title
 
 # ==================== GPT 본문 생성 (선택) ====================
+_META_LEAK_RE=re.compile(r'(키워드\s*[123]?\s*(인|은|는|를|을|로)\b|메인\s*키워드|보조\s*키워드|보조적인 맥락|흐름을 이어간다|중립적으로 설명|'
+                         r'사용 빈도를 조절|이 글은 .{0,40}(안내한다|설명한다|다룬다|정리한다)|메인 주제를 흐리|작성 지침|프롬프트|톤앤매너|'
+                         r'앵글에 맞춰|소제목.{0,10}구성.{0,10}자유롭게|본문에 포함한다)')
+def _strip_meta_sentences(html_body):
+    """★AI 본문에서 '글쓰기 지시문'이 새어 나온 문장 제거(2026-10-01 qwen free 실측: itinfo 글에 '키워드인 오치동 을
+       중심으로 흐름을 이어간다. 보조적인 맥락으로는 1인샵이나 … 사용 빈도를 조절하였다'가 그대로 노출).
+       태그 밖 텍스트를 문장(。.!?) 단위로 보고 메타 패턴이 있는 문장만 지운다. 문단이 비면 문단째 제거. 실패 시 원문."""
+    try:
+        if not html_body or not _META_LEAK_RE.search(html_body): return html_body
+        def _fix_text(seg):
+            parts=re.split(r'(?<=[.!?。])\s+',seg)
+            keep=[p for p in parts if not _META_LEAK_RE.search(p)]
+            return ' '.join(keep)
+        out=re.sub(r'(?<=>)([^<]+)(?=<)',lambda m:_fix_text(m.group(1)),html_body)
+        out=re.sub(r'<(p|li|dd|h[2-4])[^>]*>\s*</\1>','',out,flags=re.I)   # 빈 문단 정리
+        return out if len(re.sub(r'<[^>]+>','',out).strip())>=200 else html_body
+    except Exception:
+        return html_body
+
 def generate_post_gpt(keywords, cfg, workroom_id=None, image_urls=None, model_override=None):
     """OpenAI로 키워드1 중심의 장문 HTML 본문 생성. 실패 시 템플릿으로 폴백."""
     import requests as _rq
@@ -2017,6 +2036,9 @@ def generate_post_gpt(keywords, cfg, workroom_id=None, image_urls=None, model_ov
            f"동일 문장이나 부자연스러운 반복은 금지한다.\n"
            f"3. 키워드2 '{s}'와 키워드3 '{b}'는 각각 2~4회 정도만 사용하고 메인키워드보다 눈에 띄지 않게 한다.\n"
            f"4. 순수 HTML 조각만 출력한다. 코드블록·마크다운·설명·<html><body> 태그는 금지한다.\n"
+           f"4-1. 글쓰기 과정이나 지시사항을 본문에 절대 쓰지 않는다 — '키워드인', '메인 키워드', '보조 키워드', "
+           f"'이 글은 ~을 안내한다', '사용 빈도를 조절', '흐름을 이어간다', '중립적으로 설명' 같은 메타 문장 금지. "
+           f"독자는 손님이지 편집자가 아니다.\n"
            f"5. 1,800~2,800자 분량으로 작성한다. ★작성 앵글: {_angle} "
            f"이 앵글에 맞춰 소제목·구성·문단 순서를 자유롭게 짜라(매 글마다 골격이 달라야 한다). "
            f"단 도입·본문 안내·세부 항목·FAQ·핵심 정리는 형태를 바꿔서라도 포함한다.\n"
@@ -2109,6 +2131,7 @@ def generate_post_gpt(keywords, cfg, workroom_id=None, image_urls=None, model_ov
     _record_openai_usage(model,_usage,cfg)
     body=payload['choices'][0]['message']['content'].strip()
     if body.startswith('```'): body=re.sub(r'^```[a-zA-Z]*\n?|```$','',body).strip()
+    body=_strip_meta_sentences(body)   # ★지시문 누출 제거(2026-10-01 qwen free 실측: '키워드인 오치동 을 중심으로 흐름을 이어간다…')
     title,_=build_title(r,s,b,cfg,_rawph)
     # 대표님 지시(2026-09-07): GPT 본문을 '예쁜 디자인 틀'로 감싼다.
     #  단일 강조색 + 카테고리 라벨 + 큰 H1/언더라인 바 + (본문 h2로 만든) 목차 + 다크 CTA + 업데이트 날짜.
