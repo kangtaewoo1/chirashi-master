@@ -2052,19 +2052,23 @@ def generate_post_gpt(keywords, cfg, workroom_id=None, image_urls=None, model_ov
     # ★무료(:free) 모델 분당 한도 페이싱(2026-10-01 실측: qwen free 전환 직후 '429→60초 템플릿'이 1~2분마다 반복):
     #   OpenRouter 무료는 계정당 분당 20회. 토큰버킷(기본 18/분, config openrouter_free_rpm)으로 호출 간격을 벌려
     #   AI 글 비율을 최대화. 최대 25초만 기다리고 자리 없으면 그냥 호출(429면 기존 폴백 경로).
-    if _prov=='openrouter' and str(model).endswith(':free'):
-        try: _rpm=max(5,min(20,int(cfg.get('openrouter_free_rpm',18) or 18)))
-        except Exception: _rpm=18
-        _t_end=time.time()+25
+    def _free_slot(max_wait=120):
+        """무료모델 토큰버킷 — 자리 날 때까지 최대 max_wait초 '정말로' 기다린다(21:21 실측: 25초 포기 후 그냥 호출→429
+           →60초 템플릿 반복, AI 1:템플릿 7). 기본 10/분: 노드(4워커)도 같은 계정 한도(20/분)를 쓰므로 서버 몫만 잡는다."""
+        try: _rpm=max(3,min(20,int(cfg.get('openrouter_free_rpm',10) or 10)))
+        except Exception: _rpm=10
+        _t_end=time.time()+max_wait
         while True:
             with _FREE_RL_LOCK:
                 _now=time.time()
                 while _FREE_RL and _FREE_RL[0]<_now-60: _FREE_RL.popleft()
                 if len(_FREE_RL)<_rpm:
-                    _FREE_RL.append(_now); break
+                    _FREE_RL.append(_now); return True
                 _wait=_FREE_RL[0]+60-_now
-            if time.time()>=_t_end: break
+            if time.time()>=_t_end: return False
             time.sleep(min(max(0.2,_wait),3))
+    _is_free=(_prov=='openrouter' and str(model).endswith(':free'))
+    if _is_free: _free_slot()
     def _post_once():
         return _rq.post(_url,headers=_hdr,json=_body,timeout=_to)
     resp=None
@@ -2079,8 +2083,16 @@ def generate_post_gpt(keywords, cfg, workroom_id=None, image_urls=None, model_ov
                 time.sleep(4); continue   # 타임아웃 등 — 1회만 재시도(빨리 포기)
             raise
     if _prov in ('nvidia','openrouter') and resp is not None and resp.status_code==429:
-        time.sleep(3); resp=_post_once()   # 분당 한도 — 3초 뒤 1회 재시도
-        if resp.status_code==429: raise RuntimeError(f'{_prov.upper()} 분당 한도(429) — 잠시 후 재개')
+        if _is_free:
+            # ★무료모델 429는 분당 한도 → 템플릿 서킷(60초)으로 보내지 말고 버킷으로 자리 기다렸다 최대 3회 재시도
+            #   (21:21 실측: 429 1번에 전 슬롯 60초 템플릿 → AI 1:템플릿 7). 그래도 429면 일 한도(50/1000) 소진 가능성.
+            for _k in range(3):
+                time.sleep(6+6*_k); _free_slot(90); resp=_post_once()
+                if resp.status_code!=429: break
+            if resp.status_code==429: raise RuntimeError(f'{_prov.upper()} 분당 한도(429) — 잠시 후 재개 (연속 429면 무료 일 한도 소진 가능)')
+        else:
+            time.sleep(3); resp=_post_once()   # 분당 한도 — 3초 뒤 1회 재시도
+            if resp.status_code==429: raise RuntimeError(f'{_prov.upper()} 분당 한도(429) — 잠시 후 재개')
     if _prov=='openrouter' and resp.status_code==402:   # OpenRouter는 크레딧 바닥을 402로 줌(OpenAI의 429/insufficient_quota와 다름)
         raise RuntimeError('OPENROUTER 잔액 소진(402) — openrouter.ai/settings/credits 충전 필요')
     # ★잔액 소진 구분(대표님 2026-09-11 '이거 맞아?' — 잔액 -$1.44인데 로그는 '레이트리밋'): OpenAI는 크레딧 바닥도
