@@ -4118,6 +4118,11 @@ def gnuboard_post_http(site, title, content_html):
             ans=_solve_kcaptcha_bytes(ci.content,cfg)
             if ans: return ans,''
             _http_cap_diag(_diag_key,site,f'OCR 빈값 ct={_ct[:20]} len={len(ci.content)} model={"on" if _KC_SESS is not None else "off"} dddd={"on" if _DDDD_OCR is not None else "off"}')
+            # ★빈 캡차 판정(2026-10-03 01:20 진단로그 실측): 서버가 받는 캡차는 전부 816~905B JPEG = 글자 없는 빈 이미지
+            #   (PC에서 세션 없이 받으면 똑같이 816~941B, 정상 캡차는 2,100~4,900B). 서버에선 캡차 세션이 안 잡히는 사이트라
+            #   OCR·셀레늄 폴백 모두 무의미(폴백 11건 전부 실패) → 하드실패 + finalize_post가 긴 쿨다운(노드 없을 때 2h).
+            if len(ci.content)<1200:
+                return '',f'캡차 세션 미생성(빈 이미지 {len(ci.content)}B) — 서버 불가·노드 위임'
             return '','kcaptcha OCR 불확실(무료) — 재시도'
         except Exception as e:
             return '',f'캡차 처리 오류({str(e)[:30]})'
@@ -4130,6 +4135,7 @@ def gnuboard_post_http(site, title, content_html):
             if not ans:
                 last_reason=why
                 if attempt+1<CAP_TRIES: time.sleep(1); continue
+                if '세션 미생성' in why: return False,why   # 빈 캡차: 셀레늄도 못 품 → 즉시 실패(쿨다운은 finalize_post)
                 if '이미지' in why or '오류' in why: return None,why+' — 폴백'
                 # ★OCR 빈값도 셀레늄 폴백(2026-10-03): 서버 셀레늄 경로는 같은 OCR로 6자리 해결 로그가 계속 찍히는데
                 #   HTTP 경로만 빈값 → 하드실패(False)로 끝내면 되는 사이트가 실패로만 쌓임. OCR 엔진이 하나라도
@@ -6647,6 +6653,12 @@ def finalize_post(site,ok,fail_reason=''):
                     #   under_min_interval이 cooldown_until을 존중해 서버 발행·노드 claim 모두 그 사이트를 20분 건너뜀.
                     if '등록 확인 불가' in str(fail_reason):
                         s['cooldown_until']=(datetime.now()+timedelta(minutes=20)).strftime('%Y-%m-%d %H:%M:%S')
+                    # ★빈 캡차(서버에서 캡차 세션 미생성) 사이트는 5분마다 헛시도해 실패만 쌓임(2026-10-03 실측 15곳×251건/2.5h).
+                    #   노드가 없으면 2시간, 노드가 살아 있으면 20분(곧 노드 claim이 가져가도록) 쿨다운.
+                    if '캡차 세션 미생성' in str(fail_reason):
+                        try: _alive=_pc_node_alive()
+                        except Exception: _alive=False
+                        s['cooldown_until']=(datetime.now()+timedelta(minutes=(20 if _alive else 120))).strftime('%Y-%m-%d %H:%M:%S')
                     # (죽은 사이트 잠금은 실시간 오판을 피해 /api/sites/mark-login-required가 last_post_at 기준으로
                     #  주기 처리한다. 여기선 fail_streak만 올리고 reconcile_sites가 잠금 판정.)
                 break
