@@ -2659,6 +2659,27 @@ _KC_SESS=None; _KC_TRIED=False
 _KC_MODEL_PATH=os.path.join(os.path.dirname(os.path.abspath(__file__)),'captcha_retrain','kcaptcha_model.onnx')
 _KC_MODEL_B64=''   # ★서버 무SSH 배포용(2026-09-15): autodeploy는 app.py만 받으므로 전용모델 onnx를
                    #   base64로 app.py에 임베드 → 서버가 파일 없으면 이걸 디스크에 풀어 쓴다. (노드는 로컬파일 우선)
+# ★서버 전용모델 자동 수급(2026-10-03 대표님 '1번 바로 진행'): 진단로그 model=off — autodeploy가 app.py만 받아 서버엔
+#   모델 파일이 없었고 범용 ddddocr만 써서 서버 캡차 정확도가 낮았음. 공개 저장소의 SHA 고정 raw URL(불변)에서 1회
+#   내려받아 md5 검증 후 저장. 실패해도 조용히 기존 ddddocr 폴백. 노드는 git 로컬파일이 있어 다운로드 안 함.
+_KC_MODEL_URL='https://raw.githubusercontent.com/kangtaewoo1/chirashi-master/31a9d72065651bb2d64cab0abf3cc534d46d791a/chirashi/captcha_retrain/kcaptcha_model.onnx'
+_KC_MODEL_MD5='a95b9c0ab49346f29da3088145a69cd4'   # 위 커밋의 kcaptcha_model.onnx(wide192, 3,233,125B) 무결성 검증용
+def _kc_model_download():
+    """전용 kcaptcha 모델이 디스크에 없을 때 raw GitHub에서 내려받는다. 성공 True / 실패 False(로그만)."""
+    try:
+        import urllib.request, hashlib as _hl
+        req=urllib.request.Request(_KC_MODEL_URL,headers={'User-Agent':'Mozilla/5.0 (chirashi kcaptcha model fetch)'})
+        with urllib.request.urlopen(req,timeout=90) as _r: _b=_r.read()
+        if len(_b)<1_000_000 or _hl.md5(_b).hexdigest()!=_KC_MODEL_MD5:
+            add_log(f'[kcaptcha 전용모델] 다운로드 검증 실패(len={len(_b)}) — ddddocr 유지'); return False
+        os.makedirs(os.path.dirname(_KC_MODEL_PATH),exist_ok=True)
+        _tmp=_KC_MODEL_PATH+'.part'
+        with open(_tmp,'wb') as _f: _f.write(_b)
+        os.replace(_tmp,_KC_MODEL_PATH)
+        add_log(f'[kcaptcha 전용모델] 서버에 자동 다운로드 완료({len(_b)//1024}KB, md5 검증 OK)')
+        return True
+    except Exception as _e:
+        add_log(f'[kcaptcha 전용모델] 다운로드 실패 — ddddocr 유지: {str(_e)[:60]}'); return False
 def _kcaptcha_model_predict(image_bytes):
     """전용 CRNN onnx로 kcaptcha 예측 → 숫자문자열(6자리 기대). 모델 없거나 실패면 ''."""
     global _KC_SESS,_KC_TRIED
@@ -2674,6 +2695,7 @@ def _kcaptcha_model_predict(image_bytes):
                     with open(_KC_MODEL_PATH,'wb') as _mf: _mf.write(_b64k.b64decode(_KC_MODEL_B64))
                     add_log('[kcaptcha 전용모델] 임베드 모델을 디스크에 복원(서버 무SSH)')
                 except Exception: pass
+            if not os.path.exists(_KC_MODEL_PATH): _kc_model_download()   # ★서버: 파일 없으면 raw GitHub에서 1회 수급(2026-10-03)
             if not os.path.exists(_KC_MODEL_PATH): return ''
             import onnxruntime as _ort
             _KC_SESS=_ort.InferenceSession(_KC_MODEL_PATH,providers=['CPUExecutionProvider'])
