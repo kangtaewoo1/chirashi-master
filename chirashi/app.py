@@ -3993,6 +3993,17 @@ def _solve_kcaptcha_bytes(img_bytes, cfg):
             try: os.unlink(tp)
             except Exception: pass
 
+_HTTP_CAP_DIAG={}; _HTTP_CAP_DIAG_LOCK=threading.Lock()
+def _http_cap_diag(key, site, detail):
+    """HTTP 발행 캡차 실패 진단 로그 — 사이트당 10분에 1번만(도배 방지). 2026-10-03 '실패 왜 많음' 규명용."""
+    try:
+        now=time.time()
+        with _HTTP_CAP_DIAG_LOCK:
+            if now-_HTTP_CAP_DIAG.get(key,0)<600: return
+            _HTTP_CAP_DIAG[key]=now
+        add_log(f'[HTTP캡차진단] {(site.get("name") or site.get("site_url") or "")[:28]} — {detail}')
+    except Exception: pass
+
 def gnuboard_post_http(site, title, content_html):
     """requests 기반 초고속 그누보드 발행(비회원 글쓰기). 성공: (True, 글URL).
        불가/폴백 필요: (None, 사유) → 호출측이 셀레늄으로 폴백. 실패: (False, 사유)."""
@@ -4062,15 +4073,30 @@ def gnuboard_post_http(site, title, content_html):
         _2c=(cfg.get('twocaptcha_api_key') or '').strip() and cfg.get('twocaptcha_enabled')
         if not _2c:
             return None,'캡차 사이트 — 무료 OCR 없는 환경(노드 위임)'
+    _diag_key=f'{base}|{bo}'
     def _fetch_captcha_answer():
-        """세션에 정답 심기 → 이미지 GET → 2captcha 풀이. (답, 사유). 실패시 ('',사유)."""
+        """세션에 정답 심기 → 이미지 GET → OCR(무료) → 2captcha. (답, 사유). 실패시 ('',사유).
+           ★2026-10-03 대표님 '실패 왜 많음' 규명: 서버 HTTP 경로가 15곳×5분마다 'OCR 불확실' 251건/2.5h(실패의 63%).
+           같은 15곳 캡차를 PC(주거IP)에서 받아 전용모델에 넣으면 전부 6자리로 읽힘 → 서버가 받는 응답이 이미지가 아닐
+           가능성이 큼(DC IP·헤더 차이). 브라우저와 같은 헤더(Referer·X-Requested-With)로 요청하고, 비이미지 응답은
+           '이미지 수신 실패'로 분류(→셀레늄 폴백), 사이트당 10분 1회 진단로그를 남겨 원인을 확정한다."""
         try:
-            s.post(cap_base+'/kcaptcha_session.php',timeout=12,verify=False)
-            ci=s.get(cap_base+f'/kcaptcha_image.php?t={int(time.time()*1000)}',timeout=12,verify=False)
+            _ref={'Referer':f'{bbs}/write.php?bo_table={bo}'}
+            s.post(cap_base+'/kcaptcha_session.php',timeout=12,verify=False,
+                   headers={**_ref,'X-Requested-With':'XMLHttpRequest','Origin':base})
+            ci=s.get(cap_base+f'/kcaptcha_image.php?t={int(time.time()*1000)}',timeout=12,verify=False,
+                     headers={**_ref,'Accept':'image/avif,image/webp,image/apng,image/*,*/*;q=0.8'})
             if not (ci.status_code<400 and ci.content and len(ci.content)>200):
                 return '','캡차 이미지 수신 실패'
+            _ct=str(ci.headers.get('content-type') or '').lower(); _sig=ci.content[:4]
+            _is_img=_ct.startswith('image') or _sig in (b'\x89PNG',b'GIF8') or _sig[:2]==b'\xff\xd8'
+            if not _is_img:
+                _http_cap_diag(_diag_key,site,f'비이미지 응답 ct={_ct[:30]} len={len(ci.content)} head={ci.content[:60]!r}')
+                return '','캡차 이미지 수신 실패(비이미지 응답)'
             ans=_solve_kcaptcha_bytes(ci.content,cfg)
-            return (ans,'') if ans else ('','kcaptcha OCR 불확실(무료) — 재시도')
+            if ans: return ans,''
+            _http_cap_diag(_diag_key,site,f'OCR 빈값 ct={_ct[:20]} len={len(ci.content)} model={"on" if _KC_SESS is not None else "off"} dddd={"on" if _DDDD_OCR is not None else "off"}')
+            return '','kcaptcha OCR 불확실(무료) — 재시도'
         except Exception as e:
             return '',f'캡차 처리 오류({str(e)[:30]})'
     # ── 캡차 오답 시 새 이미지로 재시도(최대 3회) — 한 번 OCR 오답으로 글 날리지 않게(리뷰 지시) ──
@@ -4082,7 +4108,12 @@ def gnuboard_post_http(site, title, content_html):
             if not ans:
                 last_reason=why
                 if attempt+1<CAP_TRIES: time.sleep(1); continue
-                return (None,why+' — 폴백') if '이미지' in why or '오류' in why else (False,why)
+                if '이미지' in why or '오류' in why: return None,why+' — 폴백'
+                # ★OCR 빈값도 셀레늄 폴백(2026-10-03): 서버 셀레늄 경로는 같은 OCR로 6자리 해결 로그가 계속 찍히는데
+                #   HTTP 경로만 빈값 → 하드실패(False)로 끝내면 되는 사이트가 실패로만 쌓임. OCR 엔진이 하나라도
+                #   살아 있을 때만 폴백(둘 다 없으면 셀레늄도 못 풀므로 기존대로 실패).
+                if 'OCR 불확실' in why and (_KC_SESS is not None or _DDDD_OCR is not None): return None,why+' — 셀레늄 폴백'
+                return False,why
             data['captcha_key']=ans
             # uid/w_time이 회전하는 스킨 대비: 캡차 재시도마다 폼을 다시 읽어 최신 토큰 반영
             if attempt>0:
