@@ -142,6 +142,41 @@ def _apply_llm(cfg):
         pass
     return cfg
 
+def _sync_turnstile_to_local(s):
+    """서버 관제실의 Turnstile 처리 설정(turnstile_mode·turnstile_human_wait_sec)을 노드 로컬 config.json에 반영(2026-10-02).
+       cafe24_post가 load_config()로 직접 읽으므로 로컬 파일에 박아야 함(IMAP과 같은 패턴). 값이 바뀔 때만 저장."""
+    try:
+        mode = str(s.get("turnstile_mode") or "").strip().lower()
+        if mode not in ("auto", "human", "2captcha"): return
+        try: wait = int(s.get("turnstile_human_wait_sec") or 0)
+        except Exception: wait = 0
+        c = app.load_config(); changed = False
+        if c.get("turnstile_mode") != mode: c["turnstile_mode"] = mode; changed = True
+        if wait and c.get("turnstile_human_wait_sec") != wait: c["turnstile_human_wait_sec"] = wait; changed = True
+        if changed:
+            app.save_config(c)
+            log(f"서버 Turnstile 설정 로컬 반영 — mode={mode} 대기={wait or c.get('turnstile_human_wait_sec')}초")
+    except Exception as e:
+        log(f"Turnstile 설정 로컬반영 실패(무시): {str(e)[:60]}")
+
+# ★Turnstile 사람 클릭 대기 알림(2026-10-02): 엔진(app._turnstile_human_click)이 대기 시작('wait')/종료('done') 때 부른다.
+#   이 노드에서 지금 몇 건이 클릭을 기다리는지 서버 관제실 노드 카드에 표시(🖱 사람 클릭 대기 N건) — 사무실 밖에서도 보이게.
+_TS_PENDING = [0]; _TS_LOCK = threading.Lock()
+def _turnstile_notify(site, state):
+    with _TS_LOCK:
+        _TS_PENDING[0] = max(0, _TS_PENDING[0] + (1 if state == "wait" else -1))
+        n = _TS_PENDING[0]
+    name = str(site.get("name") or site.get("site_url") or "")[:30]
+    log(f"[사람클릭] {'대기 시작' if state == 'wait' else '종료'} — {name} (이 노드 대기 {n}건)")
+    try:
+        requests.post(f"{SERVER}/api/pipeline/node-beat?token={SERVER_TOKEN}",
+                      json={"node_id": NODE_ID, "turnstile_pending": n,
+                            "action": (f"🖱 Turnstile 사람 클릭 대기 — {name}" if state == "wait" else f"사람 클릭 처리 끝 — {name}")},
+                      headers=UA, timeout=15, verify=False)
+    except Exception:
+        pass
+app._turnstile_notify = _turnstile_notify
+
 NODE_VER = 2   # ★노드 코드 세대. 서버는 ver<2(옛 가입 로직) 노드엔 cafe24 후보를 안 줌 — 옛 노드가 복원 후보를 태우던 사고 방지(2026-09-11)
 
 def _claim(n):
@@ -152,7 +187,7 @@ def _claim(n):
         if r.status_code != 200:
             log(f"claim 실패 HTTP {r.status_code}"); return []
         d = r.json()
-        if isinstance(d.get("llm"), dict): _SERVER_LLM.update(d["llm"]); _sync_imap_to_local(d["llm"])   # 서버 LLM·IMAP 보관
+        if isinstance(d.get("llm"), dict): _SERVER_LLM.update(d["llm"]); _sync_imap_to_local(d["llm"]); _sync_turnstile_to_local(d["llm"])   # 서버 LLM·IMAP·Turnstile 보관
         return d.get("candidates") or []
     except Exception as e:
         log(f"claim 오류: {e}"); return []
@@ -206,7 +241,7 @@ def _claim_sites(n):
             if r.status_code != 200:
                 return []
             d = r.json() or {}
-            if isinstance(d.get("llm"), dict): _SERVER_LLM.update(d["llm"])   # 서버 LLM 설정 보관
+            if isinstance(d.get("llm"), dict): _SERVER_LLM.update(d["llm"]); _sync_turnstile_to_local(d["llm"])   # 서버 LLM·Turnstile 설정 보관
             return d.get("sites") or []
         except Exception:
             if _att < 1:
@@ -713,7 +748,10 @@ if __name__ == "__main__":
     ap.add_argument("--cafe24-inspect", dest="cafe24_inspect", default="", help="지정 Cafe24 사이트 구조 분석(로그인폼·글쓰기 진입 DOM 추출)")
     ap.add_argument("--id", dest="mb_id", default="", help="(선택) Cafe24 로그인 아이디 — 주면 로그인 발행 테스트")
     ap.add_argument("--pw", dest="mb_pass", default="", help="(선택) Cafe24 로그인 비번 — 명령줄 노출 주의, 테스트 후 창 닫기 권장")
+    ap.add_argument("--headful", action="store_true", help="크롬 창을 보이게 실행 — Turnstile '사람 클릭 모드'(직원이 체크박스 클릭)에 필요")
     a = ap.parse_args()
+    if a.headful:
+        os.environ["CHIRASHI_HEADFUL"] = "1"   # app.get_driver가 이 값을 보고 headless를 끈다(드라이버 생성 전에 설정)
     if a.cafe24_inspect:
         cafe24_inspect(a.cafe24_inspect)
     elif a.cafe24_test:

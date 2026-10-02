@@ -53,8 +53,11 @@ REM --- init heartbeat, then start the node in its own minimized window (output 
 powershell -NoProfile -Command "[IO.File]::WriteAllText('%HB%',[string][DateTimeOffset]::UtcNow.ToUnixTimeSeconds())" 2>nul
 REM NODE_WORKERS env (default 2): raise to 3-4 only when the PC has >= 1.5 GB free RAM per extra worker
 if "%NODE_WORKERS%"=="" set NODE_WORKERS=2
-echo starting node - workers %NODE_WORKERS%
-start "chirashi-node" /min cmd /c "py pc_node.py --workers %NODE_WORKERS% >> pc_node.log 2>&1"
+REM NODE_HEADFUL=1 : visible chrome windows - required for the Turnstile human-click mode (staff clicks the checkbox)
+set HEADFUL_ARG=
+if "%NODE_HEADFUL%"=="1" set HEADFUL_ARG=--headful
+echo starting node - workers %NODE_WORKERS% %HEADFUL_ARG%
+start "chirashi-node" /min cmd /c "py pc_node.py --workers %NODE_WORKERS% %HEADFUL_ARG% >> pc_node.log 2>&1"
 goto WATCH
 
 :ALREADY

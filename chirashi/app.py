@@ -243,6 +243,8 @@ def _record_captcha_usage(cap_type, success, cfg):
         if success:
             if cap_type=='recaptcha':
                 price=float(cfg.get('twocaptcha_price_recaptcha_usd') or 0.003)
+            elif cap_type=='turnstile_human':
+                price=0.0   # ★사람 클릭(2026-10-02): 우리 직원이 직접 클릭 — 과금 없음
             else:
                 price=float(cfg.get('twocaptcha_price_image_usd') or 0.0005)
         else:
@@ -747,6 +749,10 @@ def load_config():
        # 유니크 발급하고 IMAP으로 인증메일을 읽는다(일회용 도메인 차단 게시판도 통과). App Password 사용.
        'imap_email':'','imap_password':'','imap_host':'imap.gmail.com',
        'twocaptcha_api_key':'','twocaptcha_enabled':False,
+       # ★Turnstile(카페24 '사람인지 확인') 처리 방식(2026-10-02 대표님 '우리가 2captcha 형식으로 — 사람 클릭'):
+       #   auto=2captcha 켜져 있고 잔액 있으면 2captcha, 아니면 사람 클릭 / human=사람 클릭만 / 2captcha=2captcha만.
+       #   사람 클릭은 노드 PC를 `py pc_node.py --headful`로 띄워 크롬 창이 보일 때만 동작(서버 headless는 불가).
+       'turnstile_mode':'auto','turnstile_human_wait_sec':180,
        'http_publish_enabled':True,  # ★browserless(requests) 초고속발행(~2~3초) — CSRF token 전송 추가(2026-09-13)로 활성화. 실패 시 셀레늄 자동 폴백.
        'server_nonlogin_publish':True,  # ★대표님 지시 2026-09-18 '워커로 글발행 많이': node_publish_all일 때도 서버 6워커가 '비회원 바로발행(로그인 불필요)' 사이트를 병렬 발행(서버 DC IP는 로그인만 막힘). 노드는 로그인·cafe24 전담. False면 서버워커 완전 대기(옛 동작).
        'workroom_fixed_slots':True,  # ★대표님 지시 2026-09-18 '워커를 작업실에 고정 배정=강제 균등': 워커 슬롯을 작업실에 1:1(slot%작업실수) 매핑해 노래방·마사지·동탄·인천 균등 발행. False면 옛 워크스틸링(조합수 많은 방 편중).
@@ -2952,6 +2958,71 @@ def _twocaptcha_has_balance(api_key):
     _2C_BAL_CACHE['ts']=now; _2C_BAL_CACHE['ok']=ok
     return ok
 
+def _turnstile_human_click(d, site, cfg):
+    """★Turnstile 사람 클릭 모드(2026-10-02 대표님 '우리가 2captcha 형식으로 — 직원이 클릭'):
+       카페24 '사람인지 확인'(veritas-hub Turnstile)을 자동으로 풀거나 우회하지 않는다. 노드 PC의 보이는 크롬 창을
+       앞으로 올리고 노란 안내 배너+알림음을 띄운 뒤, 사람이 체크박스를 직접 클릭할 때까지 기다린다(기본 180초).
+       통과 판정 = ①챌린지 URL 이탈 ②cf-turnstile-response 토큰 생성 ③페이지에서 챌린지 흔적 소멸.
+       통과 후 쿠키는 기존 _c24_cookies_save(폼진입/로그인)가 12시간 저장 → 같은 사이트는 재클릭 거의 없음.
+       반환 형식은 solve_captcha_with_2captcha와 동일: (ok, msg, token, info)."""
+    if not getattr(d,'_headful',False):
+        return False,'turnstile 캡차 사람 클릭 불가 — 크롬이 headless(노드를 `py pc_node.py --headful`로 실행 필요)','',{}   # '캡차' 포함 → classify_fail 분류 기존과 동일
+    try: wait=max(30,min(900,int(cfg.get('turnstile_human_wait_sec') or 180)))
+    except Exception: wait=180
+    name=str(site.get('name') or site.get('site_url') or '')[:30]
+    try: url0=str(d.current_url or '')
+    except Exception: url0=''
+    _nf=globals().get('_turnstile_notify')   # pc_node.py가 심어주는 관제실 알림 훅(서버 단독 실행이면 없음 → 무시)
+    def _notify(state):
+        if callable(_nf):
+            try: _nf(site,state)
+            except Exception: pass
+    _BANNER_JS=("var id='__chirashi_human_banner',el=document.getElementById(id);"
+                "if(!el){el=document.createElement('div');el.id=id;"
+                "el.style.cssText='position:fixed;top:0;left:0;right:0;z-index:2147483647;background:#111;color:#ffe066;"
+                "font:bold 16px/1.4 sans-serif;padding:12px 16px;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,.5);pointer-events:none';"
+                "(document.body||document.documentElement).appendChild(el);}el.textContent=arguments[0];")
+    def _banner(left):
+        try: d.execute_script(_BANNER_JS, f'👆 찌라시 마스터 — {name}: 아래 "사람인지 확인" 체크박스를 직접 클릭해 주세요 (남은 시간 {left}초)')
+        except Exception: pass
+    # 창을 앞으로 + 알림음(Windows만, 다른 OS는 조용히 패스)
+    try: d.switch_to.window(d.current_window_handle); d.maximize_window()
+    except Exception: pass
+    try:
+        import winsound; winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
+    except Exception: pass
+    add_log(f'[Turnstile 사람클릭] {name} — 노드 크롬 창에서 클릭 대기(최대 {wait}초)')
+    _notify('wait')
+    t0=time.time(); passed=False; tok=''; how=''; _lastb=0.0
+    try:
+        while time.time()-t0<wait:
+            left=int(wait-(time.time()-t0))
+            if time.time()-_lastb>=5:   # 배너는 페이지가 바뀌면 사라지므로 5초마다 다시 그림(남은 시간 갱신)
+                _banner(left); _lastb=time.time()
+            time.sleep(1)
+            try: cur=str(d.current_url or '')
+            except Exception: cur=''
+            _cl=cur.lower()
+            if url0 and cur and cur!=url0 and 'veritas-hub' not in _cl and '/challenge' not in _cl:
+                passed=True; how='URL 이탈'; break
+            try: tok=str(d.execute_script("var t=document.querySelector('[name=\"cf-turnstile-response\"]');return t?(t.value||''):'';") or '')
+            except Exception: tok=''
+            if tok: passed=True; how='토큰 생성'; break
+            try: low=str(d.page_source or '')[:30000].lower()
+            except Exception: low=''
+            if low and 'turnstile' not in low and 'cf-chl' not in low and '사람인지' not in low and '간단한 확인' not in low:
+                passed=True; how='챌린지 소멸'; break
+    finally:
+        _notify('done')
+    try: d.execute_script("var e=document.getElementById('__chirashi_human_banner');if(e)e.remove();")
+    except Exception: pass
+    if not passed:
+        add_log(f'[Turnstile 사람클릭] {name} — {wait}초 내 클릭 없음(만료)')
+        return False,f'turnstile 사람 클릭 대기 {wait}초 만료','',{}
+    _record_captcha_usage('turnstile_human',True,cfg)
+    add_log(f'[Turnstile 사람클릭] {name} — 통과({how}, {int(time.time()-t0)}초)')
+    return True,f'turnstile 사람 클릭 통과({how})',tok,{'type':'turnstile','token':tok,'human':True}
+
 def solve_captcha_with_2captcha(d,site,cap_type,cfg,timeout=300):
     """CAPTCHA 자동 해결. ★kcaptcha는 자체 OCR(ddddocr) 우선이라 2captcha 미설정이어도 시도(2026-09-12)."""
     api_key=(cfg.get('twocaptcha_api_key') or '').strip()
@@ -2960,6 +3031,11 @@ def solve_captcha_with_2captcha(d,site,cap_type,cfg,timeout=300):
     #   ERROR_ZERO_BALANCE 로그를 안 남긴다. turnstile은 2captcha 필수라 잔액0이면 애초에 못 함.
     if _2c_on and not _twocaptcha_has_balance(api_key):
         _2c_on=False
+    # ★Turnstile 사람 클릭 모드(2026-10-02): turnstile_mode auto(2captcha 불가 시 사람)/human(항상 사람)/2captcha(자동만).
+    #   사람 모드는 노드가 --headful(보이는 크롬)일 때만 실제 대기하고, headless(서버)면 즉시 실패 반환(기존과 동일 결과).
+    _tmode=str(cfg.get('turnstile_mode') or 'auto').strip().lower()
+    if cap_type=='turnstile' and (_tmode=='human' or (_tmode=='auto' and not _2c_on)):
+        return _turnstile_human_click(d,site,cfg)
     # kcaptcha=OCR 무료, recaptcha=오디오 음성인식 무료 → 2captcha 없어도 시도. turnstile만 2captcha 필수.
     if not _2c_on and cap_type not in ('kcaptcha','recaptcha'):
         return False,'2captcha 잔액0/미설정 — 유료캡차 건너뜀','',{}
@@ -3435,7 +3511,8 @@ def get_driver(remote=False):
         opts = webdriver.ChromeOptions()
         # ★환경변수 CHIRASHI_HEADFUL=1이면 크롬 창을 보이게(non-headless) 띄운다(대표님 PC에서 Cafe24
         #   로그인·Turnstile을 눈으로 보며·통과율 높이려고. headless는 CF가 더 잘 막음). 서버는 미설정=headless 유지.
-        if os.environ.get('CHIRASHI_HEADFUL','') not in ('1','true','yes'):
+        _hf=os.environ.get('CHIRASHI_HEADFUL','') in ('1','true','yes')
+        if not _hf:
             opts.add_argument('--headless=new')
         opts.add_argument('--no-sandbox')
         opts.add_argument('--disable-dev-shm-usage'); opts.add_argument('--disable-gpu')
@@ -3475,6 +3552,7 @@ def get_driver(remote=False):
         svc=Service(_get_driver_path())   # 캐시된 driver 경로(동시 install 충돌 방지)
         d=webdriver.Chrome(service=svc,options=opts)
         d.set_page_load_timeout(25); d.implicitly_wait(3)
+        d._headful=_hf   # ★Turnstile 사람 클릭 모드 판정용(2026-10-02): headless면 사람이 클릭할 창이 없음
         _drivers[tid]=d; return d
 
 def dismiss_alerts(d):
@@ -9195,7 +9273,10 @@ def _llm_for_nodes():
             #   그 지메일로 자동처리. 노드 로컬 config에 따로 안 넣어도 됨(LLM·Brave와 같은 단일기준 패턴).
             'imap_email':(c.get('imap_email') or '').strip(),
             'imap_password':(c.get('imap_password') or '').strip(),
-            'imap_host':(c.get('imap_host') or 'imap.gmail.com').strip()}
+            'imap_host':(c.get('imap_host') or 'imap.gmail.com').strip(),
+            # ★Turnstile 사람 클릭 모드(2026-10-02): 관제실 설정이 노드 로컬 config에 반영되게 함께 내려줌.
+            'turnstile_mode':(str(c.get('turnstile_mode') or 'auto')).strip().lower(),
+            'turnstile_human_wait_sec':int(c.get('turnstile_human_wait_sec') or 180)}
 
 def _has_write_path(c):
     """게시판형(글쓰기 가능성) 후보인지 — auto_pipeline_once와 /api/pipeline/claim 공통 판정(DRY)."""
@@ -10414,7 +10495,7 @@ def chk():
     #  /api/test/* = 발행 테스트 트리거(등록 사이트에 실제 글1건 발행해 검증).
     _p=request.path
     if _p=='/api/version': return  # 배포 SHA 확인 — 공개(민감정보 없음)
-    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/sites/unlock-cafe24','/api/sites/unlock-verified','/api/sites/purge-fake-cafe24','/api/sites/mark-login-required','/api/sites/unmark-login-required','/api/sites/retry-signup','/api/candidates/rescreen-cafe24','/api/candidates/revive-rejected','/api/candidates/unrevive-nonillegal','/api/regions/normalize-existing','/api/site-board','/api/history','/api/ops-dashboard','/api/imap/test','/api/openai/usage','/api/twocaptcha/usage','/api/config/clear-key','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/candidates/reject-unworkable','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/report-site','/api/unlocker/test','/api/sbr/test','/api/diag') or _p.startswith('/api/test/'):
+    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/sites/unlock-cafe24','/api/sites/unlock-verified','/api/sites/purge-fake-cafe24','/api/sites/mark-login-required','/api/sites/unmark-login-required','/api/sites/retry-signup','/api/candidates/rescreen-cafe24','/api/candidates/revive-rejected','/api/candidates/unrevive-nonillegal','/api/regions/normalize-existing','/api/site-board','/api/history','/api/ops-dashboard','/api/imap/test','/api/openai/usage','/api/twocaptcha/usage','/api/config/clear-key','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/candidates/reject-unworkable','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/report-site','/api/pipeline/node-beat','/api/unlocker/test','/api/sbr/test','/api/diag') or _p.startswith('/api/test/'):
         tok=(request.args.get('token') or '').strip()
         cfgtok=(load_config().get('log_token') or '').strip()
         if cfgtok and tok==cfgtok:
@@ -11086,6 +11167,20 @@ def api_pipeline_claim():
     if picked: add_log(f'[PC노드] {node_id} 후보 {len(picked)}곳 claim(가입·발행 위임)','파이프라인')
     _node_beat(node_id, action=(f'후보 {len(picked)}곳 발행 시작' if picked else '대기(후보 없음)'))
     return jsonify({'ok':True,'candidates':picked,'ttl':ttl,'llm':_llm_for_nodes()})
+
+@app.route('/api/pipeline/node-beat',methods=['POST'])
+def api_pipeline_node_beat():
+    """★노드 상태 비트(2026-10-02 Turnstile 사람 클릭 모드): 노드가 사람 클릭 대기 시작/종료를 알린다.
+       body: {node_id, action?, turnstile_pending}. 관제실 노드 카드에 '🖱 사람 클릭 대기 N건'으로 표시."""
+    d=request.get_json(silent=True) or {}
+    nid=str(d.get('node_id') or '').strip() or 'pc'
+    try: pend=max(0,int(d.get('turnstile_pending') or 0))
+    except Exception: pend=0
+    _node_beat(nid, action=str(d.get('action') or ''))
+    with _NODE_LOCK:
+        b=NODE_BEATS.get(nid)
+        if b: b['turnstile_pending']=pend
+    return jsonify({'ok':True})
 
 @app.route('/api/pipeline/report',methods=['POST'])
 def api_pipeline_report():
@@ -12778,7 +12873,7 @@ def api_cfg():
                   'daily_publish_goal','region_keep_dong','region_keep_eupmyeon',
                   'video_url','landing_url','post_email','guest_post_password',
                   'imap_email','imap_password','imap_host',
-                  'twocaptcha_api_key','twocaptcha_enabled',
+                  'twocaptcha_api_key','twocaptcha_enabled','turnstile_mode','turnstile_human_wait_sec',
                   'twocaptcha_price_recaptcha_usd','twocaptcha_price_image_usd','brave_price_per_query_usd',
                   'auto_pipeline_enabled','auto_pipeline_batch','server_nonlogin_publish','signup_max_per_claim','cand_cooldown_sec',
                   'proxy_enabled','proxy_host','proxy_port','proxy_user','proxy_pass','proxy_only_for_cf',
@@ -13975,6 +14070,8 @@ DASH_HTML=r'''<header><div class="logo" onclick="window.scrollTo({top:0,behavior
 <div class="card"><h3>🤖 CAPTCHA 자동 해결 (2captcha)</h3>
 <label class="chk" style="color:var(--g)"><input type="checkbox" id="cTwocaptchaEn">자동 해결 켜기 (reCAPTCHA · hCaptcha · Turnstile · kCaptcha)</label>
 <div class="f"><small>2captcha 키</small><input type="password" id="cTwocaptchaKey" placeholder="변경시만 입력"></div>
+<div class="r2" style="margin-top:6px"><div><small class="lb">Turnstile(카페24 '사람인지 확인') 처리</small><select id="cTurnstileMode"><option value="auto">자동 — 2captcha 잔액 있으면 2captcha, 없으면 사람 클릭</option><option value="human">사람 클릭만 (노드 PC 직원이 체크박스 클릭)</option><option value="2captcha">2captcha만</option></select></div><div><small class="lb">사람 클릭 대기(초)</small><input type="number" id="cTurnstileWait" min="30" max="900" value="180"></div></div>
+<div class="help">🖱 <b>사람 클릭 모드</b>: 노드 PC에서 <code>py pc_node.py --headful</code>(워치독은 <code>NODE_HEADFUL=1</code>)로 실행하면 크롬 창이 보입니다. 카페24 '사람인지 확인'이 뜨면 그 창이 앞으로 올라오고 노란 안내 배너+알림음이 나며, 직원이 체크박스를 한 번 클릭하면 발행이 이어집니다. 통과 쿠키는 12시간 저장돼 같은 사이트는 재클릭이 거의 없습니다. 대기 중 건수는 관제실 노드 카드에 표시됩니다.</div>
 <div id="twocaptchaUsage" style="margin-top:4px;padding:7px 9px;background:#0b1322;border:1px solid var(--b);border-radius:7px;font-size:10.5px;color:var(--d)">2captcha 상태 확인 중...</div>
 <div class="help"><a href="https://2captcha.com/" target="_blank" rel="noopener" style="color:var(--p)">2captcha 계정 ↗</a> · 자동 해결 실패 시 수동 입력으로 폴백.</div>
 </div>
@@ -14136,6 +14233,7 @@ function renderNodeStrip(){const box=$('nodeStrip');if(!box)return;
     return '<div style="border:1px solid '+brd+';border-radius:8px;background:'+bg+';padding:8px 11px">'
       +'<div style="display:flex;justify-content:space-between;align-items:center"><b style="font-size:13px">'+esc(_nodeLabel(n.node_id))+'</b><span style="font-size:11px">'+dot+'</span></div>'
       +'<div style="font-size:11.5px;color:var(--t);margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="'+esc(n.action||'')+'">'+esc(n.action||'대기 중')+'</div>'
+      +(((n.turnstile_pending|0)>0&&state!=='dead')?'<div style="font-size:11.5px;color:#ffe066;margin-top:4px">🖱 Turnstile 사람 클릭 대기 '+(n.turnstile_pending|0)+'건 — 이 노드 PC의 크롬 창에서 체크박스를 클릭해 주세요</div>':'')
       +'<div style="font-size:10.5px;color:var(--d);margin-top:4px">마지막 '+_ago(age)+' · 발행 '+(n.publish||0)+'건 · 발굴 '+(n.discover||0)+'건</div>'
       +'</div>';}).join('');
 }
@@ -14476,7 +14574,7 @@ function previewPost(){const c=$('gContent').value.trim();if(!c){toast('먼저 �
 function closePreview(){$('pvOverlay').style.display='none';$('pvFrame').srcdoc=''}
 async function delSite(id){if(!confirm('삭제?'))return;await api('/sites','DELETE',{id});renderSites()}
 async function testSite(id){toast('Selenium 테스트 중...');const r=await api('/test/'+id,'POST');if(r&&r.ok)toast('✅ 테스트 성공!'+(r.platform?' ['+(r.platform==='cafe24'?'Cafe24':'그누보드')+']':'')+' '+(r.message||''));else toast('실패: '+(r?.error||r?.message||''),'er')}
-async function saveCfg(){const d={brand:$('cBrand').value.trim(),phone:$('cPhone').value.trim(),phones:$('cPhones').value,video_url:$('cVideoUrl').value.trim(),landing_url:$('cLandingUrl').value.trim(),post_email:$('cPostEmail').value.trim(),workers:parseInt($('cWorkers').value)||2,post_delay:parseInt($('cDelay').value)||0,daily_limit:parseInt($('cDaily').value)||0,use_gpt:$('cUseGpt').checked,llm_provider:($('cLlmProvider')?$('cLlmProvider').value:'openrouter'),nvidia_model:($('cNvidiaModel')?$('cNvidiaModel').value.trim():''),openrouter_model:($('cOpenrouterModel')?$('cOpenrouterModel').value.trim():''),telegram_chat_id:$('cTgChat').value.trim(),notify_done:$('cNotifyDone').checked,notify_fail:$('cNotifyFail').checked,backup_time:$('cBackupTime').value.trim(),telegram_control:$('cTgControl').checked,verify_enabled:$('cVerify').checked,mix_keywords:$('cMixKw').checked,block_unpaid:$('cBlockUnpaid').checked,search_provider:'brave',discover_enabled:$('cDiscoOn').checked,discover_daily_target:parseInt($('cDTarget').value)||100,discover_query_limit:parseInt($('cDQuery').value)||100,discover_keywords:'',discover_direct_queries:$('cDDirect').value,excluded_domains:($('cExcludedDomains')?$('cExcludedDomains').value:''),imap_email:($('cImapEmail')?$('cImapEmail').value.trim():''),imap_password:($('cImapPass')&&$('cImapPass').value?$('cImapPass').value:'***설정됨***'),imap_host:($('cImapHost')&&$('cImapHost').value.trim()?$('cImapHost').value.trim():'imap.gmail.com'),twocaptcha_enabled:$('cTwocaptchaEn').checked,brave_price_per_query_usd:parseFloat($('cBravePrice').value)||0,twocaptcha_price_recaptcha_usd:parseFloat($('cCapRePrice').value)||0,twocaptcha_price_image_usd:parseFloat($('cCapImgPrice').value)||0};
+async function saveCfg(){const d={brand:$('cBrand').value.trim(),phone:$('cPhone').value.trim(),phones:$('cPhones').value,video_url:$('cVideoUrl').value.trim(),landing_url:$('cLandingUrl').value.trim(),post_email:$('cPostEmail').value.trim(),workers:parseInt($('cWorkers').value)||2,post_delay:parseInt($('cDelay').value)||0,daily_limit:parseInt($('cDaily').value)||0,use_gpt:$('cUseGpt').checked,llm_provider:($('cLlmProvider')?$('cLlmProvider').value:'openrouter'),nvidia_model:($('cNvidiaModel')?$('cNvidiaModel').value.trim():''),openrouter_model:($('cOpenrouterModel')?$('cOpenrouterModel').value.trim():''),telegram_chat_id:$('cTgChat').value.trim(),notify_done:$('cNotifyDone').checked,notify_fail:$('cNotifyFail').checked,backup_time:$('cBackupTime').value.trim(),telegram_control:$('cTgControl').checked,verify_enabled:$('cVerify').checked,mix_keywords:$('cMixKw').checked,block_unpaid:$('cBlockUnpaid').checked,search_provider:'brave',discover_enabled:$('cDiscoOn').checked,discover_daily_target:parseInt($('cDTarget').value)||100,discover_query_limit:parseInt($('cDQuery').value)||100,discover_keywords:'',discover_direct_queries:$('cDDirect').value,excluded_domains:($('cExcludedDomains')?$('cExcludedDomains').value:''),imap_email:($('cImapEmail')?$('cImapEmail').value.trim():''),imap_password:($('cImapPass')&&$('cImapPass').value?$('cImapPass').value:'***설정됨***'),imap_host:($('cImapHost')&&$('cImapHost').value.trim()?$('cImapHost').value.trim():'imap.gmail.com'),twocaptcha_enabled:$('cTwocaptchaEn').checked,turnstile_mode:($('cTurnstileMode')?$('cTurnstileMode').value:'auto'),turnstile_human_wait_sec:($('cTurnstileWait')?(parseInt($('cTurnstileWait').value)||180):180),brave_price_per_query_usd:parseFloat($('cBravePrice').value)||0,twocaptcha_price_recaptcha_usd:parseFloat($('cCapRePrice').value)||0,twocaptcha_price_image_usd:parseFloat($('cCapImgPrice').value)||0};
 const bk=$('cBraveKey').value.trim();if(bk)d.brave_api_key=bk;
 // 프록시(Bright Data): 비번은 입력했을 때만 전송(빈칸이면 마스크값으로 기존 유지).
 d.proxy_enabled=$('cProxyEn').checked;d.proxy_host=$('cProxyHost').value.trim();d.proxy_port=$('cProxyPort').value.trim();d.proxy_user=$('cProxyUser').value.trim();d.proxy_only_for_cf=$('cProxyCfOnly').checked;
@@ -14496,7 +14594,7 @@ if($('cProxyEn')){$('cProxyEn').checked=!!c.proxy_enabled;$('cProxyHost').value=
 if($('cUnlockerEn')){$('cUnlockerEn').checked=!!c.unlocker_enabled;$('cUnlockerZone').value=c.unlocker_zone||'web_unlocker1';$('cUnlockerKey').placeholder=(c.unlocker_api_key==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';}
 if($('cSbrEn')){$('cSbrEn').checked=!!c.sbr_enabled;$('cSbrEp').placeholder=(c.sbr_endpoint==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';}
 if($('cSignupId')){$('cSignupId').value=c.signup_fixed_id||'';$('cSignupPw').placeholder=(c.signup_fixed_pw==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';}
-if(c.backup_time)$('cBackupTime').value=c.backup_time;if($('cLlmProvider'))$('cLlmProvider').value=(c.llm_provider==='nvidia')?'nvidia':'openrouter';if($('cNvidiaModel'))$('cNvidiaModel').value=c.nvidia_model||'';if($('cNvidiaKey'))$('cNvidiaKey').placeholder=(c.nvidia_api_key==='***설정됨***')?'설정됨 · 변경시만 입력':'nvapi-... (변경시만)';if($('cOpenrouterModel'))$('cOpenrouterModel').value=c.openrouter_model||'';if($('cOpenrouterKey'))$('cOpenrouterKey').placeholder=(c.openrouter_api_key==='***설정됨***')?'설정됨 · 변경시만 입력':'sk-or-v1-... (변경시만)';if(c.telegram_chat_id)$('cTgChat').value=c.telegram_chat_id;if(typeof c.phones==='string')$('cPhones').value=c.phones;$('cTgTok').placeholder=(c.telegram_token==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';$('cTwocaptchaEn').checked=!!c.twocaptcha_enabled;$('cTwocaptchaKey').placeholder=(c.twocaptcha_api_key==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';if(c.brave_price_per_query_usd!=null)$('cBravePrice').value=c.brave_price_per_query_usd;if(c.twocaptcha_price_recaptcha_usd!=null)$('cCapRePrice').value=c.twocaptcha_price_recaptcha_usd;if(c.twocaptcha_price_image_usd!=null)$('cCapImgPrice').value=c.twocaptcha_price_image_usd;loadOpenAIUsage();api('/rejected-domains','GET').then(r=>{if(r&&r.ok&&$('rejCount'))$('rejCount').textContent=r.count})}
+if(c.backup_time)$('cBackupTime').value=c.backup_time;if($('cLlmProvider'))$('cLlmProvider').value=(c.llm_provider==='nvidia')?'nvidia':'openrouter';if($('cNvidiaModel'))$('cNvidiaModel').value=c.nvidia_model||'';if($('cNvidiaKey'))$('cNvidiaKey').placeholder=(c.nvidia_api_key==='***설정됨***')?'설정됨 · 변경시만 입력':'nvapi-... (변경시만)';if($('cOpenrouterModel'))$('cOpenrouterModel').value=c.openrouter_model||'';if($('cOpenrouterKey'))$('cOpenrouterKey').placeholder=(c.openrouter_api_key==='***설정됨***')?'설정됨 · 변경시만 입력':'sk-or-v1-... (변경시만)';if(c.telegram_chat_id)$('cTgChat').value=c.telegram_chat_id;if(typeof c.phones==='string')$('cPhones').value=c.phones;$('cTgTok').placeholder=(c.telegram_token==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';$('cTwocaptchaEn').checked=!!c.twocaptcha_enabled;$('cTwocaptchaKey').placeholder=(c.twocaptcha_api_key==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';if($('cTurnstileMode'))$('cTurnstileMode').value=(['auto','human','2captcha'].includes(c.turnstile_mode)?c.turnstile_mode:'auto');if($('cTurnstileWait')&&c.turnstile_human_wait_sec)$('cTurnstileWait').value=c.turnstile_human_wait_sec;if(c.brave_price_per_query_usd!=null)$('cBravePrice').value=c.brave_price_per_query_usd;if(c.twocaptcha_price_recaptcha_usd!=null)$('cCapRePrice').value=c.twocaptcha_price_recaptcha_usd;if(c.twocaptcha_price_image_usd!=null)$('cCapImgPrice').value=c.twocaptcha_price_image_usd;loadOpenAIUsage();api('/rejected-domains','GET').then(r=>{if(r&&r.ok&&$('rejCount'))$('rejCount').textContent=r.count})}
 async function showRejected(){const box=$('rejList');if(!box)return;if(box.style.display!=='none'){box.style.display='none';return}box.style.display='block';box.innerHTML='불러오는 중…';const r=await api('/rejected-domains','GET');if(!r||!r.ok){box.innerHTML='조회 실패';return}if($('rejCount'))$('rejCount').textContent=r.count;const logmap={};(r.log||[]).forEach(x=>{if(!logmap[x.domain])logmap[x.domain]=x.reason||''});box.innerHTML='<div style="color:var(--r);margin-bottom:6px">총 '+r.count+'개 · 발굴 자동 제외됨 (재활성화하려면 옆 ↺ 클릭)</div>'+(r.domains||[]).map(d=>'<div style="display:flex;justify-content:space-between;gap:8px;padding:2px 0;border-bottom:1px solid #17202e"><span><b style="color:var(--t)">'+esc(d)+'</b> <span style="color:var(--d)">'+esc((logmap[d]||'').slice(0,30))+'</span></span><span style="cursor:pointer;color:var(--g)" title="재활성화(제외 해제)" onclick="unrejectDomain(\''+esc(d)+'\')">↺</span></div>').join('')}
 async function clearKey(k){if(!confirm(k+' 를 서버에서 지울까요? (그 엔진은 키를 다시 넣기 전까지 못 씁니다)'))return;const r=await api('/config/clear-key','POST',{key:k});if(r&&r.ok){toast((r.was_set?'삭제됨':'이미 비어 있음')+' · '+k,'ok');loadCfgUI()}else toast('실패','er')}
 async function unrejectDomain(dom){if(!confirm(dom+' 을(를) 자동 탈락에서 해제할까요? (다시 발굴 대상이 됩니다)'))return;const r=await api('/rejected-domains','POST',{remove:dom});if(r&&r.ok){toast('해제됨 · '+dom,'ok');showRejected();showRejected()}else toast('실패','er')}
