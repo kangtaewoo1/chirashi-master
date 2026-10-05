@@ -6659,6 +6659,16 @@ def finalize_post(site,ok,fail_reason=''):
                         try: _alive=_pc_node_alive()
                         except Exception: _alive=False
                         s['cooldown_until']=(datetime.now()+timedelta(minutes=(20 if _alive else 120))).strftime('%Y-%m-%d %H:%M:%S')
+                    # ★공통 백오프(2026-10-05 대표님 '넣어' — 저녁 실측: 실패 112건 중 5곳 78건이 로그인 실패·폼 없음으로
+                    #   4~10분마다 재시도): 비일시적 사유(classify_fail is_temp=False — 로그인/폼/게시판/캡차/차단)로 연속 실패하면
+                    #   연속 3회+ → 60분, 10회+ → 180분 쉼. 기존 쿨다운(등록 확인 불가 20분·빈 캡차 120분)보다 길 때만 덮어씀.
+                    #   일시적(타임아웃·도배방지·크래시)은 제외. 간헐 사이트는 성공 시 fail_streak=0이라 다음 성공 후 정상 복귀.
+                    try: _ftemp=bool(classify_fail(fail_reason)[2])
+                    except Exception: _ftemp=True
+                    _fsn=int(s.get('fail_streak',0) or 0)
+                    if fail_reason and not _ftemp and _fsn>=3:
+                        _until=(datetime.now()+timedelta(minutes=(180 if _fsn>=10 else 60))).strftime('%Y-%m-%d %H:%M:%S')
+                        if _until>str(s.get('cooldown_until') or ''): s['cooldown_until']=_until
                     # (죽은 사이트 잠금은 실시간 오판을 피해 /api/sites/mark-login-required가 last_post_at 기준으로
                     #  주기 처리한다. 여기선 fail_streak만 올리고 reconcile_sites가 잠금 판정.)
                 break
