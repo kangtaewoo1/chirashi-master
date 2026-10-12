@@ -22,6 +22,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from collections import defaultdict
 from cafe24_gate import AccessStopped, guarded_publish, stop_on_alerts, result_is_new, publishing_block
+from form_schema import measure_html, changes_between
 import urllib3; urllib3.disable_warnings()
 
 from flask import Flask, request, jsonify, render_template_string, session, redirect, send_from_directory
@@ -453,256 +454,47 @@ def _signup_origin(site):
     p=urllib.parse.urlsplit(site.get('site_url',''))
     return f'{p.scheme}://{p.netloc}' if p.scheme and p.netloc else site.get('site_url','').rstrip('/')
 
-def _signup_form_measure(site):
-    """가입 폼을 제출 없이 측정한다. 약관 다음 화면 조회까지만 하며 계정 생성은 하지 않는다."""
-    from html.parser import HTMLParser
-    import requests as _rq
-    class FormParser(HTMLParser):
-        def __init__(self): super().__init__(); self.forms=[]; self.cur=None; self.text=[]
-        def handle_starttag(self,tag,attrs):
-            a=dict(attrs)
-            if tag=='form': self.cur={'action':a.get('action',''),'method':a.get('method','get').lower(),'fields':[]}
-            elif self.cur is not None and tag in ('input','select','textarea','button'):
-                safe={k:v for k,v in a.items() if k in ('type','name','id','minlength','maxlength','pattern','required','autocomplete','placeholder')}
-                safe['tag']=tag; self.cur['fields'].append(safe)
-        def handle_endtag(self,tag):
-            if tag=='form' and self.cur is not None: self.forms.append(self.cur); self.cur=None
-        def handle_data(self,data):
-            t=' '.join(data.split())
-            if t: self.text.append(t)
+def _read_form_schema(site,kind):
+    """GET-only measurement. Never accept terms, fill credentials, or solve challenges."""
+    import requests as rq
     base=_signup_origin(site); platform=site.get('platform') or 'gnuboard'
-    sess=_rq.Session(); hdr={'User-Agent':'Mozilla/5.0 (signup-form-audit; administrator initiated)'}
-    def signup_forms(parsed):
-        out=[]
-        for f in parsed.forms:
-            keys=' '.join((x.get('name') or '')+' '+(x.get('id') or '') for x in f['fields']).lower()
-            action=(f.get('action') or '').lower()
-            pw_count=sum(1 for x in f['fields'] if (x.get('type') or '').lower()=='password')
-            has_id=bool(re.search(r'(mb_id|member_id|login_id|user.?id|reg_mb_id)',keys))
-            # 로그인 폼 오인 방지: 로그인 액션이 명확하면 제외
-            is_login=('login' in action or 'login_check' in action) and pw_count<=1 and 'register' not in action and 'join' not in action
-            # 가입 폼 인정 조건(완화): 액션이 가입계열 OR 비번2개(가입/비번확인) OR (아이디필드+비번 존재)
-            looks_signup=(
-                'register' in action or 'register_form_update' in action or 'member/join' in action or 'join' in action
-                or pw_count>=2
-                or (has_id and pw_count>=1)
-                or (re.search(r'(password_re|password_confirm|passwd_confirm|mb_password_re)',keys) and re.search(r'(email|nick|name)',keys))
-            )
-            if looks_signup and not is_login: out.append(f)
-        return out
-    # 가입 URL 후보(설치 경로가 제각각이라 여러 표준 경로를 순차 시도). 첫 폼 발견에서 멈춘다.
-    if site.get('signup_url'):
-        url_candidates=[site['signup_url']]
-    elif platform=='cafe24':
-        url_candidates=[base+'/member/join.html',base+'/member/agreement.html',
-                        base+'/member/join_step.html',base+'/myshop/join/agreement.html']
+    if kind=='signup':
+        url=site.get('signup_url') or base+('/member/join.html' if platform=='cafe24' else '/bbs/register.php')
     else:
-        url_candidates=[base+p for p in ('/bbs/register.php','/register.php',
-                        '/gnu/bbs/register.php','/g5/bbs/register.php','/g4/bbs/register.php',
-                        '/gnuboard5/bbs/register.php','/board/bbs/register.php','/bbs/register_form.php')]
-    # ★가입 URL 자동탐지(대표님 지시 2026-09-08 자동가입 개선): 표준경로가 다 빗나가는 사이트(설치
-    #   경로 커스텀) 대비 — 홈/로그인 페이지에서 register 링크를 긁어 후보 맨 앞에 넣는다.
-    #   (가입폼 못찾음 실패의 상당수가 비표준 설치경로 때문. 실제 링크를 따라가면 구제됨.)
-    if not site.get('signup_url'):
-        try:
-            _hp=sess.get(base+('/member/login.html' if platform=='cafe24' else '/bbs/login.php'),
-                         timeout=12,verify=False,headers=hdr,allow_redirects=True)
-            _hh=_hp.text or ''
-            if len(_hh)<500:   # 로그인 경로가 없으면 홈에서
-                _hh=(sess.get(base+'/',timeout=12,verify=False,headers=hdr).text or '')
-            _pat=(r'href=["\']([^"\']*member/(?:join|agreement)[^"\']*)["\']' if platform=='cafe24'
-                  else r'href=["\']([^"\']*register(?:_form)?\.php[^"\']*)["\']')
-            _seen=set()
-            for _h in re.findall(_pat,_hh,re.I):
-                _full=urllib.parse.urljoin(base+'/',_h.replace('&amp;','&'))
-                if _full not in _seen and 'logout' not in _full.lower():
-                    _seen.add(_full); url_candidates.insert(0,_full)
-        except Exception: pass
-    url_candidates=list(dict.fromkeys(url_candidates))[:8]
-    def _decode(r):
-        # 한국 그누보드는 EUC-KR(cp949)이 많은데 HTTP 헤더에 charset이 없으면 requests가
-        # ISO-8859-1로 오판독해 한글이 깨진다. <meta charset> 우선, 없으면 apparent_encoding.
-        try:
-            ctype=(r.headers.get('Content-Type') or '').lower()
-            if 'charset=' in ctype:
-                return r.text  # 헤더에 charset 명시 → requests가 이미 올바로 디코드
-            head=r.content[:2048].decode('ascii','ignore').lower()
-            m=re.search(r'charset=["\']?\s*([\w-]+)', head)
-            enc=(m.group(1) if m else None) or r.apparent_encoding or 'utf-8'
-            if enc.lower() in ('euc-kr','ks_c_5601-1987','ksc5601'): enc='cp949'
-            return r.content.decode(enc, errors='replace')
-        except Exception:
-            return r.text
-    def _measure_url(url):
-        r=sess.get(url,timeout=20,verify=False,headers=hdr,allow_redirects=True); r.raise_for_status()
-        html=_decode(r); measured_url=r.url
-        # 그누보드 약관 화면이면 동의값을 세션에 전달해 실제 가입 폼까지만 조회한다.
-        if platform!='cafe24' and not re.search(r'name=["\']mb_password["\']',html,re.I):
-            form_url=urllib.parse.urljoin(r.url,'register_form.php')
-            try:
-                r2=sess.post(form_url,data={'agree':'1','agree2':'1'},timeout=20,verify=False,headers=hdr,allow_redirects=True)
-                r2.raise_for_status(); html=_decode(r2); measured_url=r2.url
-            except Exception: pass
-        return html, measured_url
-    url=url_candidates[0]; html=''; measured_url=url; forms=[]
-    for cand in url_candidates:
-        try:
-            html, measured_url = _measure_url(cand)
-        except Exception:
-            continue
-        p=FormParser(); p.feed(html)
-        forms=signup_forms(p)
-        if forms: url=cand; break
-        url=cand  # 마지막 시도 URL 보존(폼 못 찾아도 Selenium 폴백에서 씀)
-    p=FormParser(); p.feed(html)
-    forms=signup_forms(p)
-    # ★cafe24 실측(2026-09-11 tokyocrafts·honeytem 재현): join.html은 requests에도 Turnstile 챌린지 페이지로 오고,
-    #   agreement.html의 약관 폼(action에 join 포함, 비밀번호 칸 없음)이 '가입폼'으로 오인돼 아래 Selenium 분기(챌린지
-    #   해결→약관→진짜 폼)를 건너뛰었음 → '가입 폼(비밀번호 입력칸)에 도달 실패'. 비번 칸 없는 폼은 못 찾은 것으로 본다.
-    if platform=='cafe24' and forms and not any((x.get('type') or '').lower()=='password' for f in forms for x in f['fields']):
-        forms=[]
-    # 정적 요청에서 상단 로그인폼만 보이는 사이트는 Selenium으로 약관 다음 화면까지 재측정한다.
-    if not forms:
-        try:
-            from selenium.webdriver.common.by import By
-            d=get_driver()
-            # ★cafe24 가입페이지 Turnstile(대표님 승인 2026-09-11, 재실측 2회로 확정):
-            #   /member/join.html은 requests·크롬 모두 veritas-hub 챌린지로 리다이렉트(JS, 1~3초 뒤). 폼이 안 떠
-            #   531행 '가입 입력 폼을 찾지 못했습니다'로 죽던 지점. 1차 수정이 안 먹은 이유 둘: ①위 루프 실패 시
-            #   url이 '마지막 후보'(myshop/join/agreement)라 폴백이 엉뚱한 페이지를 봄 ②1.5초 뒤 검사는 리다이렉트
-            #   전. → cafe24는 join.html을 명시적으로 열고 최대 8초 리다이렉트를 관찰, 챌린지면 풀고 복귀 후 측정.
-            #   실패해도 예외 삼켜 기존 흐름. cafe24에만 적용(그누보드는 기존과 동일).
-            if platform=='cafe24':
-                _ju=(site.get('signup_url') or base+'/member/join.html')
-                def _agree_step():
-                    """cafe24 약관 단계: agreement.html이면 동의 체크박스 전부 켜고 다음(회원가입)을 눌러 join.html로.
-                       ★노드 실측 2026-09-11: join.html 직행 시 '약관에동의하셔야합니다' alert → agreement로 튕기며
-                       Selenium이 alert에 막혀 측정이 죽던 사이트(unexpected alert open). 제출버튼 우선, a[href=join]은 최후."""
-                    try:
-                        _c=(d.current_url or '').lower()
-                        if 'agreement' not in _c and '/agree' not in _c: return False
-                        for cb in d.find_elements(By.CSS_SELECTOR,"input[type='checkbox']"):
-                            try:
-                                nm=((cb.get_attribute('name') or '')+' '+(cb.get_attribute('id') or '')).lower()
-                                if ('agree' in nm or 'all' in nm) and not cb.is_selected():
-                                    try: cb.click()
-                                    except Exception: d.execute_script('arguments[0].checked=true;arguments[0].dispatchEvent(new Event("change",{bubbles:true}));',cb)
-                            except Exception: continue
-                        for sel in ("button[type='submit']","input[type='submit']","a.btnSubmit","a.btn_submit","button.btnSubmit","a[href*='join']","button","a"):
-                            for el in d.find_elements(By.CSS_SELECTOR,sel):
-                                try:
-                                    if not el.is_displayed(): continue
-                                    tx=((el.text or '')+' '+(el.get_attribute('value') or '')+' '+(el.get_attribute('alt') or '')).strip()
-                                    if sel in ("button[type='submit']","input[type='submit']") or re.search(r'(다음|동의하고|동의|회원가입|가입하기|확인|next|agree)',tx,re.I):
-                                        d.execute_script('arguments[0].click()',el); time.sleep(2); dismiss_alerts(d); return True
-                                except Exception: continue
-                    except Exception: pass
-                    return False
-                try:
-                    d.get(_ju); time.sleep(1); dismiss_alerts(d)
-                    if _agree_step(): time.sleep(1.5)   # 약관 먼저 요구하는 사이트 → 통과 후 join.html
-                    _chal=False
-                    for _ in range(16):   # 0.5초×16=8초: JS 리다이렉트·위젯 로드 대기
-                        dismiss_alerts(d)
-                        _cu=(d.current_url or '').lower()
-                        if 'veritas-hub' in _cu or 'challenge' in _cu: _chal=True; break
-                        if ('agreement' in _cu or '/agree' in _cu) and _agree_step(): time.sleep(1.5); continue
-                        try: _ps=(d.page_source or '')[:20000].lower()
-                        except Exception: _ps=''
-                        if 'cf-turnstile' in _ps or ('turnstile' in _ps and 'sitekey' in _ps): _chal=True; break
-                        if _ps and re.search(r'type=["\']?password',_ps): break   # 폼이 이미 떴으면 챌린지 없음
-                        time.sleep(0.5)
-                    if _chal:
-                        _ok,_m,_t,_i=solve_captcha_with_2captcha(d,site,'turnstile',load_config())
-                        add_log(f'[가입측정 Turnstile] {site.get("name") or base} — {_m}')
-                        for _ in range(15):   # 콜백 제출 후 가입 페이지로 복귀 대기(최대 15초)
-                            _c2=(d.current_url or '').lower()
-                            if 'veritas-hub' not in _c2 and 'challenge' not in _c2: break
-                            time.sleep(1)
-                        _c3=(d.current_url or '').lower()
-                        if 'veritas-hub' in _c3 or 'challenge' in _c3:
-                            d.get(_ju); time.sleep(2)   # 자동 복귀 안 되면 재진입(챌린지 통과 쿠키 유지)
-                        else:
-                            time.sleep(1.5)
-                        dismiss_alerts(d)
-                        if _agree_step(): time.sleep(1.5)   # 챌린지 뒤에 약관 alert가 뜨는 사이트
-                    url=_ju   # 이후 page_source 측정은 join.html 기준(마지막 후보 아님)
-                except Exception as _e:
-                    add_log(f'[가입측정 Turnstile 오류] {str(_e)[:80]}')
-            else:
-                d.get(url); time.sleep(1.5)
-            for nm in ('agree','agree2'):
-                for el in d.find_elements(By.CSS_SELECTOR,f"input[name='{nm}']"):
-                    try:
-                        if not el.is_selected(): el.click()
-                    except: pass
-            submits=d.find_elements(By.CSS_SELECTOR,"form#fregister input[type='submit'],form#fregister button[type='submit'],form[name='fregister'] input[type='submit']")
-            if submits: d.execute_script('arguments[0].click()',submits[0]); time.sleep(2)
-            html=d.page_source; measured_url=d.current_url
-            p=FormParser(); p.feed(html); forms=signup_forms(p)
-        except Exception: forms=[]
-    if not forms: raise RuntimeError('가입 입력 폼을 찾지 못했습니다')
-    # 비밀번호 필드가 있는 폼(=실제 가입폼)을 우선 선택한다. 검색폼·설문폼이 필드 수만
-    # 많아 진짜 가입폼을 밀어내던 문제 방지(같은 조건이면 필드 많은 쪽).
-    def _pwc(f): return sum(1 for x in f['fields'] if (x.get('type') or '').lower()=='password')
-    form=max(forms,key=lambda f:(_pwc(f),len(f['fields']))); fields=[]
-    for x in form['fields']:
-        name=x.get('name') or ''; fid=x.get('id') or ''; typ=(x.get('type') or x.get('tag') or '').lower()
-        role=''
-        key=(name+' '+fid).lower()
-        if re.search(r'(mb_id|member_id|login_id|user.?id)',key): role='id'
-        elif typ=='password' and re.search(r'(_re\b|_confirm\b|confirm_|check)',key): role='password_confirm'
-        elif typ=='password': role='password'
-        elif re.search(r'(mb_email|e.?mail)',key): role='email'
-        elif re.search(r'(mb_nick|nickname)',key): role='nickname'
-        elif re.search(r'(mb_name|user.?name|real.?name)',key): role='name'
-        elif re.search(r'(captcha|recaptcha|turnstile)',key): role='captcha'
-        y=dict(x); y['role']=role; y['selector']=('#'+fid if fid else ('[name="'+name+'"]' if name else ''))
-        fields.append(y)
-    text=' '.join(p.text); rules={}
-    def attr_int(role,key,default):
-        vals=[]
-        for f in fields:
-            if f.get('role')==role:
-                try:
-                    if f.get(key) is not None: vals.append(int(f[key]))
-                except: pass
-        return vals[0] if vals else default
-    rules['id_min']=attr_int('id','minlength',3 if platform!='cafe24' else 4)
-    rules['id_max']=attr_int('id','maxlength',20 if platform!='cafe24' else 16)
-    rules['password_min']=attr_int('password','minlength',10)
-    rules['password_max']=attr_int('password','maxlength',64)
-    # 화면 안내문에서 더 구체적인 최소 길이를 찾으면 반영한다.
-    for pat,key in [(r'(?:아이디|ID)[^0-9]{0,30}(\d+)\s*(?:자|글자)\s*이상','id_min'),
-                    (r'(?:비밀번호|패스워드)[^0-9]{0,30}(\d+)\s*(?:자|글자)\s*이상','password_min')]:
-        m=re.search(pat,text,re.I)
-        if m: rules[key]=int(m.group(1))
-    rules['require_special']=bool(re.search(r'비밀번호.{0,80}(특수문자|특수 문자)',text,re.I))
-    captcha=bool(re.search(r'(captcha|kcaptcha|g-recaptcha|turnstile|자동등록방지)',html,re.I))
-    # 이메일 인증 필요 판단은 '필수/해야/완료' 같은 강제 신호가 있을 때만(오탐 축소 — 대표님 전략:
-    # 일단 인증 없이 시도하고 정말 필요할 때만 인증. 이메일칸 언급만으론 인증 필요로 보지 않는다).
-    email_verification=bool(
-        re.search(r'(?:e-?mail|이메일)\s*(?:주소)?\s*(?:인증|확인)(?:을|를|이|가)?\s*(?:반드시|필수|해야|하셔야|완료해야|하여야)',text,re.I) or
-        re.search(r'(?:인증\s*(?:메일|이메일)|인증\s*링크).{0,40}(?:발송|보냈|전송|클릭|확인)',text,re.I))
-    # ★cafe24 실측(2026-09-12 대표님 '다른 카페24로'): join.html은 안내문 없이 hidden 플래그로 인증을 켠다.
-    #   is_email_auth_use=T → 이메일 인증 필수(임시메일 거부·인증메일 못받아 가입실패). 텍스트 매칭만으론 놓쳐 False 오판했음.
-    # ★cafe24는 is_email_auth_use=T여도 대부분 인증 없이 가입됨(대표님 실측 mereta·shudabang·kuspoon 2026-09-12).
-    #   email_verification_required를 강제로 켜지 않는다 → auto_signup이 '일단 인증 없이 제출' → 로그인 잡히면 성공(꿀사이트),
-    #   진짜 인증메일 와야만 하면 그때 IMAP으로 처리. 안내문에 명시적 '이메일 인증 필수' 문구가 있을 때만 위에서 True.
-    # (cafe24 hidden 플래그로 email_verification을 켜던 로직 제거 — 오판으로 되는 사이트 대량 제외했음)
-    signature=[(f.get('role'),f.get('name'),f.get('id'),f.get('type'),f.get('minlength'),f.get('maxlength'),f.get('pattern')) for f in fields]
-    fingerprint=hashlib.sha256(json.dumps(signature,ensure_ascii=False,sort_keys=True).encode()).hexdigest()
-    return {'signup_url':url,'form_url':measured_url,'form_action':urllib.parse.urljoin(measured_url,form.get('action','')),
-            'form_method':form.get('method','post'),'fields':fields,'rules':rules,'captcha':captcha,
-            'email_verification_required':email_verification,
-            'fingerprint':fingerprint,'measured_at':datetime.now().isoformat(timespec='seconds')}
+        board=urllib.parse.quote(str(site.get('bo_table') or ''),safe='')
+        url=site.get('write_url') or base+('/board/product/write.html?board_no='+board if platform=='cafe24' else '/bbs/write.php?bo_table='+board)
+    if urllib.parse.urlsplit(url).netloc.lower()!=urllib.parse.urlsplit(base).netloc.lower():
+        raise ValueError('폼 측정 URL이 등록 사이트와 다릅니다')
+    response=rq.get(url,timeout=20,headers={'User-Agent':'Mozilla/5.0 (read-only form audit)'})
+    response.raise_for_status()
+    if 'charset=' not in response.headers.get('Content-Type','').lower():
+        match=re.search(r'charset=["\']?\s*([\w-]+)',response.content[:4096].decode('ascii','ignore'),re.I)
+        encoding=(match.group(1) if match else response.apparent_encoding) or 'utf-8'
+        response.encoding='cp949' if encoding.lower() in ('euc-kr','ks_c_5601-1987') else encoding
+    return measure_html(response.text,response.url,kind)
+
+def _signup_form_measure(site):
+    schema=_read_form_schema(site,'signup')
+    if schema['state']!='measured':
+        raise RuntimeError(schema['state']+' — 입력 폼 직접 확인 필요')
+    form=schema['form']; fields=form['fields']; rules={}; rule_sources={}
+    defaults={'id_min':4 if site.get('platform')=='cafe24' else 3,'id_max':16 if site.get('platform')=='cafe24' else 20,'password_min':10,'password_max':64}
+    for key,role,attr in [('id_min','id','minlength'),('id_max','id','maxlength'),('password_min','password','minlength'),('password_max','password','maxlength')]:
+        values=[int(f[attr]) for f in fields if f['role']==role and str(f.get(attr,'')).isdigit()]
+        rules[key]=(max(values) if attr=='minlength' else min(values)) if values else defaults[key]
+        rule_sources[key]='attribute' if values else 'fallback_unverified'
+    return {'signup_url':schema['source_url'],'form_url':schema['source_url'],'form_action':form['action'],
+            'form_method':form['method'],'fields':fields,'rules':rules,'rule_sources':rule_sources,
+            'captcha':schema['challenge'],'email_verification_required':None,
+            'fingerprint':schema['fingerprint'],'measured_at':datetime.now().isoformat(timespec='seconds'),
+            'schema':schema}
 
 def learn_signup_profile(site,force=False):
     host=urllib.parse.urlsplit(_signup_origin(site)).netloc.lower()
     with _signup_learn_locks[host]:
         profiles=load_signup_profiles(); old=profiles.get(host) or {}
         # 올인원 실행 때마다 상대 사이트를 두드리지 않는다. 최근 정상 측정값은 30분 재사용.
-        if old and not force:
+        if old and not force and (old.get('schema') or {}).get('schema_version')==1:
             try: fresh=(datetime.now()-datetime.fromisoformat(old.get('measured_at',''))).total_seconds()<1800
             except: fresh=False
             if fresh:
@@ -12705,6 +12497,27 @@ def api_site_signup_prepare(sid):
                     'captcha':bool(site.get('signup_has_captcha')),
                     'notice':'CAPTCHA와 이메일 인증은 직접 완료하세요'})
 
+@app.route('/api/sites/form-audit/<sid>',methods=['POST'])
+def api_site_form_audit(sid):
+    kind=str((request.get_json(silent=True) or {}).get('kind','signup'))
+    if kind not in ('signup','write'): return jsonify({'ok':False,'error':'signup 또는 write 필요'}),400
+    site=next((s for s in load_sites() if s.get('id')==sid),None)
+    if not site: return jsonify({'ok':False,'error':'사이트 없음'}),404
+    try: measured=_read_form_schema(site,kind)
+    except Exception as error: return jsonify({'ok':False,'error':str(error)[:180]}),422
+    path=DATA_DIR/'form_profiles.json'
+    key=urllib.parse.urlsplit(site['site_url']).netloc.lower()+'|'+str(site.get('bo_table') or '')+'|'+kind
+    with _json_lock(path):
+        profiles=load_json(path,{}) or {}; old=profiles.get(key) or {}
+        changed=bool(old) and old.get('fingerprint')!=measured['fingerprint']
+        delta=changes_between(old,measured) if old else None
+        version=int(old.get('version',0))+(1 if not old or changed else 0)
+        history=list(old.get('history') or [])
+        if changed: history.append({'version':old.get('version'),'measured_at':old.get('measured_at'),'changes':delta})
+        profiles[key]={**measured,'version':version,'changes':delta,'history':history[-20:]}
+        save_json(path,profiles)
+    return jsonify({'ok':True,'profile':profiles[key],'changed':changed})
+
 @app.route('/api/sites/signup-learn/<sid>',methods=['POST'])
 def api_site_signup_learn(sid):
     sites=load_sites(); site=next((s for s in sites if s.get('id')==sid),None)
@@ -13939,6 +13752,7 @@ DASH_HTML=r'''<header><div class="logo" onclick="window.scrollTo({top:0,behavior
 </div></details>
 </div>
 
+<div id="formAuditResults" style="margin-bottom:12px"></div>
 <div id="dcSummary" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px"></div>
 
 <div class="card"><div class="row" style="align-items:center"><h3 style="margin:0">📋 사이트 목록</h3>
@@ -14330,6 +14144,17 @@ let _cands=[];
 // ★사이트+발굴 통합 목록(대표님 2026-09-12): /api/site-board를 도메인 dedup 상태별로 한 표에.
 const _BOARD_STATE={publishing:{t:'🟢 발행중',c:'st-ok'},registered:{t:'🔵 등록됨',c:'st-ok'},
   preparing:{t:'🟡 준비중',c:'st-y'},waiting:{t:'⚪ 대기',c:'st-i'},rejected:{t:'🔴 탈락',c:'st-f'}};
+async function auditForm(id,kind){
+ const box=$('formAuditResults');box.textContent='양식 측정 중 · 가입하거나 글을 제출하지 않습니다';
+ try{
+  const r=await fetch('/api/sites/form-audit/'+encodeURIComponent(id),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind})});
+  const data=await r.json(); if(!data.ok){box.textContent='측정 보류: '+(data.error||'확인 필요');return}
+  const p=data.profile;const states={measured:'입력 폼 확인',form_unavailable:'입력 폼 미확인',agreement_required:'약관 단계 확인 필요',human_verification_required:'사람 확인 필요',login_required:'로그인 후 측정 필요'};
+  const fields=((p.form||{}).fields||[]).filter(f=>f.type!=='hidden');
+  const rows=fields.map(f=>'<tr><td>'+esc(f.label||f.name||f.id||'이름 없음')+'</td><td>'+esc(f.type)+'</td><td>'+(f.disabled?'비활성':f.required===true?'필수 확인':'필수 여부 미확인')+'</td><td>'+esc(f.pattern||[f.minlength,f.maxlength].filter(Boolean).join('~')||'화면 규칙 미확인')+'</td></tr>').join('');
+  box.innerHTML='<div class="card"><b>'+(kind==='signup'?'가입':'글쓰기')+' 양식 v'+p.version+' · '+esc(states[p.state]||p.state)+'</b><p>최근 측정: '+esc(new Date(p.measured_at).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}))+' · '+(data.changed?'이전 양식과 달라짐':'변경 없음 또는 최초 측정')+'</p><p>이 결과는 구조 측정입니다. 가입·게시 성공은 별도 검증합니다.</p>'+(rows?'<table><thead><tr><th>항목</th><th>입력 종류</th><th>필수 여부</th><th>입력 규칙</th></tr></thead><tbody>'+rows+'</tbody></table>':'')+'</div>';
+ }catch(e){box.textContent='측정 결과를 받지 못했습니다. 잠시 후 다시 확인하세요.'}
+}
 async function renderBoard(){
   const el=$('boardList'); if(!el)return;
   const r=await api('/site-board','GET'); if(!r||!r.ok)return;
@@ -14358,7 +14183,7 @@ async function renderBoard(){
     }
     // 동작: 사이트는 삭제, 후보는 자동처리중 표시(수동버튼 최소화 — 대표님 '알아서')
     const act=x.kind==='site'
-      ? '<button class="btn btn-xs" onclick="editSite(\''+esc(x.id)+'\')">계정 연결</button> <button class="btn btn-r btn-xs" onclick="delSite(\''+esc(x.id)+'\')">삭제</button>'
+      ? '<button class="btn btn-xs" onclick="auditForm(\''+esc(x.id)+'\',\'signup\')">가입 양식</button> <button class="btn btn-xs" onclick="auditForm(\''+esc(x.id)+'\',\'write\')">글쓰기 양식</button> <button class="btn btn-xs" onclick="editSite(\''+esc(x.id)+'\')">계정 연결</button> <button class="btn btn-r btn-xs" onclick="delSite(\''+esc(x.id)+'\')">삭제</button>'
       : (x.state==='rejected'?'<span style="color:var(--d);font-size:10px">자동 제외</span>':'<span style="color:var(--v);font-size:10px">자동 진행중</span>');
     return '<tr><td><span class="st '+b.c+'" style="white-space:nowrap">'+b.t+'</span></td>'
       +'<td style="max-width:260px"><b>'+esc(x.name||x.domain)+'</b><br><a href="'+esc(x.url||'#')+'" target="_blank" rel="noopener" style="color:var(--p);word-break:break-all;font-size:11px">'+esc((x.url||'').slice(0,60))+'</a></td>'
