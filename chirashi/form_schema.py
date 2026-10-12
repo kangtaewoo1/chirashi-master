@@ -41,7 +41,7 @@ def role_for(field):
         ('email',r'email|e_mail|이메일|전자우편'),('nickname',r'mb_nick|nickname|닉네임|별명'),
         ('id',r'mb_id|member_id|login_id|user_?id|아이디'),
         ('phone',r'mobile|phone|(?:^|[ _])tel|휴대|전화'),
-        ('post_visibility',r'^(?:secret|is_secret)$|비밀글'),
+        ('post_visibility',r'\b(?:secret|is_secret)\b|비밀글'),
         ('name',r'wr_name|mb_name|member_name|user_name|real_name|작성자|이름|성명'),
         ('address',r'zipcode|postcode|address|addr|우편|주소'),
         ('agreement',r'agree|consent|약관|동의')]:
@@ -82,15 +82,20 @@ def measure_html(markup,url,kind):
                 if wrap: label=wrap.text()
             row=_anc(n,'tr')
             if not label and row:
+                cell=_anc(n,'td')
+                if cell in row.children:
+                    preceding=row.children[:row.children.index(cell)]
+                    label=next((x.text() for x in reversed(preceding) if x.tag=='td' and x.text()),'')
+            if not label and row:
                 label=' '.join(x.text() for x in row.children if x.tag=='th')
             f['label']=label[:240]
-            native='required' in a or a.get('aria-required')=='true'
+            native='required' in a or a.get('aria-required')=='true' or 'required' in a.get('class','').split() or a.get('data-required')=='true'
             # A label marked required is evidence; lack of a marker is not evidence of optionality.
             marked=bool(re.search(r'필수|\brequired\b',label,re.I))
             if row:
                 marked=marked or any(x.tag=='img' and re.search(r'필수|required',x.attrs.get('alt',''),re.I) for x in p.nodes if _anc(x,'tr') is row)
-            f['required']=True if native or marked else None
-            f['required_source']='attribute' if native else ('label' if marked else 'unknown')
+            f['required']=True if native or marked else (False if a.get('aria-required')=='false' else None)
+            f['required_source']='attribute' if native or a.get('aria-required')=='false' else ('label' if marked else 'unknown')
             if n.tag=='select':
                 f['options']=[{'value':x.attrs.get('value',''), 'label':x.text()[:120], 'disabled':'disabled' in x.attrs} for x in p.nodes if x.tag=='option' and _anc(x,'select') is n]
             f['role']=role_for(f)
