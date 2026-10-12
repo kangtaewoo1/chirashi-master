@@ -66,3 +66,19 @@ in the Vultr isolation environment. No production outage was injected.
 
 API implementation references: [NVIDIA chat-completion examples](https://docs.nvidia.com/nim/vision-language-models/1.7.0/examples/nemotron-3-nano-omni-30b-a3b-reasoning/api.html)
 and [OpenRouter API](https://openrouter.ai/docs/api/api-reference/chat/create-a-chat-completion).
+
+## Publishing incident reinspection
+
+The coordinator now inspects up to four distinct permitted GNUboard sites with
+failures in the last 24 hours, using bounded GET requests only. It checks the
+actual write form and human verification state, rejects nonpublic endpoints,
+refuses redirects and preserves TLS certificate validation. Evidence is retained
+in private/incidents.json and each run record. The headquarters receives category
+counts only. A later successful history entry retires that site's incident.
+Missing forms and browser failures are no longer labeled as failed credentials.
+ERR_ADDRESS_UNREACHABLE is explicitly a network incident. Uncertain submissions
+remain held rather than automatically reposted. Staff may now propose fixes to
+_verify_post_by_title; trusted tests and independent review still gate deployment.
+GNUboard publishing preserves the worker session while a person enters CAPTCHA
+through the existing task screen, then resumes the same queue job. Maintenance
+never solves CAPTCHA or submits posts itself.

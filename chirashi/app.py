@@ -4119,7 +4119,7 @@ def gnuboard_post(site, title, content_html, skip_login=False):
             if d.find_elements(By.CSS_SELECTOR,_WR_SEL):
                 _wr_found=True; break
         except Exception:
-            return False,'글쓰기 폼 확인 중 세션 오류 — 로그인 필요 추정'
+            return False,'글쓰기 폼 확인 중 브라우저 세션 오류 — 읽기 재검수 필요'
         # 폴링 중 로그인 리다이렉트로 바뀌면 즉시 로그인필요 반환
         try:
             if 'login' in (d.current_url or '').lower():
@@ -4137,7 +4137,7 @@ def gnuboard_post(site, title, content_html, skip_login=False):
         _la=' '.join(dismiss_alerts(d) or [])
         if any(k in _la for k in ('권한이 없','권한 없','로그인','회원만','회원가입')):
             return False,'로그인이 필요한 게시판입니다 — 비회원 글쓰기 불가(권한 alert)'
-        return False,'글쓰기 폼(wr_subject) 없음 — 로그인 필요/비표준 스킨'
+        return False,'글쓰기 폼(wr_subject) 없음 — 렌더링/비표준 스킨 읽기 재검수 필요'
 
     # 보안 차단은 즉시 중단한다. CAPTCHA는 내용을 채운 뒤 사람이 입력한다.
     if _page_is_blocked(d):
@@ -4206,21 +4206,10 @@ def gnuboard_post(site, title, content_html, skip_login=False):
 
     captcha_tid=''
     if _cap:
-        cfg=load_config()
-        # 2captcha 자동 해결 시도
-        success,msg,answer,info=solve_captcha_with_2captcha(d,site,_cap,cfg)
-        if success:
-            from selenium.webdriver.common.by import By
-            for sel in ["input[name='captcha_key']","#captcha_key","input[name='wr_key']","input[name*='captcha']","input[id*='captcha']"]:
-                try:
-                    inp=d.find_element(By.CSS_SELECTOR,sel)
-                    if inp and inp.is_displayed():
-                        inp.clear(); inp.send_keys(answer); add_log(f'[2captcha] {msg}'); time.sleep(1); break
-                except: pass
-        else:
-            # 2captcha 자동 해결 실패: 무인 자동화라 수동 대기 없이 이 게시판은 건너뛴다.
-            add_log(f'[2captcha] 자동 해결 실패: {msg} → 이 게시판 건너뜀(무인)')
-            return False,f'캡차 자동 해결 실패({_cap}): {msg}'
+        success,msg,captcha_tid=wait_for_manual_captcha(d,site,_cap)
+        if not success:
+            finish_captcha_task(captcha_tid,False,msg)
+            return False,msg
 
     # 등록: native click으로 정상 제출(referer/token 자연스러움) + 짧은 page_load_timeout으로
     #       렌더러 25초 블록 회피 + 상태 접근은 _safe 폴링(제출 후 current_url이 25초 멈추던 문제 해결)

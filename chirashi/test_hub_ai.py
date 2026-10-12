@@ -2,7 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from hub_ai import apply_edits, parse_json, failure_summary
+from hub_ai import apply_edits, parse_json, failure_summary, classify_failure, diagnose_recent_failures
 from hub_overlay import apply
 import hashlib
 import sys
@@ -12,6 +12,28 @@ from unittest.mock import patch
 
 
 class MaintenancePolicyTests(unittest.TestCase):
+    def test_incident_categories_use_evidence_not_login_guess(self):
+        self.assertEqual(classify_failure('net::ERR_ADDRESS_UNREACHABLE'),'network')
+        self.assertEqual(classify_failure('글쓰기 폼(wr_subject) 없음 — 로그인 필요/비표준 스킨'),'form')
+        self.assertEqual(classify_failure('등록 확인 불가 — 게시판 규칙/에디터 셀렉터/승인대기 확인'),'unknown')
+        self.assertEqual(classify_failure('로그인 실패 — 아이디/비번 불일치'),'credential')
+
+    def test_reinspection_requires_permission_and_never_retries_uncertain_submission(self):
+        from datetime import datetime,timezone
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d)
+            sites=[{'id':'a','site_url':'http://approved.example','permission':True,'platform':'gnuboard','bo_table':'free'}, {'id':'b','site_url':'http://denied.example','permission':False,'platform':'gnuboard'}]
+            rows=[{'site_id':s['id'],'id':s['id'],'status':'fail','time':'2026-10-13 07:00:00','message':'등록 확인 불가'} for s in sites]
+            (p/'sites.json').write_text(json.dumps(sites));(p/'history.json').write_text(json.dumps(rows))
+            calls=[]
+            def fetch(url):
+                calls.append(url)
+                return '<form action="write_update.php"><input name="wr_subject"><textarea name="wr_content"></textarea><input name="captcha_key">자동등록방지</form>'
+            result=diagnose_recent_failures(p,datetime(2026,10,12,22,10,tzinfo=timezone.utc),fetch)
+            self.assertEqual(len(calls),1)
+            self.assertEqual(result[0]['category'],'human_verification')
+            self.assertFalse(result[0]['retry_allowed'])
+            self.assertTrue(result[0]['read_only'])
     @unittest.skipUnless(os.environ.get('TW_AI_ISOLATED_TESTS')=='1','Isolated server environment')
     def test_production_configuration_is_inaccessible(self):
         with self.assertRaises(OSError):

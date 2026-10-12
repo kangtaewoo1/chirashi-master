@@ -9,6 +9,14 @@ from unittest.mock import patch
 from form_schema import measure_html
 
 class ReadOnlyAuditTest(unittest.TestCase):
+    def test_gnuboard_waits_for_human_in_same_worker_session(self):
+        tree=ast.parse(Path(__file__).with_name('app.py').read_text(encoding='utf-8'))
+        fn=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='gnuboard_post')
+        calls={n.func.id for n in ast.walk(fn) if isinstance(n,ast.Call) and isinstance(n.func,ast.Name)}
+        self.assertIn('wait_for_manual_captcha',calls)
+        self.assertNotIn('solve_captcha_with_2captcha',calls)
+        messages=[n.value for n in ast.walk(fn) if isinstance(n,ast.Constant) and isinstance(n.value,str)]
+        self.assertFalse(any('로그인 필요 추정' in x or '로그인 필요/비표준' in x for x in messages))
     def measure(self,response):
         tree=ast.parse(Path(__file__).with_name('app.py').read_text(encoding='utf-8'))
         fn=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='_read_form_schema')

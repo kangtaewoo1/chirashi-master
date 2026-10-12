@@ -21,7 +21,7 @@ from pathlib import Path
 ROOT = Path('/opt/chirashi-ai')
 APP = Path('/opt/chirashi')
 ALLOWED = {'form_schema.py', 'cafe24_gate.py', 'app.py'}
-APP_FUNCTIONS = {'_read_form_schema', '_signup_form_measure', '_manual_queue_pending', '_site_is_pub'}
+APP_FUNCTIONS = {'_read_form_schema', '_signup_form_measure', '_manual_queue_pending', '_site_is_pub', '_verify_post_by_title'}
 MODULES = ('app.py', 'cafe24_gate.py', 'form_schema.py', 'hub_guard.py', 'hub_report.py')
 TESTS = ('test_cafe24_gate.py', 'test_queue_priority.py', 'test_form_schema.py', 'test_readonly_audit.py', 'test_hub_guard.py', 'test_ai_regression.py', 'test_hub_ai.py')
 FORBIDDEN = {'eval', 'exec', '__import__', 'compile', 'open', 'system', 'popen', 'run', 'Popen', 'check_output', 'urlopen'}
@@ -153,18 +153,25 @@ def source_context(stage):
     return result
 
 
+def classify_failure(message):
+    """An absent form is not proof of failed authentication."""
+    patterns = [
+        ('network', r'ERR_ADDRESS_UNREACHABLE|ERR_CONNECTION|ERR_NAME_NOT_RESOLVED|no route to host|certificate.verify.failed|timeout|timed.out|connection|연결|시간.초과'),
+        ('human_verification', r'captcha|turnstile|사람인지|자동등록방지'),
+        ('form', r'폼.*없음|세션 오류|비표준 스킨|selector|element|form|필드|양식|입력칸'),
+        ('unknown', r'등록 확인 불가'),
+        ('permission', r'admin_only|권한|permission|forbidden'),
+        ('credential', r'credential|password|로그인|비밀번호|계정'),
+        ('rate_limit', r'429|rate.limit|한도'),
+        ('server', r'50[0234]|internal.server|서버.오류')]
+    return next((key for key, pattern in patterns if re.search(pattern, str(message), re.I)), 'unknown')
+
+
 def failure_summary(base, now=None):
     """Classify recent failures locally; never transmit messages or identities."""
     now = now or datetime.now(timezone.utc)
     counts = {}
     rows = json.loads((base / 'history.json').read_text())
-    patterns = [('credential',r'credential|password|로그인|비밀번호|계정'),
-                ('permission',r'admin_only|권한|관리자|permission|forbidden'),
-                ('human_verification',r'captcha|turnstile|사람인지|자동등록방지'),
-                ('rate_limit',r'429|rate.limit|한도'),
-                ('network',r'timeout|timed.out|connection|연결|시간.초과'),
-                ('form',r'selector|element|form|필드|양식|입력칸'),
-                ('server',r'50[0234]|internal.server|서버.오류')]
     for row in rows:
         if row.get('status') not in ('fail','failed'):
             continue
@@ -175,9 +182,62 @@ def failure_summary(base, now=None):
         if not 0 <= (now-at).total_seconds() <= 1800:
             continue
         message=str(row.get('message') or '')
-        category=next((key for key,pattern in patterns if re.search(pattern,message,re.I)),'unknown')
+        category=classify_failure(message)
         counts[category]=counts.get(category,0)+1
     return {'window_minutes':30,'total':sum(counts.values()),'categories':counts}
+
+
+def diagnose_recent_failures(base, now=None, fetch=None):
+    """Bounded GET-only reinspection. No credentials, submission or CAPTCHA solving."""
+    import socket
+    import ipaddress
+    import urllib.parse
+    from form_schema import measure_html
+    now = now or datetime.now(timezone.utc)
+    sites = {str(s.get('id')):s for s in json.loads((base / 'sites.json').read_text())}
+    rows = json.loads((base / 'history.json').read_text())
+    latest = {}
+    for row in rows:
+        try:
+            at = datetime.strptime(str(row.get('time',''))[:19],'%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone(timedelta(hours=9)))
+        except ValueError:
+            continue
+        sid = str(row.get('site_id'))
+        if 0 <= (now-at).total_seconds() <= 86400 and (sid not in latest or str(row.get('time')) > str(latest[sid].get('time'))):
+            latest[sid] = row
+    def read(url):
+        parsed = urllib.parse.urlsplit(url)
+        if parsed.scheme not in ('http','https') or parsed.username or parsed.password or parsed.port not in (None,80,443):
+            raise ValueError('Unsupported endpoint')
+        if not all(ipaddress.ip_address(a[4][0]).is_global for a in socket.getaddrinfo(parsed.hostname,parsed.port or (443 if parsed.scheme=='https' else 80))):
+            raise ValueError('Nonpublic endpoint')
+        # Redirects are evidence, not another endpoint to access automatically.
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self,*args,**kwargs):return None
+        request=urllib.request.Request(url,headers={'User-Agent':'Mozilla/5.0'})
+        with urllib.request.build_opener(NoRedirect).open(request,timeout=10) as response:
+            return response.read(262144).decode('utf-8','replace')
+    records=[]
+    for sid,row in sorted(latest.items(),key=lambda pair:str(pair[1].get('time')),reverse=True):
+        site=sites.get(sid,{})
+        if row.get('status') not in ('fail','failed') or site.get('permission') is not True or site.get('platform')!='gnuboard':continue
+        parsed=urllib.parse.urlsplit(str(site.get('site_url','')))
+        if not parsed.hostname:continue
+        url=urllib.parse.urlunsplit((parsed.scheme,parsed.netloc,'/bbs/write.php',urllib.parse.urlencode({'bo_table':site.get('bo_table','')}),''))
+        record={'site_id':sid,'history_id':row.get('id'),'original_category':classify_failure(row.get('message','')),'checked_at':now.isoformat(),'read_only':True}
+        try:
+            profile=measure_html((fetch or read)(url),url,'write')
+            record.update(form_state=profile['state'],challenge=profile['challenge'],fingerprint=profile['fingerprint'])
+            if profile['challenge']:record.update(category='human_verification',action='manual_captcha_then_resume_same_job')
+            elif profile['state']=='login_required':record.update(category='credential',action='registered_account_session_check')
+            elif profile['state']=='measured':record.update(category='form',action='browser_reinspection_before_single_queue_retry')
+            else:record.update(category='form',action='review_measured_schema')
+        except Exception as error:
+            record.update(category=classify_failure(str(error)),error_type=type(error).__name__,action='wait_external_recovery')
+        if record['original_category']=='unknown':record['submission_uncertain']=True;record['retry_allowed']=False
+        records.append(record)
+        if len(records)>=4:break
+    return records
 
 
 def update_overlay(stage, changed):
@@ -264,6 +324,11 @@ def main():
             guard = json.loads(guard_path.read_text()) if guard_path.exists() else {}
             incident = guard.get('status') in ('incident','network_incident')
             failures = failure_summary(APP / 'data')
+            diagnostics = diagnose_recent_failures(APP / 'data')
+            atomic(ROOT / 'private/incidents.json',diagnostics)
+            step('read_only_reinspection',incidents=diagnostics)
+            if diagnostics:
+                failures={'window_minutes':1440,'total':len(diagnostics),'categories':{key:sum(d['category']==key for d in diagnostics) for key in {d['category'] for d in diagnostics}}}
             state['failure_categories'] = failures['categories']
             incident = incident or failures['total'] >= 3
             issue_signature = json.dumps({'guard':guard.get('status'), 'categories':sorted(failures['categories'])},sort_keys=True)
@@ -283,7 +348,7 @@ def main():
                 report(state,'waiting',status='needs_attention',tested=passed)
                 step('waiting',reason='Duplicate failure cooldown')
                 return
-            context = {'tests_passed':passed,'test_result':output,'recent_failures':failures,'guard':{k:guard.get(k) for k in ('status','local_ok','public_ok')},'source':source_context(stage)}
+            context = {'tests_passed':passed,'test_result':output,'recent_failures':failures,'reinspection':[{k:d[k] for k in ('category','action','form_state','challenge','submission_uncertain') if k in d} for d in diagnostics],'guard':{k:guard.get(k) for k in ('status','local_ok','public_ok')},'source':source_context(stage)}
             report(state,'analyse')
             analysis = ai_call('analyst',context,state)
             step('analyse',analysis=analysis)
