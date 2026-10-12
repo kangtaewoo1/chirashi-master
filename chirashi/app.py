@@ -6528,6 +6528,10 @@ def _persist_add(job):
     with JOB_LOCK:
         q=load_json(QUEUE_FILE,[]); q.append(job); save_json(QUEUE_FILE,q)
 
+def _manual_queue_pending(site_id):
+    with JOB_LOCK:
+        return any(j.get('site',{}).get('id')==site_id for j in load_json(QUEUE_FILE,[]))
+
 def _persist_remove(job_id):
     with JOB_LOCK:
         q=[j for j in load_json(QUEUE_FILE,[]) if j.get('job_id')!=job_id]
@@ -9849,6 +9853,8 @@ def _publish_combo_to_site(s, kw, wname, rid, cfg, writer_name='', chrome_sem=No
     _slk=_site_lock(fresh.get('id'))
     if not _slk.acquire(blocking=False): return   # 다른 슬롯/조합이 이 사이트 발행 중 → 스킵
     try:
+        # Explicit queued posts take precedence over scheduled article generation.
+        if _manual_queue_pending(fresh.get('id')): return
         # ★작업실 작성자명은 config writer_use_workroom=True일 때만 site에 심는다(2026-10-01 실측: otng·ktigers 템플릿 글의
         #   meta author='홍만대표' — _pick_writer를 안 거치는 필러가 site['writer_name']을 직접 읽음). 기본은 랜덤 키워드 작성자.
         if writer_name and cfg.get('writer_use_workroom',False): fresh['writer_name']=writer_name
@@ -12531,7 +12537,7 @@ def api_sites():
     # 비밀번호는 브라우저/API로 되돌려 보내지 않는다. 저장 여부만 표시한다.
     public=[]
     for s in load_sites():
-        x=dict(s); x['login_saved']=bool(x.pop('mb_pass','') or x.get('mb_pass_enc'))
+        x=dict(s); x['publishing_block']=publishing_block(s); x['login_saved']=bool(x.pop('mb_pass','') or x.get('mb_pass_enc'))
         x.pop('mb_pass_enc',None); public.append(x)
     return jsonify(public)
 
@@ -12540,7 +12546,8 @@ def _site_is_pub(s):
     _adm=('manual_admin','admin_bulk','legacy_admin','candidate_registered','verified_test')
     return bool(s.get('permission') and s.get('registration_source') in _adm
                 and s.get('status')!='rejected' and s.get('write_test_status')=='passed'
-                and re.match(r'^https?://', str(s.get('verified_post_url') or '')))
+                and re.match(r'^https?://', str(s.get('verified_post_url') or ''))
+                and not publishing_block(s))
 
 @app.route('/api/site-board',methods=['GET'])
 def api_site_board():
@@ -12561,7 +12568,7 @@ def api_site_board():
                      'url':s.get('site_url'),'platform':s.get('platform'),'bo_table':s.get('bo_table'),
                      'state':state,'status':s.get('status'),'posted_today':s.get('posted_today',0),
                      'signup_status':s.get('signup_status'),'login_saved':bool(s.get('mb_pass') or s.get('mb_pass_enc')),
-                     'block':s.get('technical_block_reason') or s.get('verification_fail_reason') or ''})
+                     'block':publishing_block(s) or s.get('technical_block_reason') or s.get('verification_fail_reason') or ''})
     # 2) 후보 — 사이트에 없는 도메인만(중복 제거). approved인데 사이트에 없으면 등록대기로.
     for c in cands:
         dom=c.get('domain') or _domain_of(c.get('url') or '')
@@ -14916,7 +14923,7 @@ if(!sites.length){$('siteList').innerHTML='<p style="color:var(--d);padding:30px
 // (사장님 요청 — 목록엔 되는 것/시도 예정만 보이게. 전체보기 토글로 숨긴 것도 확인 가능)
 // 3분류: 발행가능(실제 돌아감) / 진행중(뚫는 중) / 탈락(안 됨)
 const srcOK=s=>['manual_admin','admin_bulk','legacy_admin','candidate_registered','verified_test'].indexOf(s.registration_source)>=0;
-const isPub=s=>!!s.permission&&srcOK(s)&&s.status!=='rejected'&&s.write_test_status==='passed'&&/^https?:\/\//.test(s.verified_post_url||'');
+const isPub=s=>!s.publishing_block&&!!s.permission&&srcOK(s)&&s.status!=='rejected'&&s.write_test_status==='passed'&&/^https?:\/\//.test(s.verified_post_url||'');
 const isDead=s=>(s.status==='rejected'||s.status==='failed'||(s.permission===false&&srcOK(s)&&s.write_test_status==='failed'));
 const pubs=sites.filter(isPub);
 const prog=sites.filter(s=>!isPub(s)&&!isDead(s));
