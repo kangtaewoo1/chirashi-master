@@ -133,7 +133,7 @@ def measure_html(markup,url,kind):
         roles=[f['role'] for f in selected['fields'] if not f['hidden']]
         if 'password' not in roles or not ('password_confirm' in roles or re.search(r'join|register',selected['action'],re.I)):
             state='form_unavailable'; selected=None
-    if selected and kind=='write' and not {'title','content'}.issubset({f['role'] for f in selected['fields']}):
+    if selected and kind=='write' and not {'title','content'}.issubset({f['role'] for f in selected['fields'] if not f['hidden'] and not f['disabled']}):
         state='form_unavailable'; selected=None
     evidence=(selected or {}).get('fields',[])
     challenge=bool(re.search(r'cf-turnstile|g-recaptcha|kcaptcha|veritas-hub|사람인지 확인|자동등록방지',markup,re.I))

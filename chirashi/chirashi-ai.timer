@@ -1,0 +1,11 @@
+[Unit]
+Description=TW AI maintenance every 15 minutes, independent of the PC
+
+[Timer]
+OnBootSec=3min
+OnUnitInactiveSec=15min
+Persistent=true
+Unit=chirashi-ai.service
+
+[Install]
+WantedBy=timers.target

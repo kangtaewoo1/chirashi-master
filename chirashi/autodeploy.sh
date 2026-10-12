@@ -12,8 +12,15 @@ for file in app.py cafe24_gate.py form_schema.py hub_guard.py hub_report.py; do
  curl -fsSL "https://raw.githubusercontent.com/kangtaewoo1/chirashi-master/$sha/chirashi/$file" -o "$stage/$file"
  test -s "$stage/$file"
 done
+if ! venv/bin/python /opt/chirashi/hub_overlay.py "$stage"; then
+ printf '%s AI override conflict; keeping current version\n' "$(date -u)" >> /tmp/chirashi-autodeploy.log
+ exit 1
+fi
 venv/bin/python -m py_compile "$stage/app.py" "$stage/cafe24_gate.py" "$stage/form_schema.py" "$stage/hub_guard.py" "$stage/hub_report.py"
 if cmp -s app.py "$stage/app.py" && cmp -s cafe24_gate.py "$stage/cafe24_gate.py" && cmp -s form_schema.py "$stage/form_schema.py" && cmp -s hub_guard.py "$stage/hub_guard.py" && cmp -s hub_report.py "$stage/hub_report.py"; then exit 0; fi
+if test -f /opt/chirashi-ai/private/overrides.json; then
+ /usr/bin/python3 /opt/chirashi-ai/hub_ai.py --validate-stage "$stage"
+fi
 backup="$DIR/backups/deploy-$(date -u +%Y%m%d-%H%M%S)"
 mkdir -p "$backup"
 for file in app.py cafe24_gate.py form_schema.py hub_guard.py hub_report.py; do

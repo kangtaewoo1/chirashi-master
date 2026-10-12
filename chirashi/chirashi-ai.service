@@ -1,0 +1,15 @@
+[Unit]
+Description=TW AI autonomous publishing maintenance
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/chirashi-ai
+ExecStart=/usr/bin/python3 /opt/chirashi-ai/hub_ai.py
+TimeoutStartSec=15min
+Nice=10
+MemoryMax=768M
+TasksMax=128
+UMask=0022
+
