@@ -22,7 +22,7 @@ class ReadOnlyAuditTest(unittest.TestCase):
                  'finalize_post':lambda *a,**kw:None,'_persist_remove':lambda *a:None,'add_log':lambda *a:None,
                  'reset_driver':lambda: self.fail('Must not retry uncertain/human failures'),'schedule_retry':lambda *a:self.fail('Must not schedule repost')}
             exec(compile(ast.Module(body=[fn],type_ignores=[]),'app.py','exec'),env)
-            env['_do_publish_job']({'title':'Functional test','content':'Test body'}, {'id':'approved'}, {},'Test','job','history')
+            env['_do_publish_job']({'title':'Functional test','content':'Test body'}, {'id':'approved'}, {'post_delay':0},'Test','job','history')
             self.assertEqual(len(calls),1)
             self.assertEqual(updates[-1]['status'],'failed')
     def test_gnuboard_waits_for_human_in_same_worker_session(self):
@@ -60,3 +60,4 @@ class ReadOnlyAuditTest(unittest.TestCase):
         self.assertNotIn('SECRET',str(error.exception))
 
 if __name__=='__main__': unittest.main()
+
