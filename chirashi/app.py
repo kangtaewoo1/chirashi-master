@@ -466,7 +466,7 @@ def _read_form_schema(site,kind):
     if urllib.parse.urlsplit(url).netloc.lower()!=urllib.parse.urlsplit(base).netloc.lower():
         raise ValueError('폼 측정 URL이 등록 사이트와 다릅니다')
     response=rq.get(url,timeout=20,headers={'User-Agent':'Mozilla/5.0 (read-only form audit)'})
-    response.raise_for_status()
+    if response.status_code>=400: raise RuntimeError('사이트 접속 응답 HTTP '+str(response.status_code))
     if 'charset=' not in response.headers.get('Content-Type','').lower():
         match=re.search(r'charset=["\']?\s*([\w-]+)',response.content[:4096].decode('ascii','ignore'),re.I)
         encoding=(match.group(1) if match else response.apparent_encoding) or 'utf-8'
@@ -14151,8 +14151,10 @@ async function auditForm(id,kind){
   const data=await r.json(); if(!data.ok){box.textContent='측정 보류: '+(data.error||'확인 필요');return}
   const p=data.profile;const states={measured:'입력 폼 확인',form_unavailable:'입력 폼 미확인',agreement_required:'약관 단계 확인 필요',human_verification_required:'사람 확인 필요',login_required:'로그인 후 측정 필요'};
   const fields=((p.form||{}).fields||[]).filter(f=>f.type!=='hidden');
-  const rows=fields.map(f=>'<tr><td>'+esc(f.label||f.name||f.id||'이름 없음')+'</td><td>'+esc(f.type)+'</td><td>'+(f.disabled?'비활성':f.required===true?'필수 확인':'필수 여부 미확인')+'</td><td>'+esc(f.pattern||[f.minlength,f.maxlength].filter(Boolean).join('~')||'화면 규칙 미확인')+'</td></tr>').join('');
-  box.innerHTML='<div class="card"><b>'+(kind==='signup'?'가입':'글쓰기')+' 양식 v'+p.version+' · '+esc(states[p.state]||p.state)+'</b><p>최근 측정: '+esc(new Date(p.measured_at).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}))+' · '+(data.changed?'이전 양식과 달라짐':'변경 없음 또는 최초 측정')+'</p><p>이 결과는 구조 측정입니다. 가입·게시 성공은 별도 검증합니다.</p>'+(rows?'<table><thead><tr><th>항목</th><th>입력 종류</th><th>필수 여부</th><th>입력 규칙</th></tr></thead><tbody>'+rows+'</tbody></table>':'')+'</div>';
+  const names={name:'작성자 / 이름',id:'아이디',password:'비밀번호',password_confirm:'비밀번호 확인',email:'이메일',nickname:'닉네임',phone:'전화번호',title:'제목',content:'본문',post_visibility:'공개 / 비밀글',agreement:'동의 항목',attachment:'첨부파일'};
+  const types={text:'문자 입력',password:'비밀번호 입력',checkbox:'체크 항목',select:'선택 목록',textarea:'본문 입력',file:'파일 첨부',iframe:'편집기'};
+  const rows=fields.map(f=>'<tr><td>'+esc(f.label||names[f.role]||f.name||f.id||'이름 없음')+'</td><td>'+esc(types[f.type]||f.type)+'</td><td>'+(f.disabled?'비활성':f.required===true?'필수 확인':'필수 여부 미확인')+'</td><td>'+esc(f.pattern||[(f.minlength?'최소 '+f.minlength+'자':''),(f.maxlength?'최대 '+f.maxlength+'자':'')].filter(Boolean).join(' / ')||'화면 규칙 미확인')+'</td></tr>').join('');
+  box.innerHTML='<div class="card"><b>'+(kind==='signup'?'가입':'글쓰기')+' 양식 v'+p.version+' · '+esc(states[p.state]||p.state)+'</b><p>최근 측정: '+esc(new Date(p.measured_at).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}))+' · '+(data.changed?'이전 측정 결과와 달라짐':'변경 없음 또는 최초 측정')+'</p><p>이 결과는 구조 측정입니다. 가입·게시 성공은 별도 검증합니다.</p>'+(rows?'<table><thead><tr><th>항목</th><th>입력 종류</th><th>필수 여부</th><th>입력 규칙</th></tr></thead><tbody>'+rows+'</tbody></table>':'')+'</div>';
  }catch(e){box.textContent='측정 결과를 받지 못했습니다. 잠시 후 다시 확인하세요.'}
 }
 async function renderBoard(){
