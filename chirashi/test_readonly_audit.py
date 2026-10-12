@@ -9,6 +9,19 @@ from unittest.mock import patch
 from form_schema import measure_html
 
 class ReadOnlyAuditTest(unittest.TestCase):
+    def test_http_captcha_form_hands_off_without_any_post_or_solver(self):
+        tree=ast.parse(Path(__file__).with_name('app.py').read_text(encoding='utf-8'))
+        fn=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='gnuboard_post_http')
+        calls=[]
+        html='<form action="write_update.php"><input name="wr_subject"><input name="captcha_key"></form>'
+        session=types.SimpleNamespace(headers={},get=lambda *a,**kw:(calls.append('GET') or types.SimpleNamespace(status_code=200,text=html)),post=lambda *a,**kw:self.fail('No submission allowed'))
+        fake=types.ModuleType('requests');fake.Session=lambda:session
+        env={'re':re,'load_config':lambda:{},'_HTTP_UA':'test','_pick_writer':lambda s:'Test','_post_password':lambda c:'test',
+             '_brand_email':lambda *a:'','_strip_non_bmp':lambda s:s,'_ocr_available':lambda:self.fail('No CAPTCHA solver allowed')}
+        exec(compile(ast.Module(body=[fn],type_ignores=[]),'app.py','exec'),env)
+        with patch.dict(sys.modules,{'requests':fake}):
+            ok,message=env['gnuboard_post_http']({'site_url':'http://approved.example','bo_table':'free'},'Functional test','Test body')
+        self.assertIsNone(ok);self.assertIn('사람 입력',message);self.assertEqual(calls,['GET'])
     def test_uncertain_submission_and_human_wait_are_never_reposted(self):
         import threading
         tree=ast.parse(Path(__file__).with_name('app.py').read_text(encoding='utf-8'))

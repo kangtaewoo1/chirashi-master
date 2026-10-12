@@ -3884,6 +3884,8 @@ def gnuboard_post_http(site, title, content_html):
     # ── 캡차 ──
     capm=re.search(r'g5_captcha_url\s*=\s*["\']([^"\']+)["\']',html)
     needs_cap=bool(capm) or ('captcha_key' in low) or ('kcaptcha' in low)
+    if needs_cap:
+        return None,'CAPTCHA 사람 입력 필요 — 같은 브라우저 워커로 전환'
     cap_base=(capm.group(1) if capm else (base+'/plugin/kcaptcha')) if needs_cap else ''
     # ★캡차 사이트인데 무료 OCR(ddddocr)이 없는 환경(서버 VPS)이면: 2captcha 잔액0으로 삽질하지 말고
     #   즉시 None 반환 → 노드(ddddocr 됨)가 claim해 무료로 처리하도록 위임(2026-09-14 대표님 지시).
@@ -5654,6 +5656,8 @@ def _apply_recipe(d, site, rec, title, content, skip_login=False):
         elif base:
             _platform_login(d,base,site)   # 저장된 상세 셀렉터 없으면 플랫폼 로그인
     d.get(rec['write_url']); time.sleep(2); dismiss_alerts(d)
+    if _page_is_blocked(d): return False,'보안 차단 — 레시피 제출 중단'
+    if detect_captcha(d): return False,'CAPTCHA 사람 입력 필요 — 레시피 제출 중단'
     _,missing=fill_required_post_fields(d,site)
     if missing: return False,'필수항목 설정 필요: '+', '.join(missing[:6])
     _fill_recipe_fields(d, rec, title, content)
@@ -6135,6 +6139,9 @@ def do_post(site, title, content_html, skip_login=False):
         try:
             ok,msg=_apply_recipe(get_driver(),site,rec,title,content_html,skip_login=skip_login)
             if ok: return True,msg
+            if '보안 차단' in str(msg): return False,msg
+            if 'CAPTCHA' in str(msg) and resolve_platform(site)=='gnuboard':
+                return gnuboard_post(site,title,content_html,skip_login=skip_login)
             add_log(f'[학습레시피 실패→폴백] {site.get("name","")}')
         except Exception as e:
             add_log(f'[학습레시피 오류→폴백] {str(e)[:60]}')
@@ -6167,6 +6174,8 @@ def do_post(site, title, content_html, skip_login=False):
     except Exception as e:
         ok,msg=False,str(e)
     if ok: return True,msg
+    if any(x in str(msg) for x in ('CAPTCHA','캡차','보안 차단','게시 권한 없음','등록 확인 불가')):
+        return False,msg
     # 3) 구조적 실패(일시적·로그인·차단 제외)면 자동 학습(디스커버리) 발행 후 레시피 저장
     reason,_,_=classify_fail(msg)
     # ★학습시도 생략(2026-09-20 대표님 '워커 부족?' 실측): 240초 초과 발행 127건 중 실패 72건의 67건이 '등록 확인 불가 → 학습시도 →
