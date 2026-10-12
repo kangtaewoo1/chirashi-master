@@ -21,7 +21,11 @@ def snapshot(base):
     ready = sum(bool(s.get('permission') and s.get('status') != 'rejected'
                      and s.get('write_test_status') == 'passed' and s.get('verified_post_url')
                      and not publishing_block(s)) for s in sites)
+    guard = json.loads((base / 'hub_guard.json').read_text()) if (base / 'hub_guard.json').exists() else {}
+    maintenance = json.loads((base / 'hub_maintenance.json').read_text()) if (base / 'hub_maintenance.json').exists() else {}
     return {'schema': 1, 'observed_at': datetime.now(timezone.utc).isoformat(),
+            'guard': {k: guard.get(k) for k in ('status','checked_at','local_ok','public_ok','restarts_today','last_action')},
+            'maintenance': {k: maintenance.get(k) for k in ('status','checked_at','tested','deployed','commit')},
             'service_active': subprocess.run(['systemctl', 'is-active', '--quiet', 'chirashi']).returncode == 0,
             'sites_total': len(sites), 'sites_verified_ready': ready,
             'sites_rejected': sum(s.get('status') == 'rejected' for s in sites),

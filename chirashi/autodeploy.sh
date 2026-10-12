@@ -8,19 +8,19 @@ stage=$(mktemp -d "$DIR/.deploy-stage.XXXXXX")
 trap 'rm -rf -- "$stage"' EXIT
 sha=$(curl -fsSL https://api.github.com/repos/kangtaewoo1/chirashi-master/commits/master | venv/bin/python -c 'import json,sys; print(json.load(sys.stdin)["sha"])')
 [[ "$sha" =~ ^[a-f0-9]{40}$ ]] || exit 1
-for file in app.py cafe24_gate.py form_schema.py; do
+for file in app.py cafe24_gate.py form_schema.py hub_guard.py hub_report.py; do
  curl -fsSL "https://raw.githubusercontent.com/kangtaewoo1/chirashi-master/$sha/chirashi/$file" -o "$stage/$file"
  test -s "$stage/$file"
 done
-venv/bin/python -m py_compile "$stage/app.py" "$stage/cafe24_gate.py" "$stage/form_schema.py"
-if cmp -s app.py "$stage/app.py" && cmp -s cafe24_gate.py "$stage/cafe24_gate.py" && cmp -s form_schema.py "$stage/form_schema.py"; then exit 0; fi
+venv/bin/python -m py_compile "$stage/app.py" "$stage/cafe24_gate.py" "$stage/form_schema.py" "$stage/hub_guard.py" "$stage/hub_report.py"
+if cmp -s app.py "$stage/app.py" && cmp -s cafe24_gate.py "$stage/cafe24_gate.py" && cmp -s form_schema.py "$stage/form_schema.py" && cmp -s hub_guard.py "$stage/hub_guard.py" && cmp -s hub_report.py "$stage/hub_report.py"; then exit 0; fi
 backup="$DIR/backups/deploy-$(date -u +%Y%m%d-%H%M%S)"
 mkdir -p "$backup"
-for file in app.py cafe24_gate.py form_schema.py; do
+for file in app.py cafe24_gate.py form_schema.py hub_guard.py hub_report.py; do
  if test -f "$file"; then cp -a "$file" "$backup/$file"; fi
 done
 systemctl stop chirashi
-for file in app.py cafe24_gate.py form_schema.py; do cp "$stage/$file" "$file"; done
+for file in app.py cafe24_gate.py form_schema.py hub_guard.py hub_report.py; do cp "$stage/$file" "$file"; done
 systemctl start chirashi
 healthy=0
 for attempt in $(seq 1 15); do
@@ -32,7 +32,7 @@ if test "$healthy" = 1; then
  printf '%s commit=%s HTTP 200 deployed\n' "$(date -u)" "$sha" >> /tmp/chirashi-autodeploy.log
 else
  systemctl stop chirashi
- for file in app.py cafe24_gate.py form_schema.py; do
+ for file in app.py cafe24_gate.py form_schema.py hub_guard.py hub_report.py; do
   if test -f "$backup/$file"; then cp -a "$backup/$file" "$file"; fi
  done
  systemctl start chirashi
