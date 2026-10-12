@@ -9,6 +9,22 @@ from unittest.mock import patch
 from form_schema import measure_html
 
 class ReadOnlyAuditTest(unittest.TestCase):
+    def test_uncertain_submission_and_human_wait_are_never_reposted(self):
+        import threading
+        tree=ast.parse(Path(__file__).with_name('app.py').read_text(encoding='utf-8'))
+        fn=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='_do_publish_job')
+        for message in ('등록 확인 불가','CAPTCHA 수동 입력 대기시간 만료','게시 권한 없음'):
+            calls=[];updates=[]
+            def post(*args):calls.append(args);return False,message
+            env={'under_daily_limit':lambda *a:True,'under_min_interval':lambda *a:(True,0),'history_update':lambda *a,**kw:updates.append(kw),
+                 'do_post':post,'classify_fail':lambda m:('temporary','temporary',True),'RETRY_MAX':3,'wk_active':True,'wk_paused':False,
+                 'STATS_LOCK':threading.Lock(),'wk_stats':{'fail':0,'done':0},'post_queue':types.SimpleNamespace(qsize=lambda:0),
+                 'finalize_post':lambda *a,**kw:None,'_persist_remove':lambda *a:None,'add_log':lambda *a:None,
+                 'reset_driver':lambda: self.fail('Must not retry uncertain/human failures'),'schedule_retry':lambda *a:self.fail('Must not schedule repost')}
+            exec(compile(ast.Module(body=[fn],type_ignores=[]),'app.py','exec'),env)
+            env['_do_publish_job']({'title':'Functional test','content':'Test body'}, {'id':'approved'}, {},'Test','job','history')
+            self.assertEqual(len(calls),1)
+            self.assertEqual(updates[-1]['status'],'failed')
     def test_gnuboard_waits_for_human_in_same_worker_session(self):
         tree=ast.parse(Path(__file__).with_name('app.py').read_text(encoding='utf-8'))
         fn=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='gnuboard_post')

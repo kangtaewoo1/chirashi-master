@@ -198,6 +198,8 @@ def diagnose_recent_failures(base, now=None, fetch=None):
     rows = json.loads((base / 'history.json').read_text())
     latest = {}
     for row in rows:
+        if row.get('status') not in ('fail','failed','done','success'):
+            continue
         try:
             at = datetime.strptime(str(row.get('time',''))[:19],'%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone(timedelta(hours=9)))
         except ValueError:

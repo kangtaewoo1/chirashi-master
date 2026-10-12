@@ -6686,6 +6686,8 @@ def _do_publish_job(job,site,cfg,name,job_id,hid):
             try:
                 ok,msg=do_post(site,title,content)
                 if ok: break
+                if any(x in str(msg) for x in ('등록 확인 불가','CAPTCHA 수동 입력','캡차 불일치','보안 차단','게시 권한 없음')):
+                    break  # 결과 불명 또는 사람 확인은 같은 글을 자동 재제출하지 않는다.
                 add_log(f'[재시도 {attempt}/3] {name} - {msg}')
                 reset_driver()   # 실패 시 드라이버 새로 띄워 세션 꼬임 방지
             except Exception as e:
@@ -6699,7 +6701,8 @@ def _do_publish_job(job,site,cfg,name,job_id,hid):
         if not ok:
             reason,reason_ko,is_temp=classify_fail(msg)
             requeues=job.get('requeues',0)
-            transient=is_temp and requeues<RETRY_MAX and wk_active
+            needs_review=any(x in str(msg) for x in ('등록 확인 불가','CAPTCHA','캡차','보안 차단','게시 권한 없음'))
+            transient=is_temp and not needs_review and requeues<RETRY_MAX and wk_active
             if transient:
                 job['requeues']=requeues+1
         if transient:
