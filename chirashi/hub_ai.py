@@ -286,6 +286,9 @@ def update_overlay(stage, changed):
 
 def main():
     import fcntl
+    # Runtime helpers live in APP; isolated test stages already contain them.
+    if str(APP) not in sys.path:
+        sys.path.append(str(APP))
     (ROOT / 'private').mkdir(parents=True,exist_ok=True,mode=0o700)
     os.chmod(ROOT / 'private',0o700)
     with open(ROOT / 'private/run.lock','a') as lock:
