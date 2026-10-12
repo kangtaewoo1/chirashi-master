@@ -480,9 +480,11 @@ def _signup_form_measure(site):
     form=schema['form']; fields=form['fields']; rules={}; rule_sources={}
     defaults={'id_min':4 if site.get('platform')=='cafe24' else 3,'id_max':16 if site.get('platform')=='cafe24' else 20,'password_min':10,'password_max':64}
     for key,role,attr in [('id_min','id','minlength'),('id_max','id','maxlength'),('password_min','password','minlength'),('password_max','password','maxlength')]:
-        values=[int(f[attr]) for f in fields if f['role']==role and str(f.get(attr,'')).isdigit()]
-        rules[key]=(max(values) if attr=='minlength' else min(values)) if values else defaults[key]
-        rule_sources[key]='attribute' if values else 'fallback_unverified'
+        values=[int(f[attr]) for f in fields if f['role']==role and not f.get('hidden') and str(f.get(attr,'')).isdigit()]
+        hints=[f['text_constraints']['min_length' if attr=='minlength' else 'max_length'] for f in fields if f['role']==role and not f.get('hidden') and f.get('text_constraints')]
+        observed=values or hints
+        rules[key]=(max(observed) if attr=='minlength' else min(observed)) if observed else defaults[key]
+        rule_sources[key]='attribute' if values else ('nearby_text' if hints else 'fallback_unverified')
     return {'signup_url':schema['source_url'],'form_url':schema['source_url'],'form_action':form['action'],
             'form_method':form['method'],'fields':fields,'rules':rules,'rule_sources':rule_sources,
             'captcha':schema['challenge'],'email_verification_required':None,
@@ -494,7 +496,7 @@ def learn_signup_profile(site,force=False):
     with _signup_learn_locks[host]:
         profiles=load_signup_profiles(); old=profiles.get(host) or {}
         # 올인원 실행 때마다 상대 사이트를 두드리지 않는다. 최근 정상 측정값은 30분 재사용.
-        if old and not force and (old.get('schema') or {}).get('schema_version')==1:
+        if old and not force and (old.get('schema') or {}).get('schema_version')==2:
             try: fresh=(datetime.now()-datetime.fromisoformat(old.get('measured_at',''))).total_seconds()<1800
             except: fresh=False
             if fresh:
@@ -14150,10 +14152,10 @@ async function auditForm(id,kind){
   const r=await fetch('/api/sites/form-audit/'+encodeURIComponent(id),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind})});
   const data=await r.json(); if(!data.ok){box.textContent='측정 보류: '+(data.error||'확인 필요');return}
   const p=data.profile;const states={measured:'입력 폼 확인',form_unavailable:'입력 폼 미확인',agreement_required:'약관 단계 확인 필요',human_verification_required:'사람 확인 필요',login_required:'로그인 후 측정 필요'};
-  const fields=((p.form||{}).fields||[]).filter(f=>f.type!=='hidden');
+  const fields=((p.form||{}).fields||[]).filter(f=>!f.hidden&&f.type!=='hidden');
   const names={name:'작성자 / 이름',id:'아이디',password:'비밀번호',password_confirm:'비밀번호 확인',email:'이메일',nickname:'닉네임',phone:'전화번호',title:'제목',content:'본문',post_visibility:'공개 / 비밀글',agreement:'동의 항목',attachment:'첨부파일'};
   const types={text:'문자 입력',password:'비밀번호 입력',checkbox:'체크 항목',select:'선택 목록',textarea:'본문 입력',file:'파일 첨부',iframe:'편집기'};
-  const rows=fields.map(f=>'<tr><td>'+esc(f.label||names[f.role]||f.name||f.id||'이름 없음')+'</td><td>'+esc(types[f.type]||f.type)+'</td><td>'+(f.disabled?'비활성':f.required===true?'필수 확인':'필수 여부 미확인')+'</td><td>'+esc(f.pattern||[(f.minlength?'최소 '+f.minlength+'자':''),(f.maxlength?'최대 '+f.maxlength+'자':'')].filter(Boolean).join(' / ')||'화면 규칙 미확인')+'</td></tr>').join('');
+  const rows=fields.map(f=>'<tr><td>'+esc(f.label||names[f.role]||f.name||f.id||'이름 없음')+'</td><td>'+esc(types[f.type]||f.type)+'</td><td>'+(f.disabled?'비활성':f.required===true?'필수 확인':'필수 여부 미확인')+'</td><td>'+esc(f.pattern||(f.text_constraints?'화면 안내 '+f.text_constraints.min_length+'~'+f.text_constraints.max_length+'자':'')||[(f.minlength?'최소 '+f.minlength+'자':''),(f.maxlength?'최대 '+f.maxlength+'자':'')].filter(Boolean).join(' / ')||'화면 규칙 미확인')+'</td></tr>').join('');
   box.innerHTML='<div class="card"><b>'+(kind==='signup'?'가입':'글쓰기')+' 양식 v'+p.version+' · '+esc(states[p.state]||p.state)+'</b><p>최근 측정: '+esc(new Date(p.measured_at).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}))+' · '+(data.changed?'이전 측정 결과와 달라짐':'변경 없음 또는 최초 측정')+'</p><p>이 결과는 구조 측정입니다. 가입·게시 성공은 별도 검증합니다.</p>'+(rows?'<table><thead><tr><th>항목</th><th>입력 종류</th><th>필수 여부</th><th>입력 규칙</th></tr></thead><tbody>'+rows+'</tbody></table>':'')+'</div>';
  }catch(e){box.textContent='측정 결과를 받지 못했습니다. 잠시 후 다시 확인하세요.'}
 }

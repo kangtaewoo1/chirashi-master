@@ -53,6 +53,13 @@ def _anc(node,tag):
         if node.tag==tag: return node
         node=node.parent
 
+def _hidden(node):
+    while node:
+        a=node.attrs
+        if 'hidden' in a or a.get('aria-hidden')=='true' or set(a.get('class','').split()) & {'displaynone','d-none','hidden'} or re.search(r'(?:display\s*:\s*none|visibility\s*:\s*hidden)',a.get('style',''),re.I): return True
+        node=node.parent
+    return False
+
 def safe_url(url):
     p=urlsplit(url)
     # Preserve board routing, omit transient authentication/challenge query tokens.
@@ -75,7 +82,7 @@ def measure_html(markup,url,kind):
             a=n.attrs; typ=a.get('type','text' if n.tag=='input' else n.tag).lower()
             if typ in {'submit','reset','button','image'} or n.tag=='button': continue
             f={k:a[k] for k in ('name','id','minlength','maxlength','pattern','autocomplete','placeholder','accept','multiple') if k in a}
-            f.update(tag=n.tag,type=typ,disabled='disabled' in a,readonly='readonly' in a)
+            f.update(tag=n.tag,type=typ,disabled='disabled' in a,readonly='readonly' in a,hidden=(typ=='hidden' or _hidden(n)))
             label=labels.get(a.get('id'),'')
             if not label:
                 wrap=_anc(n.parent,'label')
@@ -93,12 +100,16 @@ def measure_html(markup,url,kind):
             # A label marked required is evidence; lack of a marker is not evidence of optionality.
             marked=bool(re.search(r'필수|\brequired\b',label,re.I))
             if row:
-                marked=marked or any(x.tag=='img' and re.search(r'필수|required',x.attrs.get('alt',''),re.I) for x in p.nodes if _anc(x,'tr') is row)
+                marked=marked or any(x.tag=='img' and not _hidden(x) and re.search(r'필수|required',x.attrs.get('alt',''),re.I) for x in p.nodes if _anc(x,'tr') is row)
             f['required']=True if native or marked else (False if a.get('aria-required')=='false' else None)
             f['required_source']='attribute' if native or a.get('aria-required')=='false' else ('label' if marked else 'unknown')
             if n.tag=='select':
                 f['options']=[{'value':x.attrs.get('value',''), 'label':x.text()[:120], 'disabled':'disabled' in x.attrs} for x in p.nodes if x.tag=='option' and _anc(x,'select') is n]
             f['role']=role_for(f)
+            if f['role'] in {'id','password','password_confirm'}:
+                context=(row or n.parent).text()
+                hint=re.search(r'(\d+)\s*(?:자)?\s*[~∼-]\s*(\d+)\s*(?:자|글자)',context)
+                if hint: f['text_constraints']={'min_length':int(hint.group(1)),'max_length':int(hint.group(2)),'source':'nearby_text'}
             # Use quoted attribute selectors, escaping quotes and backslashes. Never store field values.
             ident=f.get('id'); name=f.get('name'); selector=''
             if ident or name:
@@ -109,7 +120,7 @@ def measure_html(markup,url,kind):
         action=safe_url(urljoin(url,form.attrs.get('action','')))
         forms.append({'id':form.attrs.get('id',''),'action':action,'method':form.attrs.get('method','get').lower(),'fields':fields})
     def score(form):
-        roles=[f['role'] for f in form['fields'] if f['type']!='hidden' and not f['disabled']]
+        roles=[f['role'] for f in form['fields'] if not f['hidden'] and not f['disabled']]
         action=form['action'].lower()
         if kind=='signup':
             if re.search(r'login|signin',action) and not re.search(r'join|register',action): return -1
@@ -119,7 +130,7 @@ def measure_html(markup,url,kind):
     selected=max(candidates,key=score) if candidates else None
     state='measured' if selected else 'form_unavailable'
     if selected and kind=='signup':
-        roles=[f['role'] for f in selected['fields'] if f['type']!='hidden']
+        roles=[f['role'] for f in selected['fields'] if not f['hidden']]
         if 'password' not in roles or not ('password_confirm' in roles or re.search(r'join|register',selected['action'],re.I)):
             state='form_unavailable'; selected=None
     if selected and kind=='write' and not {'title','content'}.issubset({f['role'] for f in selected['fields']}):
@@ -129,12 +140,12 @@ def measure_html(markup,url,kind):
     if not selected and kind=='write' and any(re.search(r'login|signin',f['action'],re.I) for f in forms): state='login_required'
     if not selected and challenge: state='human_verification_required'
     if not selected and re.search(r'약관|이용약관|동의',p.root.text()): state='agreement_required' if not challenge else state
-    unresolved=[f.get('name') or f.get('id') or f['tag'] for f in evidence if f['type']!='hidden' and not f['disabled'] and (f['role']=='unknown' or f['required'] is None)]
+    unresolved=[f.get('name') or f.get('id') or f['tag'] for f in evidence if not f['hidden'] and not f['disabled'] and (f['role']=='unknown' or f['required'] is None)]
     canonical={'kind':kind,'form':selected,'challenge':challenge,'state':state}
     signature=hashlib.sha256(json.dumps(canonical,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
     return {**canonical,'fingerprint':signature,'measured_at':datetime.now(timezone.utc).isoformat(timespec='seconds'),
             'source_url':safe_url(url),'unresolved':unresolved,'auto_ready':state=='measured' and not challenge and not unresolved,
-            'schema_version':1}
+            'schema_version':2}
 
 def changes_between(old,new):
     before={f.get('selector') or str(i):f for i,f in enumerate((old.get('form') or {}).get('fields',[]))}

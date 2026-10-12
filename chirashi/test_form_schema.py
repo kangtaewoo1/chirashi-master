@@ -45,4 +45,15 @@ class FormSchemaTest(unittest.TestCase):
     def test_title_only_is_not_complete_write_form(self):
         self.assertEqual(measure_html('<form><input name="wr_subject"></form>','https://example.org/write','write')['state'],'form_unavailable')
 
+    def test_hidden_cafe24_rows_and_required_icons(self):
+        html='<form action="/join"><input name="member_id" required><input type="password"><input name="password_confirm" type="password"><div class="displaynone"><table><tr><th><img alt="필수">직업</th><td><input name="job"></td></tr></table></div><table><tr><th>휴대전화<img class="displaynone" alt="필수"></th><td><input name="mobile2"></td></tr></table></form>'
+        fields=measure_html(html,'https://example.org/join','signup')['form']['fields']
+        job=next(f for f in fields if f.get('name')=='job'); phone=next(f for f in fields if f.get('name')=='mobile2')
+        self.assertTrue(job['hidden']);self.assertIsNone(phone['required'])
+    def test_cafe24_nearby_password_length_notice(self):
+        html='<form action="/join"><table><tr><th>비밀번호</th><td><input type="password">10자~16자</td></tr><tr><td><input type="password" name="password_confirm"></td></tr></table></form>'
+        p=measure_html(html,'https://example.org/join','signup')
+        self.assertEqual(p['form']['fields'][0]['text_constraints']['min_length'],10)
+        self.assertEqual(p['form']['fields'][0]['text_constraints']['max_length'],16)
+
 if __name__=='__main__': unittest.main()
