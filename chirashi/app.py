@@ -21,6 +21,7 @@ for _stream in ('stdout', 'stderr'):
 from datetime import datetime, timedelta
 from pathlib import Path
 from collections import defaultdict
+from cafe24_gate import AccessStopped, guarded_publish, stop_on_alerts, result_is_new, publishing_block
 import urllib3; urllib3.disable_warnings()
 
 from flask import Flask, request, jsonify, render_template_string, session, redirect, send_from_directory
@@ -3587,6 +3588,7 @@ def dismiss_alerts(d):
     if texts:
         try: d._last_alerts=(getattr(d,'_last_alerts',[]) or [])[-4:]+texts
         except Exception: pass
+    stop_on_alerts(texts)
     return texts
 
 def _logged_in_strict(d):
@@ -4662,6 +4664,7 @@ def _c24_install_ts_hook(d):
         d.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument',{'source':_TS_HOOK_JS}); d._ts_hooked=True
     except Exception: pass
 
+@guarded_publish
 def cafe24_post(site, title, content_html, skip_login=False):
     """Cafe24 쇼핑몰 게시판 글쓰기. (게시판 구조가 사이트마다 달라 셀렉터 다중 폴백)"""
     from selenium.webdriver.common.by import By
@@ -4675,7 +4678,6 @@ def cafe24_post(site, title, content_html, skip_login=False):
     d=get_driver(remote=_use_sbr)
     if _use_sbr: add_log(f'[Cafe24] Scraping Browser(원격 크롬) 사용 — {(site.get("name") or base)[:24]}')
     if not _use_sbr:
-        _c24_install_ts_hook(d)
         if _c24_cookies_load(d, base) and mid and not skip_login:
             skip_login=True   # 저장 세션 재사용 시도 — 아래 skip_login 블록이 myshop으로 생존 확인, 죽었으면 재로그인
     # ★원격 크롬(Scraping Browser)은 CF를 백그라운드로 푸느라 d.get()이 page_load 완료를 못 받아
@@ -4740,33 +4742,7 @@ def cafe24_post(site, title, content_html, skip_login=False):
                 time.sleep(0.5)
             if not _found:
                 return True
-        cfg=load_config()
-        # ★render 대기(2026-09-19 훅진단 실측: hooked=True인데 turnstile=undefined·iframes=0 → api.js(defer)가 아직 실행 전에 2captcha를
-        #   요청해 파라미터가 없었음). setter 훅이 render 호출 순간 __ts_params를 채우므로, 최대 6초까지 그 시점을 기다린 뒤 푼다.
-        # ★결론(2026-09-19 5·6차 실측): veritas-hub 챌린지 페이지는 6초를 기다려도 turnstile=undefined·iframes=0 — 자동화 크롬에서
-        #   api.js가 초기화되지 않아 render가 안 불림(파라미터 캡처 불가). 대신 sitekey 정규식+javascriptCallback 토큰 주입이 통과(6차 2/2).
-        #   → 훅은 위젯을 정상 렌더하는 일반 페이지용으로만 남기고 대기는 2초로 축소(챌린지당 낭비 최소화).
-        try:
-            for _w in range(4):
-                if d.execute_script('return !!(window.__ts_params && window.__ts_params.sitekey)'): break
-                time.sleep(0.5)
-        except Exception: pass
-        # ★훅 진단(2026-09-19: setter 훅으로도 '훅 파라미터 없음' 지속): 이 문서에서 CDP 스크립트가 돌았는지·turnstile 객체·래핑·파라미터 상태를 1줄로.
-        try:
-            _hd=d.execute_script("try{return [!!window.__ts_hooked, typeof window.turnstile, !!(window.turnstile&&window.turnstile.__ts_wrapped), !!window.__ts_params, document.querySelectorAll('iframe').length, (document.querySelector('script[src*=\"challenges.cloudflare\"]')||{}).src||''];}catch(e){return ['err',String(e)];}")
-            add_log(f"[Turnstile훅진단] hooked={_hd[0]} turnstile={_hd[1]} wrapped={_hd[2]} params={_hd[3]} iframes={_hd[4]} api={str(_hd[5])[-60:]}")
-        except Exception as _e:
-            add_log(f"[Turnstile훅진단] 실패 {str(_e)[:40]}")
-        ok,msg,tok,info=solve_captcha_with_2captcha(d,site,'turnstile',cfg)
-        add_log(f'[Turnstile] {msg}')
-        if not ok: return False
-        for _ in range(40):   # /validate→redirect 복귀 대기(최대 20초)
-            try:
-                c=(d.current_url or '').lower()
-                if 'veritas-hub' not in c and 'challenge' not in c: return True
-            except Exception: pass
-            time.sleep(0.5)
-        return True
+        raise AccessStopped('[human_verification_required] Cafe24 사람 확인 필요 — 자동 발행 보류')
 
     # ★skip_login=True(가입 직후)여도 cafe24는 세션이 실제 살아있는지 확인 → 죽었으면 로그인 수행(2026-09-12 mereta:
     #   가입 직후 세션 재사용이 맞지만, 세션이 없으면 write가 로그인으로 튕김). myshop 접근으로 세션 판정.
@@ -6364,6 +6340,12 @@ def do_post(site, title, content_html, skip_login=False):
     title=_strip_non_bmp(title); content_html=_strip_non_bmp(content_html)
     try: site['_cur_title']=title   # ★작성자명 랜덤 생성용(지역+업종은 제목 첫 토큰) — 서버·노드 공통 진입점이라 여기서 한 번만
     except Exception: pass
+    # Cafe24 권한/사람 확인 중단을 학습 레시피나 다른 발행기로 우회하지 않는다.
+    if resolve_platform(site)=='cafe24':
+        try:
+            return cafe24_post(site,title,content_html,skip_login=skip_login)
+        except Exception as e:
+            return False,str(e)
     rec=site.get('learned')
     # 1) 저장된 학습 레시피 우선
     if rec and rec.get('write_url') and rec.get('subject_sel') and rec.get('content_sel'):
@@ -6971,6 +6953,8 @@ def is_permitted(site):
 def is_autopostable(site):
     """자동발행 대상 = 허용 + 실제 게시 성공 URL 검증 완료.
        (CAPTCHA는 2captcha로 자동 해결 시도 → 실패 시 수동 대기)"""
+    if publishing_block(site):
+        return False
     verified_url=str(site.get('verified_post_url') or '')
     # 로그인 필요 사이트인데 로그인 정보(mb_id)가 없으면 발행 제외 — 가입 미완료 사이트가
     # 발행 시도돼 failed 나는 것 방지(대표님 지시 2026-09-06). 비회원 글쓰기(login_required=False)는 영향 없음.
@@ -9280,6 +9264,8 @@ def _safe_js(d, js):
 def _promote_candidate_to_site(cand, result_url, write_url='', bo='', permission=True):
     """실제 발행 성공한 후보를 사이트 목록으로 승격(api_cand_verified 로직 재사용).
        permission=True면 즉시 발행 허용 ON(완전 자동)."""
+    if cand.get('platform') == 'cafe24' and not result_is_new(cand.get('url'), result_url, bo or cand.get('bo_table')):
+        raise ValueError('Cafe24 새 게시글 URL 미검증 — 목록 등록/발행 허용 보류')
     domain=(cand.get('domain') or _domain_of(cand.get('url',''))).lower()
     m=re.match(r'(https?://[^/]+)',cand.get('url','')); base=m.group(1) if m else cand.get('url','')
     bo=bo or cand.get('bo_table') or 'free'
@@ -9591,7 +9577,13 @@ def auto_pipeline_once(limit=5):
                     is_temp=False
                 # 일시적 실패라도 무한 재시도로 배치 슬롯을 소모하지 않게 상한(5회)을 둔다.
                 attempts=int(c.get('pipeline_attempts',0) or 0)+1
-                if is_temp and attempts<5:
+                if '[admin_only]' in str(msg):
+                    _cand_set(c['id'],status='rejected',reject_reason=str(msg)[:90],write_access_state='admin_only')
+                    add_log(f'[관리자 전용 제외] {name}')
+                elif '[human_verification_required]' in str(msg):
+                    _cand_set(c['id'],status='manual_review',reject_reason=str(msg)[:90],write_access_state='human_verification_required')
+                    add_log(f'[사람 확인 대기] {name}')
+                elif is_temp and attempts<5:
                     _cand_set(c['id'],status='ready',reject_reason=f'일시적 실패({attempts}/5): {str(msg)[:60]}',pipeline_attempts=attempts)
                     add_log(f'[발행 재시도] {name} ({attempts}/5) — {str(msg)[:70]}')
                 else:
@@ -11033,15 +11025,8 @@ def _cafe24_is_qa_board(url):
     except Exception: return False
 
 def _cafe24_result_is_new(prev_url, new_url):
-    """cafe24 결과 URL이 '새 글'인지 글번호로 판정. /article/<board>/<bo>/<N>/ 의 N이 이전 결과(prev)보다 커야 새 글.
-       번호를 못 읽으면(비-cafe24·목록 URL 등) 판단 보류=True. ★takago 가짜 성공(남의 스팸글 106090 반복 보고) 차단용."""
-    try:
-        m2=re.search(r'/article/[^/]+/\d+/(\d+)/?',str(new_url or ''))
-        if not m2: return True
-        m1=re.search(r'/article/[^/]+/\d+/(\d+)/?',str(prev_url or ''))
-        if not m1: return True
-        return int(m2.group(1))>int(m1.group(1))
-    except Exception: return True
+    """목록/로그인/다른 호스트/동일 글을 새 게시글로 인정하지 않는다."""
+    return result_is_new(prev_url, new_url)
 
 @app.route('/api/sites/unlock-cafe24',methods=['POST'])
 def api_sites_unlock_cafe24():
@@ -11309,7 +11294,15 @@ def api_pipeline_report():
                 if r.get('mb_id'):
                     try: _cand_set(c['id'],mb_id=str(r.get('mb_id'))[:60],mb_pass=str(r.get('mb_pass') or ''),login_saved=True)
                     except Exception: pass
-                if is_temp and att<5:
+                if '[admin_only]' in msg:
+                    _cand_set(cid,status='rejected',reject_reason=msg,write_access_state='admin_only',
+                              claimed_by='',claim_expire=0)
+                    add_log(f'[관리자 전용 제외] {name} — 일반회원 발행 대상에서 제외')
+                elif '[human_verification_required]' in msg:
+                    _cand_set(cid,status='manual_review',reject_reason=msg,write_access_state='human_verification_required',
+                              claimed_by='',claim_expire=0)
+                    add_log(f'[사람 확인 대기] {name} — 자동 재시도 보류')
+                elif is_temp and att<5:
                     _cand_set(cid,status='ready',reject_reason=f'일시적 실패({att}/5): {msg}',pipeline_attempts=att,claimed_by='',claim_expire=0)
                     add_log(f'[발행 재시도] {name} ({att}/5) — {msg}')
                 else:
@@ -11517,7 +11510,7 @@ def api_pipeline_report_site():
             _nm=((_site or {}).get('name') or (_site or {}).get('site_url') or sid[:8])
             # ★가짜 성공 서버측 차단(2026-09-11): 옛 코드 노드가 '목록 첫 글'(남의 글)을 성공 URL로 보고하던 것을
             #   글번호로 잡는다 — 이전 verified_post_url과 같거나 더 작은 /article/…/N/ 이면 새 글이 아님.
-            if ok and _site and not _cafe24_result_is_new(_site.get('verified_post_url'),url):
+            if ok and _site and _site.get('platform')=='cafe24' and not _cafe24_result_is_new(_site.get('verified_post_url') or _site.get('site_url'),url):
                 ok=False; r=dict(r); r['msg']=f'동일/이전 글 URL 재보고({url[-14:]}) — 미등록으로 처리(가짜 성공 차단)'
             # ★노드 자동가입으로 새 계정 만든 경우 서버에 저장(2026-09-14): 다음부턴 로그인만.
             if r.get('new_mb_id'):
@@ -11542,6 +11535,14 @@ def api_pipeline_report_site():
                 _plabel='Cafe24' if _plat=='cafe24' else ('KBoard' if _plat=='kboard' else '그누보드')
                 add_log(f'[{_plabel} 발행성공] {str(_nm)[:24]} — PC로컬({node_id}) → {url}'.rstrip())
             else:
+                _access_msg=str(r.get('msg') or '')
+                if '[admin_only]' in _access_msg or '[human_verification_required]' in _access_msg:
+                    _access_state='admin_only' if '[admin_only]' in _access_msg else 'human_verification_required'
+                    set_site_flag(sid,permission=False,write_test_status=_access_state,
+                                  write_access_state=_access_state,pc_claim_by='',pc_claim_expire=0)
+                    add_log(f'[발행 보류] {str(_nm)[:24]} — {_access_state}')
+                    applied+=1
+                    continue
                 set_site_flag(sid,write_test_status='failed',pc_claim_by='',pc_claim_expire=0)
                 if _site: finalize_post(_site,False,str(r.get('msg') or '')[:120])
                 # ★자동가입 재시도 낭비 차단(2026-09-18 대표님 '실패 원인 다 잡아 성공률↑'): 계정없는 사이트가
@@ -14350,7 +14351,7 @@ async function renderBoard(){
     }
     // 동작: 사이트는 삭제, 후보는 자동처리중 표시(수동버튼 최소화 — 대표님 '알아서')
     const act=x.kind==='site'
-      ? '<button class="btn btn-r btn-xs" onclick="delSite(\''+esc(x.id)+'\')">삭제</button>'
+      ? '<button class="btn btn-xs" onclick="editSite(\''+esc(x.id)+'\')">계정 연결</button> <button class="btn btn-r btn-xs" onclick="delSite(\''+esc(x.id)+'\')">삭제</button>'
       : (x.state==='rejected'?'<span style="color:var(--d);font-size:10px">자동 제외</span>':'<span style="color:var(--v);font-size:10px">자동 진행중</span>');
     return '<tr><td><span class="st '+b.c+'" style="white-space:nowrap">'+b.t+'</span></td>'
       +'<td style="max-width:260px"><b>'+esc(x.name||x.domain)+'</b><br><a href="'+esc(x.url||'#')+'" target="_blank" rel="noopener" style="color:var(--p);word-break:break-all;font-size:11px">'+esc((x.url||'').slice(0,60))+'</a></td>'
