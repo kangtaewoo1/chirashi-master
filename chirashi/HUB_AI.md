@@ -61,7 +61,7 @@ fields being counted as usable. Before: two trusted reproductions failed. After:
 31 tests passed, independent review approved, production deployment and internal /
 external HTTP succeeded. Local server revision:
 `d10e64e2da623edd702d44e5c3a5d705b44c9ee2`.
-Later expanded coordinator/privacy/conflict/rollback checks: 39 tests passed
+Later expanded coordinator/privacy/conflict/rollback/isolation checks: 41 tests passed
 in the Vultr isolation environment. No production outage was injected.
 
 API implementation references: [NVIDIA chat-completion examples](https://docs.nvidia.com/nim/vision-language-models/1.7.0/examples/nemotron-3-nano-omni-30b-a3b-reasoning/api.html)

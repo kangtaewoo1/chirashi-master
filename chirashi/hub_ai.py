@@ -90,6 +90,7 @@ def sandbox_tests(stage):
                '-p', 'ProtectHome=yes', '-p', 'PrivateTmp=yes', '-p', 'NoNewPrivileges=yes',
                '-p', 'InaccessiblePaths=/opt/chirashi /opt/vultr /opt/chirashi-ai/private',
                '-p', 'MemoryMax=512M', '-p', 'TasksMax=64', '-p', 'RuntimeMaxSec=180',
+               '-p', 'Environment=TW_AI_ISOLATED_TESTS=1',
                '/usr/bin/python3', '-B', '-m', 'unittest', 'discover', '-s', str(stage), '-p', 'test_*.py']
     result = subprocess.run(command, capture_output=True, text=True, timeout=200)
     return result.returncode == 0, (result.stdout + result.stderr)[-16000:]

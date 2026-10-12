@@ -6,10 +6,24 @@ from hub_ai import apply_edits, parse_json, failure_summary
 from hub_overlay import apply
 import hashlib
 import sys
+import os
+import socket
 from unittest.mock import patch
 
 
 class MaintenancePolicyTests(unittest.TestCase):
+    @unittest.skipUnless(os.environ.get('TW_AI_ISOLATED_TESTS')=='1','Isolated server environment')
+    def test_production_configuration_is_inaccessible(self):
+        with self.assertRaises(OSError):
+            Path('/opt/chirashi/data/config.json').read_bytes()
+
+    @unittest.skipUnless(os.environ.get('TW_AI_ISOLATED_TESTS')=='1','Isolated server environment')
+    def test_production_and_external_network_are_inaccessible(self):
+        for address in (('127.0.0.1',8888),('1.1.1.1',443)):
+            with socket.socket() as connection:
+                connection.settimeout(0.2)
+                self.assertNotEqual(connection.connect_ex(address),0)
+
     def test_failure_context_contains_no_identity_or_message(self):
         from datetime import datetime,timezone
         with tempfile.TemporaryDirectory() as d:
