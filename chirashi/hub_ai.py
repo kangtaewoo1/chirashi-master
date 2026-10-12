@@ -139,7 +139,7 @@ def ai_call(role, payload, state):
 def report(state, stage_name, **fields):
     state.update(stage=stage_name, checked_at=datetime.now(timezone.utc).isoformat(), runtime='vultr', **fields)
     atomic(ROOT / 'private/state.json', state)
-    public = {k:state.get(k) for k in ('status','checked_at','tested','deployed','commit','runtime','stage','cycles','ai_calls_total','ai_tokens_total','last_deployed_at','last_fix_revision')}
+    public = {k:state.get(k) for k in ('status','checked_at','tested','deployed','commit','runtime','stage','cycles','ai_calls_total','ai_tokens_total','last_deployed_at','last_fix_revision','failure_categories')}
     atomic(APP / 'data/hub_maintenance.json', public)
     subprocess.run(['/usr/bin/python3', str(APP / 'hub_report.py')], timeout=30, capture_output=True)
 
@@ -264,6 +264,7 @@ def main():
             guard = json.loads(guard_path.read_text()) if guard_path.exists() else {}
             incident = guard.get('status') in ('incident','network_incident')
             failures = failure_summary(APP / 'data')
+            state['failure_categories'] = failures['categories']
             incident = incident or failures['total'] >= 3
             issue_signature = json.dumps({'guard':guard.get('status'), 'categories':sorted(failures['categories'])},sort_keys=True)
             day = datetime.now(timezone.utc).strftime('%Y-%m-%d')
