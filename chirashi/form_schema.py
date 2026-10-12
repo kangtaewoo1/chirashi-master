@@ -145,7 +145,7 @@ def measure_html(markup,url,kind):
     signature=hashlib.sha256(json.dumps(canonical,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
     return {**canonical,'fingerprint':signature,'measured_at':datetime.now(timezone.utc).isoformat(timespec='seconds'),
             'source_url':safe_url(url),'unresolved':unresolved,'auto_ready':state=='measured' and not challenge and not unresolved,
-            'schema_version':2}
+            'schema_version':2,'measurement_source':'static_html'}
 
 def changes_between(old,new):
     before={f.get('selector') or str(i):f for i,f in enumerate((old.get('form') or {}).get('fields',[]))}
