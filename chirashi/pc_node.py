@@ -94,19 +94,70 @@ def _cleanup_stale_chrome_profiles(older_than_sec=1200):
         return 0
 
 
+_BOT_CHROME_MARKERS = ('--enable-automation', '--test-type=webdriver', '--remote-debugging-port=0', '\\chr_', '/chr_', 'scoped_dir')
+
+
+def _bot_chrome_pids():
+    """★대표님 개인 크롬 보호(2026-10-07 '크롬창 자꾸 튕김' 실측): 예전엔 taskkill /IM chrome.exe 로
+       PC의 모든 크롬(대표님이 쓰던 창·홀덤타이머 포함)을 3~9분마다 같이 죽였다.
+       이제 selenium이 띄운 크롬(자동화 플래그·chr_/scoped_dir 임시프로필)과 그 자식 프로세스만 고른다."""
+    pids = set()
+    try:
+        import psutil
+        for pr in psutil.process_iter(['pid', 'name', 'cmdline']):
+            try:
+                if (pr.info.get('name') or '').lower() != 'chrome.exe':
+                    continue
+                cl = ' '.join(pr.info.get('cmdline') or [])
+                if any(m in cl for m in _BOT_CHROME_MARKERS):
+                    pids.add(pr.pid)
+                    for ch in pr.children(recursive=True):
+                        pids.add(ch.pid)
+            except Exception:
+                pass
+        return pids
+    except ImportError:
+        pass
+    try:
+        import subprocess as _sp
+        ps = ("Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | "
+              "Where-Object { $_.CommandLine -match 'enable-automation|test-type=webdriver|chr_|scoped_dir' } | "
+              "ForEach-Object { $_.ProcessId }")
+        out = _sp.run(['powershell', '-NoProfile', '-Command', ps], capture_output=True, text=True, timeout=30).stdout
+        pids = {int(x) for x in out.split() if x.strip().isdigit()}
+    except Exception:
+        pass
+    return pids
+
+
+def _count_bot_chrome():
+    return len(_bot_chrome_pids())
+
+
+def _kill_bot_chrome():
+    """자동화 크롬만 강제 종료(대표님 개인 크롬은 건드리지 않음). chromedriver는 원래 봇 전용이라 전부 정리."""
+    import subprocess as _sp
+    pids = _bot_chrome_pids()
+    for pid in pids:
+        try:
+            _sp.run(['taskkill', '/F', '/PID', str(pid), '/T'], capture_output=True, timeout=10)
+        except Exception:
+            pass
+    try:
+        _sp.run(['taskkill', '/F', '/IM', 'chromedriver.exe', '/T'], capture_output=True, timeout=20)
+    except Exception:
+        pass
+    return len(pids)
+
+
 def _kill_orphan_chrome():
-    """★좀비 크롬 근본정리(2026-09-18 대표님 'PC 여러대 없이 처리량' 실측: 동시4인데 크롬 45개 누적→
-       메모리 4.5GB 잠식→처리량 저하). driver.quit()이 세션 죽은/hang 크롬의 OS 프로세스를 못 죽여 orphan이
-       쌓인다. 호출 시점: (1) idle(대기 후보 없음) — 정상이면 크롬 0이어야 하므로 남은 건 전부 orphan,
-       (2) 배치와 배치 사이(loop-top) 크롬 수가 동시수+2 초과 시 — 발행 중이 아닌 시점이라 초과분은 orphan.
-       app.quit_all_drivers()로 등록 드라이버 먼저 닫고 taskkill로 OS 잔여 프로세스까지 강제 정리."""
+    """★좀비 크롬 정리(2026-09-18 동시4인데 크롬 45개 누적→메모리 4.5GB 잠식). 등록 드라이버를 먼저 quit하고
+       남은 '자동화 크롬'만 OS 레벨에서 강제 정리한다(2026-10-07부터 개인 크롬 제외)."""
     try:
         app.quit_all_drivers()   # 등록된 드라이버 먼저 정상 종료
     except Exception: pass
     try:
-        import subprocess as _sp
-        _sp.run(['taskkill','/F','/IM','chrome.exe','/T'], capture_output=True, timeout=20)
-        _sp.run(['taskkill','/F','/IM','chromedriver.exe','/T'], capture_output=True, timeout=20)
+        _kill_bot_chrome()
     except Exception: pass
 
 
@@ -515,7 +566,7 @@ def run(once=False, workers=None, idle=30):
                 _last_orphan_sweep[0] = time.time()
                 try:
                     import subprocess as _sp
-                    _cn = len(_sp.run(['tasklist','/FI','IMAGENAME eq chrome.exe'],capture_output=True,text=True,timeout=15).stdout.split('chrome.exe'))-1
+                    _cn = _count_bot_chrome()
                 except Exception: _cn = 0
                 if _cn > n + 2:
                     _kill_orphan_chrome()
@@ -544,8 +595,7 @@ def run(once=False, workers=None, idle=30):
                     except Exception: pass
                     import subprocess as _sp
                     try:
-                        _sp.run(['taskkill','/F','/IM','chrome.exe','/T'],capture_output=True,timeout=20)
-                        _sp.run(['taskkill','/F','/IM','chromedriver.exe','/T'],capture_output=True,timeout=20)
+                        _kill_bot_chrome()   # ★자동화 크롬만(개인 크롬 보호)
                     except Exception: pass
                 _report_sites(_sres)
             # ② 미등록 후보 가입·발행테스트(동시 n).
@@ -558,7 +608,7 @@ def run(once=False, workers=None, idle=30):
                     _last_orphan_kill[0] = time.time()
                     try:
                         import subprocess as _sp
-                        _n = len(_sp.run(['tasklist','/FI','IMAGENAME eq chrome.exe'],capture_output=True,text=True,timeout=15).stdout.split('chrome.exe'))-1
+                        _n = _count_bot_chrome()
                     except Exception: _n = 0
                     if _n > 0:
                         _kill_orphan_chrome()
@@ -594,8 +644,7 @@ def run(once=False, workers=None, idle=30):
                     # 하드 백스톱: OS 레벨에 남은 크롬/드라이버 강제 종료(Windows)
                     try:
                         import subprocess as _sp
-                        _sp.run(['taskkill','/F','/IM','chrome.exe','/T'],capture_output=True,timeout=20)
-                        _sp.run(['taskkill','/F','/IM','chromedriver.exe','/T'],capture_output=True,timeout=20)
+                        _kill_bot_chrome()   # ★자동화 크롬만(개인 크롬 보호)
                     except Exception: pass
                 _report(results)
             if once:
