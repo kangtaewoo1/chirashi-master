@@ -26,6 +26,10 @@ def snapshot(base):
     import urllib.parse
     incidents_path=Path('/opt/chirashi-ai/private/incidents.json')
     incidents=json.loads(incidents_path.read_text()) if incidents_path.exists() else []
+    cases_path=base/'maintenance_cases.json'
+    pinned=json.loads(cases_path.read_text()) if cases_path.exists() else []
+    current={str(x.get('site_id')):x for x in incidents}
+    incidents=[current.get(str(x.get('site_id')),x) for x in pinned] if pinned else incidents
     by_id={str(x.get('id')):x for x in sites}; actions=[]
     tasks_path=base/'manual_action_states.json'
     tasks=json.loads(tasks_path.read_text()) if tasks_path.exists() else []
