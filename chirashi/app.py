@@ -718,6 +718,18 @@ def load_config():
         c['free_model_v1']=True
         try: save_json(CONFIG_FILE,c)
         except Exception: pass
+    # ★1회 교정(2026-10-16): 위에서 넣은 무료 슬러그(qwen3.8-27b:free 등)가 OpenRouter에서 사라져 404 →
+    #   AI 글이 전부 템플릿으로 떨어지던 사고. '없는 이름' 대신 '지금 쓸 수 있는 무료 모델을 자동으로 고르는'
+    #   라우터 openrouter/free 로 바꾼다(특정 무료 모델이 또 없어져도 404가 안 남). 이후 설정에서 바꾼 값은 유지.
+    if not c.get('free_router_v1'):
+        _bad_or={'qwen/qwen3.8-27b:free','google/gemma-4-31b-it:free',
+                 'nvidia/nemotron-3-super-120b-a12b:free','google/gemma-4-26b-a4b-it:free'}
+        if (c.get('llm_provider') or '').strip().lower()=='openrouter' \
+           and ((c.get('openrouter_model') or '').strip() in _bad_or or not (c.get('openrouter_model') or '').strip()):
+            c['openrouter_model']='openrouter/free'
+        c['free_router_v1']=True
+        try: save_json(CONFIG_FILE,c)
+        except Exception: pass
     return c
 
 def get_proxies(cfg=None):
@@ -1892,7 +1904,7 @@ def generate_post_gpt(keywords, cfg, workroom_id=None, image_urls=None, model_ov
                 _wait=_FREE_RL[0]+60-_now
             if time.time()>=_t_end: return False
             time.sleep(min(max(0.2,_wait),3))
-    _is_free=(_prov=='openrouter' and str(model).endswith(':free'))
+    _is_free=(_prov=='openrouter' and (str(model).endswith(':free') or str(model)=='openrouter/free'))
     if _is_free: _free_slot()
     def _post_once():
         return _rq.post(_url,headers=_hdr,json=_body,timeout=_to)
@@ -1927,6 +1939,11 @@ def generate_post_gpt(keywords, cfg, workroom_id=None, image_urls=None, model_ov
         except Exception: _et=''
         if 'insufficient_quota' in _et or 'billing' in _et:
             raise RuntimeError('OpenAI 잔액 소진(insufficient_quota) — platform.openai.com 크레딧 충전 필요')
+    # ★모델 이름이 없을 때(404): OpenRouter는 없는/지원종료된 모델을 부르면 404를 준다. raise_for_status가
+    #   'Not Found' 원문을 던지면 원인을 모른 채 전 발행이 템플릿으로 떨어진다(실측 2026-10). 쉬운 말로 바꿔
+    #   어느 모델이 문제인지·어떻게 고치는지 알려준다. 설정 탭에서 모델을 openrouter/free 로 바꾸면 바로 복구.
+    if _prov in ('nvidia','openrouter') and resp is not None and resp.status_code==404:
+        raise RuntimeError(f"{_prov.upper()} 모델 '{model}' 없음(404) — 설정 탭에서 모델을 openrouter/free 로 바꾸세요")
     resp.raise_for_status()
     payload=resp.json()
     _usage=dict(payload.get('usage') or {})
@@ -1983,7 +2000,10 @@ _FREE_SKIP_UNTIL=[0.0]  # ★무료모델 폴백 서킷브레이커(전부 실�
 _FREE_LOGGED=[0.0]      # '무료모델 사용 중' 안내 마지막 시각(10분 1회)
 # 유료(openrouter_model) 잔액소진·429로 스킵 중일 때 순서대로 시도할 무료 모델. config openrouter_free_models(콤마구분)로 덮어씀.
 # 2026-10-01 OpenRouter 무료 20개 중 한국어 글쓰기 적합 순(deepseek 무료판은 현재 없음). 무료 한도: 분당 20, 일 50(충전이력 없음)/1000(누적 $10+).
-_FREE_MODELS_DEFAULT=['qwen/qwen3.8-27b:free','google/gemma-4-31b-it:free','nvidia/nemotron-3-super-120b-a12b:free','google/gemma-4-26b-a4b-it:free']
+# 주 모델(openrouter_model)이 잔액소진(402)·429로 스킵 중일 때 순서대로 시도할 무료 모델.
+# openrouter/free = '지금 쓸 수 있는 무료 모델 자동선택' 라우터(특정 무료 모델이 사라져도 404 안 남) → 맨 앞에 둠.
+# 나머지는 실재하는 무료 슬러그 예시. 바뀌면 설정 openrouter_free_models(콤마구분)로 덮어씀. (2026-10-16 교정)
+_FREE_MODELS_DEFAULT=['openrouter/free','meta-llama/llama-3.2-3b-instruct:free','upstage/solar-pro-3:free']
 
 def _gen_once(keywords, cfg, workroom_id=None, image_urls=None):
     # GPT 429(레이트리밋) 서킷브레이커: 429가 나면 5분간 GPT를 건너뛰고 템플릿 직행.
