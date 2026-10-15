@@ -25,7 +25,7 @@ def snapshot(base):
     maintenance = json.loads((base / 'hub_maintenance.json').read_text()) if (base / 'hub_maintenance.json').exists() else {}
     return {'schema': 1, 'observed_at': datetime.now(timezone.utc).isoformat(),
             'guard': {k: guard.get(k) for k in ('status','checked_at','local_ok','public_ok','restarts_today','last_action')},
-            'maintenance': {k: maintenance.get(k) for k in ('status','checked_at','tested','deployed','commit','runtime','stage','cycles','ai_calls_total','ai_tokens_total','last_deployed_at','last_fix_revision','failure_categories')},
+            'maintenance': {k: maintenance.get(k) for k in ('status','checked_at','tested','deployed','commit','runtime','stage','cycles','ai_calls_total','ai_tokens_total','last_deployed_at','last_fix_revision','failure_categories','ai_wait_reason','ai_next_retry_at','maintenance_result','incident_summary','incident_checked_at')},
             'service_active': subprocess.run(['systemctl', 'is-active', '--quiet', 'chirashi']).returncode == 0,
             'sites_total': len(sites), 'sites_verified_ready': ready,
             'sites_rejected': sum(s.get('status') == 'rejected' for s in sites),
