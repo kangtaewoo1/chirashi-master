@@ -6169,6 +6169,8 @@ def do_post(site, title, content_html, skip_login=False):
     """발행 라우팅(하이브리드+자가학습): 학습레시피→플랫폼기본→자동학습.
        skip_login=True: 가입 직후 이미 로그인된 세션에서 재로그인 없이 바로 글쓰기(비표준 로그인폼 구제)."""
     # 비BMP(이모지 등) 제거 — ChromeDriver send_keys가 못 다뤄 발행 전체가 실패하던 문제 방지.
+    if site.get('manual_review_only') and not site.get('_manual_review_job'):
+        return False,'게시 권한 없음 — 수동 검증 전용 사이트, 자동 발행 보류'
     if site.get('maintenance_hold'):
         return False,'게시 권한 없음 — 관리자 발행 보류'
     title=_strip_non_bmp(title); content_html=_strip_non_bmp(content_html)
@@ -6716,6 +6718,8 @@ def worker_loop():
 def _do_publish_job(job,site,cfg,name,job_id,hid):
         """한 발행 잡을 실제 처리(한도·간격 확인 → 발행 → 재시도/기록). 사이트별 락 안에서 호출됨."""
         site=dict(site); site['_maintenance_job_id']=job_id; site['_maintenance_history_id']=hid
+        site['_manual_review_job']=bool(job.get('manual_verification_test'))
+        if site['_manual_review_job']: site.pop('cooldown_until',None)  # one requested diagnostic test; retain real daily/minimum posting limits
         title=job['title']; content=job['content']
         # 1일 한도 확인 (도배 방지)
         if not under_daily_limit(site,cfg):
@@ -6854,7 +6858,7 @@ def enqueue(sites,title,content,meta=None):
                      'bo_table':s.get('bo_table',''),'title':title,
                      'region':meta.get('region',''),'service':meta.get('service',''),
                      'status':'queued','result_url':'','message':'','attempts':0})
-        job={'job_id':jid,'hist_id':jid,'site':s,'title':title,'content':content}
+        job={'job_id':jid,'hist_id':jid,'site':s,'title':title,'content':content,'manual_verification_test':meta.get('manual_verification_test') is True}
         post_queue.put(job); _persist_add(job)
     for s in blocked:
         if _cafe24_node_only(s): continue   # Cafe24는 노드가 발행 — 서버 스킵은 정상이라 로그 안 남김
@@ -12216,7 +12220,17 @@ def api_post():
     d=request.get_json(silent=True) or {}; cfg=load_config()
     ids=d.get('site_ids',[]); title=d.get('title',''); content=d.get('content','')
     region=d.get('region',''); service=d.get('service',''); brand=d.get('brand','')
-    meta={'region':region,'service':service}
+    manual_test=d.get('manual_verification_test') is True
+    if manual_test:
+        if len(ids)!=1 or not title.startswith('[테스트]') or not content:
+            return jsonify({'ok':False,'error':'단일 사이트 기능 테스트만 허용'}),400
+        with POST_LOCK:
+            all_sites=load_sites()
+            for item in all_sites:
+                if item.get('id') in ids and item.get('permission') and not item.get('maintenance_hold'):
+                    item['manual_review_only']=True
+            save_sites(all_sites)
+    meta={'region':region,'service':service,'manual_verification_test':manual_test}
     sites=[s for s in load_sites() if s.get('id') in ids]
     allowed=[s for s in sites if is_permitted(s)]
     # 2개 이상 사이트 + 키워드 있으면 사이트마다 유니크 재생성(중복 방지). 단일 사이트는 검토한 원문 그대로.
