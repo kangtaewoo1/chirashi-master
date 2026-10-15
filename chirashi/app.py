@@ -3854,7 +3854,7 @@ def gnuboard_post_http(site, title, content_html):
         return None,f'폼 GET {r.status_code} — 폴백'
     html=r.text or ''
     from form_schema import measure_html
-    if measure_html(html,r.url,'write')['state']=='access_denied':
+    if measure_html(html,bbs+'/write.php','write')['state']=='access_denied':
         return False,'보안 차단 — 접근 불가 응답, 사이트 관리자 확인 필요'
     low=html.lower()
     # 로그인 게이트/회원전용이면 폴백(비회원 글쓰기 폼이 아님)
