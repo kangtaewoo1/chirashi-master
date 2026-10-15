@@ -6440,11 +6440,12 @@ def under_daily_limit(site,cfg):
 
 def under_min_interval(site):
     """마지막 성공 발행 후 사이트별 최소 간격 준수 여부와 남은 초 반환."""
+    manual_test=bool(site.get('_manual_review_job'))
     site=_fresh_site(site); mins=site_min_interval(site)
     # ★실패 쿨다운(cooldown_until) 우선 — '등록 확인 불가' 직후 20분은 성공 이력과 무관하게 건너뜀(finalize_post에서 설정).
     try:
         _cu=str(site.get('cooldown_until') or '')
-        if _cu:
+        if _cu and not manual_test:
             _rem=int((datetime.strptime(_cu[:19],'%Y-%m-%d %H:%M:%S')-datetime.now()).total_seconds())
             if _rem>0: return False,_rem
     except Exception: pass
