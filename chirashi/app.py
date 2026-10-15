@@ -3122,6 +3122,14 @@ def classify_fail(msg):
         return 'flood','도배방지 간격대기',True   # 일시적 → 학습된 간격 뒤 자동 재시도
     if '캡차' in ms or 'captcha' in low or '보안 인증' in ms:
         return 'captcha','캡차/보안인증 감지',False
+    # ★대상 사이트 서버가 죽음(2026-10-16 실측: 소-옴 203건·강남가라오케 49건 = 실패의 88%가 두 곳):
+    #   ERR_CONNECTION_REFUSED / ADDRESS_UNREACHABLE / NAME_NOT_RESOLVED = 우리 문제가 아니라 그 사이트가 다운/폐쇄된 것.
+    #   이걸 아래 'connection'·'net::err'·'unreachable' 키워드가 '타임아웃(일시적)'으로 집어삼켜 0.6분마다 무한 재시도했음.
+    #   → net 분기보다 먼저 비일시적(dead)로 분류해 공통 백오프(fail_streak 3+ 60분·10+ 180분)를 타게 한다.
+    if any(k in low for k in ['err_connection_refused','err_address_unreachable','err_name_not_resolved',
+                              'err_connection_timed_out','err_connection_reset','err_connection_closed',
+                              'err_internet_disconnected','err_name_resolution_failed','dns_probe']):
+        return 'dead','사이트 접속불가(서버 다운/폐쇄)',False   # 비일시적 → 백오프로 재시도 억제
     # ★크롬/드라이버 크래시(2026-09-12 대표님 '발행가능 정체' 실측): 'Message:\nStacktrace' 셀레늄 예외는
     #   크롬 크래시·요소 소실 등 일시적 오류. 기존엔 어느 분류에도 안 걸려 other(비일시적)→되는 사이트 영구탈락.
     #   → 일시적으로 분류해 재시도하게 한다(크래시는 다음 시도에 대개 정상).
