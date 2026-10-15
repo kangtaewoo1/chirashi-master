@@ -2117,6 +2117,7 @@ def detect_captcha(d):
 # 입력한 값만 같은 Selenium 세션에 전달하여 등록을 계속한다.
 CAPTCHA_LOCK=threading.Lock()
 CAPTCHA_TASKS={}
+save_json(DATA_DIR/'manual_action_states.json',[])
 
 def _save_manual_action_states():
     # Only task identity and state: never CAPTCHA images, answers or account data.
@@ -12307,6 +12308,8 @@ def api_captcha_submit(tid):
         task=CAPTCHA_TASKS.get(tid)
         if not task or task.get('status')!='waiting_input':
             return jsonify({'ok':False,'error':'대기 중인 CAPTCHA 작업이 아닙니다'}),409
+        if str(task.get('expires_at','')) <= _kst_now().strftime('%Y-%m-%d %H:%M:%S'):
+            return jsonify({'ok':False,'error':'입력 시간이 만료된 작업입니다'}),409
         task['value']=value; task['status']='input_received'; task['message']='입력값 전달 중'
         task['event'].set()
     return jsonify({'ok':True,'message':'입력 완료 · 자동 발행을 계속합니다'})

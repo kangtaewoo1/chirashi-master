@@ -73,3 +73,10 @@ class GateTests(unittest.TestCase):
 
 if __name__=='__main__':
     unittest.main()
+
+
+class MaintenanceHoldRegression(__import__('unittest').TestCase):
+    def test_hold_applies_to_all_platforms(self):
+        from cafe24_gate import publishing_block
+        for platform in ('gnuboard','cafe24'):
+            self.assertEqual(publishing_block({'platform':platform,'maintenance_hold':True}), 'maintenance_hold')
