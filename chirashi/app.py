@@ -714,8 +714,16 @@ def load_config():
     #   한도(OpenRouter): 무료 분당 20·일 50(충전이력 없음)/1000(누적 $10+) 초과 시 429→폴백체인→템플릿.
     #   이후 설정 탭에서 모델을 바꾸면 그 값이 유지됨(플래그로 1회만 적용).
     if not c.get('free_model_v1'):
-        c['openrouter_model']='qwen/qwen3.8-27b:free'
+        c['openrouter_model']='google/gemma-4-31b-it:free'   # (10-16) 원래 qwen3.8-27b:free였으나 OpenRouter에서 내려감
         c['free_model_v1']=True
+        try: save_json(CONFIG_FILE,c)
+        except Exception: pass
+    # ★1회 마이그레이션 v2(2026-10-16 대표님 스샷 '400 오류'): v1이 넣은 qwen/qwen3.8-27b:free가 OpenRouter에서 사라져
+    #   매 글 400→템플릿. 설정값이 정확히 그 죽은 모델일 때만 살아있는 무료 gemma로 교체(다른 모델을 골라뒀으면 존중).
+    if not c.get('free_model_v2'):
+        if (c.get('openrouter_model') or '').strip()=='qwen/qwen3.8-27b:free':
+            c['openrouter_model']='google/gemma-4-31b-it:free'
+        c['free_model_v2']=True
         try: save_json(CONFIG_FILE,c)
         except Exception: pass
     return c
@@ -1927,6 +1935,13 @@ def generate_post_gpt(keywords, cfg, workroom_id=None, image_urls=None, model_ov
         except Exception: _et=''
         if 'insufficient_quota' in _et or 'billing' in _et:
             raise RuntimeError('OpenAI 잔액 소진(insufficient_quota) — platform.openai.com 크레딧 충전 필요')
+    # ★모델 없음(2026-10-16 대표님 스샷 '[GPT 실패→템플릿] 400 openrouter'): 10-01 강제 지정한 qwen/qwen3.8-27b:free가
+    #   OpenRouter에서 내려가 매 글 400 → raise_for_status의 '400 Client Error…'는 _gen_once가 429/402로만 보는 폴백 체인을
+    #   못 타서 전부 템플릿으로 빠졌음. 400/404는 거의 항상 모델 ID 문제라 구분된 메시지로 올려 무료 폴백 체인을 타게 한다.
+    if _prov=='openrouter' and resp.status_code in (400,404):
+        try: _em=str(((resp.json() or {}).get('error') or {}).get('message') or '')[:120]
+        except Exception: _em=''
+        raise RuntimeError(f"OPENROUTER 모델 오류({resp.status_code}) — '{model}' 사용 불가(내려갔거나 ID 오류): {_em}")
     resp.raise_for_status()
     payload=resp.json()
     _usage=dict(payload.get('usage') or {})
@@ -1983,7 +1998,8 @@ _FREE_SKIP_UNTIL=[0.0]  # ★무료모델 폴백 서킷브레이커(전부 실�
 _FREE_LOGGED=[0.0]      # '무료모델 사용 중' 안내 마지막 시각(10분 1회)
 # 유료(openrouter_model) 잔액소진·429로 스킵 중일 때 순서대로 시도할 무료 모델. config openrouter_free_models(콤마구분)로 덮어씀.
 # 2026-10-01 OpenRouter 무료 20개 중 한국어 글쓰기 적합 순(deepseek 무료판은 현재 없음). 무료 한도: 분당 20, 일 50(충전이력 없음)/1000(누적 $10+).
-_FREE_MODELS_DEFAULT=['qwen/qwen3.8-27b:free','google/gemma-4-31b-it:free','nvidia/nemotron-3-super-120b-a12b:free','google/gemma-4-26b-a4b-it:free']
+# 2026-10-16: qwen/qwen3.8-27b:free는 OpenRouter에서 내려감(400) → 제거. 아래 4종은 10-16 /api/v1/models 실존 확인.
+_FREE_MODELS_DEFAULT=['google/gemma-4-31b-it:free','google/gemma-4-26b-a4b-it:free','nvidia/nemotron-3-super-120b-a12b:free','nvidia/nemotron-3-ultra-550b-a55b:free']
 
 def _gen_once(keywords, cfg, workroom_id=None, image_urls=None):
     # GPT 429(레이트리밋) 서킷브레이커: 429가 나면 5분간 GPT를 건너뛰고 템플릿 직행.
@@ -2002,6 +2018,11 @@ def _gen_once(keywords, cfg, workroom_id=None, image_urls=None):
                 _GPT_SKIP_UNTIL[0]=time.time()+1800   # 30분 스킵 — 충전 전엔 재시도 무의미(헛요청·오해 로그 방지)
                 _where='openrouter.ai/settings/credits' if _pv=='openrouter' else 'platform.openai.com'
                 if _first: add_log(f'[{_pv.upper()} 잔액소진→30분간 템플릿] 크레딧 부족 — {_where}에서 충전해야 AI 글 재개(그동안 템플릿). 설정 탭에서 엔진/키를 바꿔 저장하면 즉시 재시도')
+            elif '모델 오류(' in _msg:
+                # ★모델 없음/ID 오류(400·404)는 저절로 안 풀림 → 30분 스킵하고 아래 무료 폴백 체인으로(템플릿 직행 금지).
+                #   load_config 마이그레이션(free_model_v2)이 죽은 qwen을 gemma로 바꾸지만, 설정에서 또 죽은 모델을 고르면 여기로.
+                _GPT_SKIP_UNTIL[0]=time.time()+1800
+                if _first: add_log(f'[{_pv.upper()} 모델 오류→30분간 무료모델 폴백] {_msg[:110]} — 설정 탭에서 살아있는 모델로 교체하면 즉시 재시도')
             elif '분당 한도(429)' in _msg:
                 _GPT_SKIP_UNTIL[0]=time.time()+60    # 분당 한도는 금방 풀림 → 60초만 템플릿
                 if _first: add_log(f'[{_pv.upper()} 429→60초 템플릿] 분당 요청 한도 — 잠시 후 자동 재개')
