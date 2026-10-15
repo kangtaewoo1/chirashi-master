@@ -52,6 +52,8 @@ def result_is_new(previous, result, board=None):
 
 def publishing_block(site):
     """Explain why a Cafe24 site cannot enter unattended publishing."""
+    if site.get('maintenance_hold'):
+        return 'maintenance_hold'
     if site.get('platform') != 'cafe24':
         return ''
     state = site.get('write_access_state')

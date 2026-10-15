@@ -23,7 +23,23 @@ def snapshot(base):
                      and not publishing_block(s)) for s in sites)
     guard = json.loads((base / 'hub_guard.json').read_text()) if (base / 'hub_guard.json').exists() else {}
     maintenance = json.loads((base / 'hub_maintenance.json').read_text()) if (base / 'hub_maintenance.json').exists() else {}
-    return {'schema': 1, 'observed_at': datetime.now(timezone.utc).isoformat(),
+    import urllib.parse
+    incidents_path=Path('/opt/chirashi-ai/private/incidents.json')
+    incidents=json.loads(incidents_path.read_text()) if incidents_path.exists() else []
+    by_id={str(x.get('id')):x for x in sites}; actions=[]
+    tasks_path=base/'manual_action_states.json'
+    tasks=json.loads(tasks_path.read_text()) if tasks_path.exists() else []
+    for item in incidents:
+        site=by_id.get(str(item.get('site_id')), {})
+        if not site.get('permission'): continue
+        host=urllib.parse.urlsplit(str(site.get('site_url',''))).hostname or ''
+        if not host: continue
+        live=next((t for t in reversed(tasks) if str(t.get('site_id'))==str(item.get('site_id')) and t.get('job_id') and t.get('status')=='waiting_input' and str(t.get('expires_at',''))>datetime.now(timezone(timedelta(hours=9))).strftime('%Y-%m-%d %H:%M:%S')),None)
+        actions.append({'site_id':str(item.get('site_id')),'domain':host,
+                        'kind':'access_hold' if site.get('maintenance_hold') else 'captcha' if item.get('category')=='human_verification' else 'review',
+                        'status':'held' if site.get('maintenance_hold') else 'waiting_input' if live else 'no_active_session',
+                        'checked_at':item.get('checked_at','')})
+    return {'action_cases':actions[:4], 'schema': 1, 'observed_at': datetime.now(timezone.utc).isoformat(),
             'guard': {k: guard.get(k) for k in ('status','checked_at','local_ok','public_ok','restarts_today','last_action')},
             'maintenance': {k: maintenance.get(k) for k in ('status','checked_at','tested','deployed','commit','runtime','stage','cycles','ai_calls_total','ai_tokens_total','last_deployed_at','last_fix_revision','failure_categories','ai_wait_reason','ai_next_retry_at','maintenance_result','incident_summary','incident_checked_at')},
             'service_active': subprocess.run(['systemctl', 'is-active', '--quiet', 'chirashi']).returncode == 0,

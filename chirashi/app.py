@@ -2118,6 +2118,12 @@ def detect_captcha(d):
 CAPTCHA_LOCK=threading.Lock()
 CAPTCHA_TASKS={}
 
+def _save_manual_action_states():
+    # Only task identity and state: never CAPTCHA images, answers or account data.
+    with CAPTCHA_LOCK:
+        rows=[{k:t.get(k) for k in ('id','site_id','job_id','history_id','status','expires_at')} for t in CAPTCHA_TASKS.values()]
+    save_json(DATA_DIR/'manual_action_states.json',rows)
+
 def _captcha_public(task):
     return {k:v for k,v in task.items() if k not in ('event','value','cancelled')}
 
@@ -3053,16 +3059,18 @@ def wait_for_manual_captcha(d,site,cap_type,timeout=600):
     """관리자가 CAPTCHA 값을 입력할 때까지 같은 브라우저 세션을 보존한다."""
     from selenium.webdriver.common.by import By
     tid=uuid.uuid4().hex[:12]; ev=threading.Event(); now=_kst_now()
-    task={'id':tid,'site_id':site.get('id'),'site_name':site.get('name') or site.get('site_url',''),
+    task={'id':tid,'job_id':site.get('_maintenance_job_id'),'history_id':site.get('_maintenance_history_id'),'site_id':site.get('id'),'site_name':site.get('name') or site.get('site_url',''),
           'captcha_type':cap_type,'image_data':_captcha_image_data(d),'status':'waiting_input',
           'message':'CAPTCHA를 입력하면 같은 작성 화면에서 자동 발행합니다.',
           'created_at':now.strftime('%Y-%m-%d %H:%M:%S'),
           'expires_at':(now+timedelta(seconds=timeout)).strftime('%Y-%m-%d %H:%M:%S'),
           'event':ev,'value':'','cancelled':False}
     with CAPTCHA_LOCK: CAPTCHA_TASKS[tid]=task
+    _save_manual_action_states()
     add_log(f'[CAPTCHA 대기] {task["site_name"]} — 관리자 입력 후 자동 발행')
     if not ev.wait(timeout):
         with CAPTCHA_LOCK: task['status']='expired'; task['message']='입력 대기시간 10분 만료'
+        _save_manual_action_states()
         return False,'CAPTCHA 수동 입력 대기시간 만료',tid
     with CAPTCHA_LOCK:
         value=str(task.get('value') or '').strip(); cancelled=bool(task.get('cancelled'))
@@ -3092,6 +3100,7 @@ def finish_captcha_task(tid,ok,message):
         if t:
             t['status']='done' if ok else 'failed'; t['message']=str(message)[:180]
             t['finished_at']=_kst_now().strftime('%Y-%m-%d %H:%M:%S')
+    _save_manual_action_states()
 
 def _page_is_blocked(d):
     """403/보안 차단 페이지 판별. 일반 사이트의 Cloudflare 스크립트 문자열은 차단으로 보지 않는다."""
@@ -6138,6 +6147,8 @@ def do_post(site, title, content_html, skip_login=False):
     """발행 라우팅(하이브리드+자가학습): 학습레시피→플랫폼기본→자동학습.
        skip_login=True: 가입 직후 이미 로그인된 세션에서 재로그인 없이 바로 글쓰기(비표준 로그인폼 구제)."""
     # 비BMP(이모지 등) 제거 — ChromeDriver send_keys가 못 다뤄 발행 전체가 실패하던 문제 방지.
+    if site.get('maintenance_hold'):
+        return False,'게시 권한 없음 — 관리자 발행 보류'
     title=_strip_non_bmp(title); content_html=_strip_non_bmp(content_html)
     try: site['_cur_title']=title   # ★작성자명 랜덤 생성용(지역+업종은 제목 첫 토큰) — 서버·노드 공통 진입점이라 여기서 한 번만
     except Exception: pass
@@ -6682,6 +6693,7 @@ def worker_loop():
 
 def _do_publish_job(job,site,cfg,name,job_id,hid):
         """한 발행 잡을 실제 처리(한도·간격 확인 → 발행 → 재시도/기록). 사이트별 락 안에서 호출됨."""
+        site=dict(site); site['_maintenance_job_id']=job_id; site['_maintenance_history_id']=hid
         title=job['title']; content=job['content']
         # 1일 한도 확인 (도배 방지)
         if not under_daily_limit(site,cfg):
@@ -12401,6 +12413,16 @@ def api_site_board():
     st=load_json(DISCO_FILE,{})
     return jsonify({'ok':True,'rows':rows,'counts':counts,'total':len(rows),
                     'today_queries':st.get('queries',0),'today_found':st.get('found',0)})
+
+@app.route('/api/sites/maintenance-hold',methods=['POST'])
+def api_maintenance_hold():
+    data=request.get_json(silent=True) or {}; sid=str(data.get('id',''))
+    with POST_LOCK:
+        sites=load_sites(); found=next((x for x in sites if str(x.get('id'))==sid),None)
+        if found is None: return jsonify({'ok':False}),404
+        found['maintenance_hold']=data.get('hold') is not False
+        save_sites(sites)
+    return jsonify({'ok':True,'hold':found['maintenance_hold']})
 
 @app.route('/api/sites/limits',methods=['POST'])
 def api_sites_limits():
