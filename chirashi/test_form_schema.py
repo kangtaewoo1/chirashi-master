@@ -57,3 +57,16 @@ class FormSchemaTest(unittest.TestCase):
         self.assertEqual(p['form']['fields'][0]['text_constraints']['max_length'],16)
 
 if __name__=='__main__': unittest.main()
+
+
+class AccessDenialRegression(__import__('unittest').TestCase):
+    def test_plain_access_denial_is_not_missing_form(self):
+        from form_schema import measure_html
+        for body in ('접근 불가합니다.', '<html><body>Access Denied</body></html>'):
+            result=measure_html(body,'http://example.com/bbs/write.php','write')
+            self.assertEqual(result['state'],'access_denied')
+            self.assertFalse(result['auto_ready'])
+    def test_normal_form_with_denial_in_help_is_not_blocked(self):
+        from form_schema import measure_html
+        result=measure_html('<form action="write_update.php"><input name="wr_subject"><textarea name="wr_content"></textarea></form><p>접근 불가합니다.</p>','http://example.com/bbs/write.php','write')
+        self.assertEqual(result['state'],'measured')

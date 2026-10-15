@@ -140,6 +140,9 @@ def measure_html(markup,url,kind):
     if not selected and kind=='write' and any(re.search(r'login|signin',f['action'],re.I) for f in forms): state='login_required'
     if not selected and challenge: state='human_verification_required'
     if not selected and re.search(r'약관|이용약관|동의',p.root.text()): state='agreement_required' if not challenge else state
+    visible_text=re.sub(r'\s+','',p.root.text())
+    if not selected and len(visible_text)<300 and any(x in visible_text for x in ('접근불가합니다','접근이차단','접근이거부','AccessDenied','Forbidden')):
+        state='access_denied'
     unresolved=[f.get('name') or f.get('id') or f['tag'] for f in evidence if not f['hidden'] and not f['disabled'] and (f['role']=='unknown' or f['required'] is None)]
     canonical={'kind':kind,'form':selected,'challenge':challenge,'state':state}
     signature=hashlib.sha256(json.dumps(canonical,sort_keys=True,ensure_ascii=False).encode()).hexdigest()

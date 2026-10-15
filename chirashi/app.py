@@ -3853,6 +3853,9 @@ def gnuboard_post_http(site, title, content_html):
     if r.status_code>=400:
         return None,f'폼 GET {r.status_code} — 폴백'
     html=r.text or ''
+    from form_schema import measure_html
+    if measure_html(html,r.url,'write')['state']=='access_denied':
+        return False,'보안 차단 — 접근 불가 응답, 사이트 관리자 확인 필요'
     low=html.lower()
     # 로그인 게이트/회원전용이면 폴백(비회원 글쓰기 폼이 아님)
     if ('mb_password' in low and 'login' in low and 'wr_subject' not in low) or ('name="wr_subject"' not in low):
@@ -4048,6 +4051,9 @@ def gnuboard_post(site, title, content_html, skip_login=False):
                 if el.is_displayed(): el.clear(); el.send_keys(mpw); pw_ok=True; break
             except Exception: pass
         if not (id_ok and pw_ok):
+            from form_schema import measure_html
+            if measure_html(d.page_source or '',d.current_url,'write')['state']=='access_denied':
+                return False,'보안 차단 — 접근 불가 응답, 사이트 관리자 확인 필요'
             return False,'로그인 실패 — 로그인 입력칸을 찾지 못함(비표준 로그인폼)'
         # 제출 버튼은 로그인 폼(#login_fs/flogin/action*=login_check) 안의 것만. write.php와 동일하게
         # 헤더 검색폼(fsearchbox)의 검색 버튼이 문서상 먼저라 그냥 submit 셀렉터를 쓰면 잘못 잡힌다.
