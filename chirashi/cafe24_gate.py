@@ -105,7 +105,7 @@ def unattended_block(site):
                      and site.get('write_test_status') == 'passed'
     audit_state=(site.get('unattended_audit') or {}).get('state')
     # 진짜 사람/관리자 확인이 필요한 hold만 verified라도 차단(그 외 일시 상태는 verified면 무시).
-    _hard_hold = audit_state in ('admin_only', 'human_verification_required', 'manual_review')
+    _hard_hold = audit_state in ('admin_only', 'human_verification_required', 'manual_review', 'result_review')
     if _hard_hold:
         return 'unattended_'+str(audit_state)
     if audit_state and audit_state!='ready' and not _verified_post:

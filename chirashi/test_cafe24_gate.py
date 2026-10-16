@@ -159,6 +159,6 @@ class ExplicitAuditHoldTest(unittest.TestCase):
         from cafe24_gate import unattended_block
         legacy={'platform':'gnuboard','write_test_status':'passed','verified_post_url':'https://example.com/bbs/board.php?bo_table=free&wr_id=42'}
         self.assertEqual(unattended_block(legacy),'')
-        for state in ('human_or_form_review','connection_review','result_review','eligible'):
+        for state in ('human_verification_required','admin_only','manual_review','result_review'):
             self.assertTrue(unattended_block(dict(legacy,unattended_audit={'state':state})),state)
         self.assertEqual(unattended_block(dict(legacy,unattended_audit={'state':'ready'})),'')

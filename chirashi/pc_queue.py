@@ -5,7 +5,16 @@ import requests
 
 def run(once=False,idle=10):
     import pc_node as settings
-    import app
+    import sys,importlib.util
+    engine=Path(__file__).resolve().parent/'pc_queue_engine'
+    if (engine/'app.py').exists():
+        for name in ('cafe24_gate','form_schema','pc_queue_engine_app'):
+            path=engine/('app.py' if name=='pc_queue_engine_app' else name+'.py')
+            spec=importlib.util.spec_from_file_location(name,path)
+            module=importlib.util.module_from_spec(spec);sys.modules[name]=module;spec.loader.exec_module(module)
+        app=sys.modules['pc_queue_engine_app']
+    else:
+        import app
     base=Path(__file__).resolve().parent/'data'
     outbox=base/'pc_queue_outbox.json'
     headers={'User-Agent':'chirashi-pc-queue/1'}
