@@ -9,9 +9,7 @@ from unittest.mock import patch
 from form_schema import measure_html
 
 class ReadOnlyAuditTest(unittest.TestCase):
-    def test_http_captcha_form_hands_off_only_when_no_ocr_available(self):
-        # 2026-10-16: 캡차 보드도 HTTP 경로가 전용 OCR을 먼저 쓴다. OCR·2captcha가 둘 다 없는 환경(서버 VPS)에서만
-        #   제출 없이 None(노드/셀레늄 위임)으로 넘긴다.
+    def test_http_captcha_form_stops_before_solver_or_submission(self):
         tree=ast.parse(Path(__file__).with_name('app.py').read_text(encoding='utf-8'))
         fn=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='gnuboard_post_http')
         calls=[]
@@ -23,12 +21,12 @@ class ReadOnlyAuditTest(unittest.TestCase):
         exec(compile(ast.Module(body=[fn],type_ignores=[]),'app.py','exec'),env)
         with patch.dict(sys.modules,{'requests':fake}):
             ok,message=env['gnuboard_post_http']({'site_url':'http://approved.example','bo_table':'free'},'Functional test','Test body')
-        self.assertIsNone(ok);self.assertIn('무료 OCR 없는 환경',message);self.assertEqual(calls,['GET'])
+        self.assertFalse(ok);self.assertIn('사람 확인 필요',message);self.assertEqual(calls,['GET'])
     def test_uncertain_submission_and_human_wait_are_never_reposted(self):
         import threading
         tree=ast.parse(Path(__file__).with_name('app.py').read_text(encoding='utf-8'))
         fn=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='_do_publish_job')
-        for message in ('등록 확인 불가','CAPTCHA 수동 입력 대기시간 만료','게시 권한 없음'):
+        for message in ('등록 확인 불가','CAPTCHA 수동 입력 대기시간 만료','게시 권한 없음','무인 발행 보류','결과 검증 대기'):
             calls=[];updates=[]
             def post(*args):calls.append(args);return False,message
             env={'under_daily_limit':lambda *a:True,'under_min_interval':lambda *a:(True,0),'history_update':lambda *a,**kw:updates.append(kw),

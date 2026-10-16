@@ -22,7 +22,7 @@ class GateTests(unittest.TestCase):
         scope={'_strip_non_bmp':lambda x:x,'resolve_platform':lambda s:'cafe24',
                'cafe24_post':lambda *a,**k:(False,'[admin_only] denied')}
         exec(compile(ast.Module(body=[router],type_ignores=[]),'<router-test>','exec'),scope)
-        result=scope['do_post']({'learned':{'write_url':'ignored','subject_sel':'ignored','content_sel':'ignored'}},'test','test')
+        result=scope['do_post']({'_manual_review_job':True,'learned':{'write_url':'ignored','subject_sel':'ignored','content_sel':'ignored'}},'test','test')
         self.assertEqual(result,(False,'[admin_only] denied'))
 
     def test_admin_denial_stops_publish(self):
@@ -80,3 +80,39 @@ class MaintenanceHoldRegression(__import__('unittest').TestCase):
         from cafe24_gate import publishing_block
         for platform in ('gnuboard','cafe24'):
             self.assertEqual(publishing_block({'platform':platform,'maintenance_hold':True}), 'maintenance_hold')
+
+
+class UnattendedTests(unittest.TestCase):
+    def test_unknown_and_human_boards_never_admitted(self):
+        from cafe24_gate import unattended_block
+        site={'platform':'gnuboard'}
+        self.assertEqual(unattended_block(site),'unattended_audit_required')
+        site['unattended_audit']={'state':'ready'}
+        self.assertEqual(unattended_block(site),'')
+        for key,value in [('has_captcha',True),('manual_review_only',True),('login_required',True)]:
+            self.assertTrue(unattended_block(dict(site,**{key:value})))
+        self.assertEqual(unattended_block(dict(site,platform='cafe24')),'unattended_adapter_unverified')
+
+    def test_unused_legacy_script_is_not_an_active_challenge(self):
+        from form_schema import human_challenge_present
+        self.assertFalse(human_challenge_present('<script src="jquery.kcaptcha.js"></script><form><input name="wr_subject"><textarea name="wr_content"></textarea></form>'))
+        for markup in ('<input name="captcha_key">','<input name="wr_key">','<div class="cf-turnstile"></div>','<img src="kcaptcha_image.php">','<input type="hidden" name="g-recaptcha-response">'):
+            self.assertTrue(human_challenge_present(markup),markup)
+
+    def test_new_captcha_stops_before_solver_and_submission(self):
+        from types import SimpleNamespace
+        import sys
+        from unittest.mock import patch
+        tree=ast.parse(Path(__file__).with_name('app.py').read_text(encoding='utf-8'))
+        fn=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='gnuboard_post_http')
+        class Session:
+            headers={}
+            def get(self,*a,**k):
+                assert k['verify'] is True
+                return SimpleNamespace(status_code=200,url='https://example.com/bbs/write.php',text='<form action="write_update.php"><input name="wr_subject"><textarea name="wr_content"></textarea><input name="captcha_key"></form>')
+            def post(self,*a,**k): raise AssertionError('must not submit')
+        env={'load_config':lambda:{},'re':__import__('re'),'_HTTP_UA':'test','set_site_flag':lambda *a,**k:None,'datetime':__import__('datetime').datetime}
+        exec(compile(ast.Module(body=[fn],type_ignores=[]),'http-test','exec'),env)
+        with patch.dict(sys.modules,requests=SimpleNamespace(Session=Session)):
+            ok,message=env['gnuboard_post_http']({'id':'test','site_url':'https://example.com','bo_table':'free','_unattended_job':True},'title','body')
+        self.assertFalse(ok)

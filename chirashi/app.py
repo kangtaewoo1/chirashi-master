@@ -21,7 +21,7 @@ for _stream in ('stdout', 'stderr'):
 from datetime import datetime, timedelta
 from pathlib import Path
 from collections import defaultdict
-from cafe24_gate import AccessStopped, guarded_publish, stop_on_alerts, result_is_new, publishing_block
+from cafe24_gate import AccessStopped, guarded_publish, stop_on_alerts, result_is_new, publishing_block, unattended_block
 from form_schema import measure_html, changes_between
 import urllib3; urllib3.disable_warnings()
 
@@ -3880,7 +3880,7 @@ def gnuboard_post_http(site, title, content_html):
         return None,'로그인 사이트 — 셀레늄 폴백'
     s=_rq.Session(); s.headers.update({'User-Agent':_HTTP_UA})
     try:
-        r=s.get(f'{bbs}/write.php',params={'bo_table':bo},timeout=15,verify=False)
+        r=s.get(f'{bbs}/write.php',params={'bo_table':bo},timeout=15,verify=bool(site.get('_unattended_job')))
     except Exception as e:
         return None,f'폼 GET 실패({str(e)[:40]}) — 폴백'
     if r.status_code>=400:
@@ -3889,6 +3889,12 @@ def gnuboard_post_http(site, title, content_html):
     from form_schema import measure_html
     if measure_html(html,bbs+'/write.php','write')['state']=='access_denied':
         return False,'보안 차단 — 접근 불가 응답, 사이트 관리자 확인 필요'
+    from form_schema import human_challenge_present
+    if site.get('_unattended_job'):
+        schema=measure_html(html,r.url,'write')
+        if schema['state']!='measured' or human_challenge_present(html):
+            set_site_flag(site.get('id'),unattended_audit={'state':'human_or_form_review','checked_at':datetime.now().isoformat(timespec='seconds')})
+            return False,'사람 확인 또는 글쓰기 양식 변경 감지'
     low=html.lower()
     # 로그인 게이트/회원전용이면 폴백(비회원 글쓰기 폼이 아님)
     if ('mb_password' in low and 'login' in low and 'wr_subject' not in low) or ('name="wr_subject"' not in low):
@@ -3927,7 +3933,9 @@ def gnuboard_post_http(site, title, content_html):
         data['wr_link1']=(cfg.get('video_url') or cfg.get('landing_url') or '').strip()
     # ── 캡차 ──
     capm=re.search(r'g5_captcha_url\s*=\s*["\']([^"\']+)["\']',html)
-    needs_cap=bool(capm) or ('captcha_key' in low) or ('kcaptcha' in low)
+    needs_cap=human_challenge_present(html)
+    if needs_cap:
+        return False,'사람 확인 필요 — 자동 풀이 및 제출 제외'
     # ★OCR 복원(2026-10-16 대표님 '캡차는 전용 OCR로 먼저'): 10-13 5507c9a가 캡차 보드를 무조건 None(사람 입력 워커로 전환)으로
     #   넘겨 HTTP 경로의 전용모델 OCR(아래 _fetch_captcha_answer)이 전혀 안 쓰였음 → 아래 흐름 그대로 진행(OCR 실패 시 None→셀레늄).
     cap_base=(capm.group(1) if capm else (base+'/plugin/kcaptcha')) if needs_cap else ''
@@ -3946,9 +3954,9 @@ def gnuboard_post_http(site, title, content_html):
            '이미지 수신 실패'로 분류(→셀레늄 폴백), 사이트당 10분 1회 진단로그를 남겨 원인을 확정한다."""
         try:
             _ref={'Referer':f'{bbs}/write.php?bo_table={bo}'}
-            s.post(cap_base+'/kcaptcha_session.php',timeout=12,verify=False,
+            s.post(cap_base+'/kcaptcha_session.php',timeout=12,verify=bool(site.get('_unattended_job')),
                    headers={**_ref,'X-Requested-With':'XMLHttpRequest','Origin':base})
-            ci=s.get(cap_base+f'/kcaptcha_image.php?t={int(time.time()*1000)}',timeout=12,verify=False,
+            ci=s.get(cap_base+f'/kcaptcha_image.php?t={int(time.time()*1000)}',timeout=12,verify=bool(site.get('_unattended_job')),
                      headers={**_ref,'Accept':'image/avif,image/webp,image/apng,image/*,*/*;q=0.8'})
             if not (ci.status_code<400 and ci.content and len(ci.content)>200):
                 return '','캡차 이미지 수신 실패'
@@ -3988,7 +3996,7 @@ def gnuboard_post_http(site, title, content_html):
             # uid/w_time이 회전하는 스킨 대비: 캡차 재시도마다 폼을 다시 읽어 최신 토큰 반영
             if attempt>0:
                 try:
-                    rr=s.get(f'{bbs}/write.php',params={'bo_table':bo},timeout=12,verify=False)
+                    rr=s.get(f'{bbs}/write.php',params={'bo_table':bo},timeout=12,verify=bool(site.get('_unattended_job')))
                     h2=rr.text or ''
                     for fld in ('uid','w_time','w','wr_id','token'):
                         m2=re.search(r'<input[^>]*name=["\']'+fld+r'["\'][^>]*value=["\']([^"\']*)["\']',h2,re.I)
@@ -3996,7 +4004,7 @@ def gnuboard_post_http(site, title, content_html):
                 except Exception: pass
         # ── 제출 ──
         try:
-            pr=s.post(f'{bbs}/write_update.php',data=data,timeout=20,verify=False,
+            pr=s.post(f'{bbs}/write_update.php',data=data,timeout=20,verify=bool(site.get('_unattended_job')),
                       headers={'Referer':f'{bbs}/write.php?bo_table={bo}'},allow_redirects=True)
         except Exception as e:
             return None,f'POST 실패({str(e)[:40]}) — 폴백'
@@ -6200,6 +6208,32 @@ def do_post(site, title, content_html, skip_login=False):
         return False,'게시 권한 없음 — 수동 검증 전용 사이트, 자동 발행 보류'
     if site.get('maintenance_hold'):
         return False,'게시 권한 없음 — 관리자 발행 보류'
+    if not site.get('_manual_review_job'):
+        if publishing_block(site) or unattended_block(site):
+            return False,'무인 발행 보류 — 사람 확인 없는 양식 검증 필요'
+        ok,result=gnuboard_post_http(dict(site, _unattended_job=True),title,content_html)
+        if ok is not True:
+            set_site_flag(site.get('id'),unattended_audit={'state':'result_review','checked_at':datetime.now().isoformat(timespec='seconds')})
+            return False,'무인 발행 보류 — '+str(result)
+        try:
+            import requests as rq
+            from bs4 import BeautifulSoup
+            set_site_flag(site.get('id'),unattended_audit={'state':'result_review','checked_at':datetime.now().isoformat(timespec='seconds')})
+            target=urllib.parse.urlsplit(result); origin=urllib.parse.urlsplit(site.get('site_url',''))
+            query=urllib.parse.parse_qs(target.query)
+            if target.hostname!=origin.hostname or query.get('bo_table')!=[str(site.get('bo_table'))] or not query.get('wr_id',[''])[0].isdigit():
+                return False,'결과 검증 대기 — 게시글 URL 확인 필요, 재제출 금지'
+            response=rq.get(result,timeout=20)
+            response.raise_for_status()
+            response.encoding=response.apparent_encoding
+            text=' '.join(BeautifulSoup(response.text,'html.parser').stripped_strings)
+            expected=' '.join(BeautifulSoup(content_html,'html.parser').stripped_strings)
+            if ' '.join(title.split()) not in text or (expected and expected not in text):
+                return False,'결과 검증 대기 — 제목 또는 본문 확인 필요, 재제출 금지'
+            set_site_flag(site.get('id'),unattended_audit=site['unattended_audit'],unattended_result={'state':'verified','url':result,'checked_at':datetime.now().isoformat(timespec='seconds')})
+            return True,result
+        except Exception:
+            return False,'결과 검증 대기 — 조회 실패, 재제출 금지'
     title=_strip_non_bmp(title); content_html=_strip_non_bmp(content_html)
     try: site['_cur_title']=title   # ★작성자명 랜덤 생성용(지역+업종은 제목 첫 토큰) — 서버·노드 공통 진입점이라 여기서 한 번만
     except Exception: pass
@@ -6722,6 +6756,8 @@ def worker_loop():
 
         # 큐 등록 뒤 사이트가 삭제/미허용/캡차 상태로 바뀌어도 발행되지 않도록 현재 상태 재검증.
         current=next((s for s in load_sites() if s.get('id')==site.get('id')),None)
+        if current and job.get('manual_verification_test') is True:
+            current=dict(current, _manual_review_job=True)
         if not current or not is_publishable(current):
             why='사이트 삭제됨' if not current else '관리자 허용 또는 실게시 검증 조건 미충족'
             add_log(f'[스킵] {name} {why}')
@@ -6778,7 +6814,7 @@ def _do_publish_job(job,site,cfg,name,job_id,hid):
             try:
                 ok,msg=do_post(site,title,content)
                 if ok: break
-                if any(x in str(msg) for x in ('등록 확인 불가','CAPTCHA 수동 입력','캡차 불일치','보안 차단','게시 권한 없음')):
+                if any(x in str(msg) for x in ('무인 발행 보류','결과 검증 대기','등록 확인 불가','CAPTCHA 수동 입력','캡차 불일치','보안 차단','게시 권한 없음')):
                     break  # 결과 불명 또는 사람 확인은 같은 글을 자동 재제출하지 않는다.
                 add_log(f'[재시도 {attempt}/3] {name} - {msg}')
                 reset_driver()   # 실패 시 드라이버 새로 띄워 세션 꼬임 방지
@@ -6793,7 +6829,7 @@ def _do_publish_job(job,site,cfg,name,job_id,hid):
         if not ok:
             reason,reason_ko,is_temp=classify_fail(msg)
             requeues=job.get('requeues',0)
-            needs_review=any(x in str(msg) for x in ('등록 확인 불가','CAPTCHA','캡차','보안 차단','게시 권한 없음'))
+            needs_review=any(x in str(msg) for x in ('무인 발행 보류','결과 검증 대기','등록 확인 불가','CAPTCHA','캡차','보안 차단','게시 권한 없음'))
             transient=is_temp and not needs_review and requeues<RETRY_MAX and wk_active
             if transient:
                 job['requeues']=requeues+1
@@ -6834,8 +6870,8 @@ def is_permitted(site):
 
 def is_autopostable(site):
     """자동발행 대상 = 허용 + 실제 게시 성공 URL 검증 완료.
-       (CAPTCHA는 2captcha로 자동 해결 시도 → 실패 시 수동 대기)"""
-    if publishing_block(site):
+       사람 확인 없는 양식 실측을 통과한 사이트만 무인 큐에 허용."""
+    if publishing_block(site) or unattended_block(site):
         return False
     verified_url=str(site.get('verified_post_url') or '')
     # 로그인 필요 사이트인데 로그인 정보(mb_id)가 없으면 발행 제외 — 가입 미완료 사이트가
@@ -6879,6 +6915,8 @@ def _cafe24_node_only(site):
 
 def enqueue(sites,title,content,meta=None):
     meta=meta or {}
+    if meta.get('manual_verification_test') is True:
+        sites=[dict(s, _manual_review_job=True) for s in sites]
     allowed=[s for s in sites if is_publishable(s) and not _cafe24_node_only(s)]
     blocked=[s for s in sites if not (is_publishable(s) and not _cafe24_node_only(s))]
     now=datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -12251,6 +12289,33 @@ def api_oneclick():
     if total and not wk_active: start_workers(cfg.get('workers',2))
     return jsonify({'ok':True,'generated':total,'sites':len(allowed),'picks':count})
 
+@app.route('/api/sites/unattended-audit',methods=['POST'])
+def api_unattended_audit():
+    import requests as rq
+    from form_schema import human_challenge_present
+    ids=(request.get_json(silent=True) or {}).get('site_ids',[])
+    if not isinstance(ids,list) or not 1<=len(ids)<=50:
+        return jsonify({'ok':False,'error':'1~50개 사이트 ID 필요'}),400
+    records=[]
+    for site in [s for s in load_sites() if s.get('id') in ids and is_permitted(s)]:
+        state='adapter_review'; fingerprint=''
+        try:
+            if publishing_block(site) or site.get('manual_review_only'):
+                state='held'
+            elif site.get('platform')=='gnuboard' and not site.get('login_required') and not site.get('mb_id'):
+                url=_signup_origin(site)+'/bbs/write.php?bo_table='+urllib.parse.quote(str(site.get('bo_table','')),safe='')
+                response=rq.get(url,timeout=15)
+                response.raise_for_status(); response.encoding=response.apparent_encoding
+                schema=measure_html(response.text,response.url,'write'); fingerprint=schema['fingerprint']
+                same_origin=urllib.parse.urlsplit(response.url).netloc==urllib.parse.urlsplit(url).netloc
+                state=('ready' if same_origin and schema['state']=='measured' and not human_challenge_present(response.text) else 'human_or_form_review')
+        except Exception:
+            state='connection_review'
+        audit={'state':state,'fingerprint':fingerprint,'checked_at':datetime.now().isoformat(timespec='seconds')}
+        set_site_flag(site.get('id'),unattended_audit=audit)
+        records.append({'site_id':site.get('id'),**audit})
+    return jsonify({'ok':True,'sites':records})
+
 @app.route('/api/post',methods=['POST'])
 def api_post():
     d=request.get_json(silent=True) or {}; cfg=load_config()
@@ -12440,7 +12505,7 @@ def api_sites():
     # 비밀번호는 브라우저/API로 되돌려 보내지 않는다. 저장 여부만 표시한다.
     public=[]
     for s in load_sites():
-        x=dict(s); x['publishing_block']=publishing_block(s); x['login_saved']=bool(x.pop('mb_pass','') or x.get('mb_pass_enc'))
+        x=dict(s); x['publishing_block']=publishing_block(s) or unattended_block(s); x['login_saved']=bool(x.pop('mb_pass','') or x.get('mb_pass_enc'))
         x.pop('mb_pass_enc',None); public.append(x)
     return jsonify(public)
 

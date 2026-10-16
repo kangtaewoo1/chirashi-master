@@ -83,3 +83,18 @@ def guarded_publish(fn):
         finally:
             _context.active = old
     return wrapped
+
+
+def unattended_block(site):
+    """Only explicitly audited, permitted guest boards enter unattended queues."""
+    if site.get('_manual_review_job'):
+        return ''
+    if site.get('manual_review_only'):
+        return 'manual_review_only'
+    if site.get('has_captcha') or site.get('write_access_state') in ('admin_only', 'human_verification_required'):
+        return 'human_verification_required'
+    if site.get('platform') != 'gnuboard' or site.get('login_required') or site.get('mb_id'):
+        return 'unattended_adapter_unverified'
+    if (site.get('unattended_audit') or {}).get('state') != 'ready':
+        return 'unattended_audit_required'
+    return ''

@@ -156,3 +156,15 @@ def changes_between(old,new):
     return {'added':sorted(after.keys()-before.keys()),'removed':sorted(before.keys()-after.keys()),
             'changed':{key:[attr for attr in sorted(set(before[key])|set(after[key])) if before[key].get(attr)!=after[key].get(attr)] for key in sorted(before.keys()&after.keys()) if before[key]!=after[key]},
             'form_changed':any((old.get('form') or {}).get(k)!=(new.get('form') or {}).get(k) for k in ('id','action','method'))}
+
+
+def human_challenge_present(markup):
+    """Detect active controls/widgets; an unused legacy captcha script is not a control."""
+    parser=Parser(); parser.feed(markup); parser.close()
+    for node in parser.nodes:
+        attrs=node.attrs
+        marker=' '.join(str(attrs.get(k,'')) for k in ('name','id','class','src'))
+        if node.tag in {'input','textarea','img','iframe','div','span'} and re.search(r'captcha|turnstile|veritas-hub|(?:^|\s)wr_key(?:\s|$)',marker,re.I):
+            if 'disabled' not in attrs:
+                return True
+    return bool(re.search(r'veritas-hub|사람인지\s*확인|간단한\s*확인이\s*필요',parser.root.text(),re.I))
