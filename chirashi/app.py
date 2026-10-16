@@ -10515,7 +10515,7 @@ def chk():
     #  /api/test/* = 발행 테스트 트리거(등록 사이트에 실제 글1건 발행해 검증).
     _p=request.path
     if _p=='/api/version': return  # 배포 SHA 확인 — 공개(민감정보 없음)
-    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/sites/unlock-cafe24','/api/sites/unlock-verified','/api/sites/purge-fake-cafe24','/api/sites/mark-login-required','/api/sites/unmark-login-required','/api/sites/retry-signup','/api/candidates/rescreen-cafe24','/api/candidates/revive-rejected','/api/candidates/unrevive-nonillegal','/api/regions/normalize-existing','/api/site-board','/api/history','/api/ops-dashboard','/api/imap/test','/api/openai/usage','/api/twocaptcha/usage','/api/config/clear-key','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/candidates/reject-unworkable','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/pc-queue/claim','/api/pipeline/pc-queue/start','/api/pipeline/pc-queue/report','/api/pipeline/report-site','/api/pipeline/node-beat','/api/unlocker/test','/api/sbr/test','/api/diag') or _p.startswith('/api/test/'):
+    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/sites/unlock-cafe24','/api/sites/unlock-verified','/api/sites/purge-fake-cafe24','/api/sites/mark-login-required','/api/sites/unmark-login-required','/api/sites/retry-signup','/api/candidates/rescreen-cafe24','/api/candidates/revive-rejected','/api/candidates/unrevive-nonillegal','/api/regions/normalize-existing','/api/site-board','/api/history','/api/ops-dashboard','/api/imap/test','/api/openai/usage','/api/twocaptcha/usage','/api/config/clear-key','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/candidates/reject-unworkable','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/pc-queue/claim','/api/pipeline/pc-queue/audit','/api/pipeline/pc-queue/start','/api/pipeline/pc-queue/report','/api/pipeline/report-site','/api/pipeline/node-beat','/api/unlocker/test','/api/sbr/test','/api/diag') or _p.startswith('/api/test/'):
         tok=(request.args.get('token') or '').strip()
         cfgtok=(load_config().get('log_token') or '').strip()
         if cfgtok and tok==cfgtok:
@@ -11282,6 +11282,24 @@ def _pc_queue_authorized(leases,d):
     if not item or not secrets.compare_digest(str(item.get('lease_token','')),str(d.get('lease_token',''))) or item.get('node_id')!=d.get('node_id'):
         return None
     return item
+
+@app.route('/api/pipeline/pc-queue/audit',methods=['POST'])
+def api_pc_queue_audit():
+    d=request.get_json(silent=True) or {};reports=d.get('reports',[])
+    if not isinstance(reports,list) or len(reports)>50: return jsonify({'ok':False}),400
+    applied=0
+    with POST_LOCK:
+        sites=load_sites();by_id={x.get('id'):x for x in sites}
+        for report in reports:
+            site=by_id.get(report.get('id'))
+            if not site or not is_permitted(site):continue
+            state=report.get('state')
+            if state not in ('ready','human_verification_required','form_review','connection_review','unsupported_or_held'):continue
+            site['pc_write_audit']={'state':state,'fingerprint':str(report.get('fingerprint',''))[:64],'checked_at':datetime.now().isoformat(timespec='seconds')}
+            if state=='human_verification_required':site['has_captcha']=True
+            applied+=1
+        save_sites(sites)
+    return jsonify({'ok':True,'applied':applied})
 
 @app.route('/api/pipeline/pc-queue/claim',methods=['POST'])
 def api_pc_queue_claim():
