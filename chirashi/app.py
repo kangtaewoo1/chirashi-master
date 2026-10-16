@@ -3885,6 +3885,7 @@ def gnuboard_post_http(site, title, content_html):
         return None,f'폼 GET 실패({str(e)[:40]}) — 폴백'
     if r.status_code>=400:
         return None,f'폼 GET {r.status_code} — 폴백'
+    r.encoding=r.apparent_encoding or r.encoding
     html=r.text or ''
     from form_schema import measure_html
     measured=measure_html(html,r.url,'write')
@@ -4012,8 +4013,12 @@ def gnuboard_post_http(site, title, content_html):
                 except Exception: pass
         # ── 제출 ──
         try:
-            pr=s.post(f'{bbs}/write_update.php',data=data,timeout=20,verify=bool(site.get('_unattended_job')),
-                      headers={'Referer':f'{bbs}/write.php?bo_table={bo}'},allow_redirects=True)
+            payload=data
+            if site.get('_unattended_job'):
+                set_site_flag(site.get('id'),unattended_audit={'state':'result_review','checked_at':datetime.now().isoformat(timespec='seconds')})
+                payload=urllib.parse.urlencode(data,encoding=r.encoding or 'utf-8').encode('ascii')
+            pr=s.post(f'{bbs}/write_update.php',data=payload,timeout=20,verify=bool(site.get('_unattended_job')),
+                      headers={'Referer':f'{bbs}/write.php?bo_table={bo}','Content-Type':'application/x-www-form-urlencoded'},allow_redirects=True)
         except Exception as e:
             return None,f'POST 실패({str(e)[:40]}) — 폴백'
         fin=pr.url or ''; body=pr.text or ''
@@ -4058,7 +4063,8 @@ def _http_verify_title_on_board(sess, bbs, bo, title):
     key=norm(title)
     if len(key)<8: return ''
     try:
-        r=sess.get(f'{bbs}/board.php',params={'bo_table':bo},timeout=15,verify=False)
+        r=sess.get(f'{bbs}/board.php',params={'bo_table':bo},timeout=15,verify=True)
+        r.encoding=r.apparent_encoding or r.encoding
         html=r.text or ''
     except Exception:
         return ''
@@ -6225,7 +6231,7 @@ def do_post(site, title, content_html, skip_login=False):
             return False,'무인 발행 보류 — '+str(result)
         try:
             import requests as rq
-            from bs4 import BeautifulSoup
+            from form_schema import Parser
             set_site_flag(site.get('id'),unattended_audit={'state':'result_review','checked_at':datetime.now().isoformat(timespec='seconds')})
             target=urllib.parse.urlsplit(result); origin=urllib.parse.urlsplit(site.get('site_url',''))
             query=urllib.parse.parse_qs(target.query)
@@ -6234,8 +6240,8 @@ def do_post(site, title, content_html, skip_login=False):
             response=rq.get(result,timeout=20)
             response.raise_for_status()
             response.encoding=response.apparent_encoding
-            text=' '.join(BeautifulSoup(response.text,'html.parser').stripped_strings)
-            expected=' '.join(BeautifulSoup(content_html,'html.parser').stripped_strings)
+            parsed=Parser(); parsed.feed(response.text); parsed.close(); text=parsed.root.text()
+            parsed=Parser(); parsed.feed(content_html); parsed.close(); expected=parsed.root.text()
             if ' '.join(title.split()) not in text or (expected and expected not in text):
                 return False,'결과 검증 대기 — 제목 또는 본문 확인 필요, 재제출 금지'
             set_site_flag(site.get('id'),unattended_audit=site['unattended_audit'],unattended_result={'state':'verified','url':result,'checked_at':datetime.now().isoformat(timespec='seconds')})
@@ -12296,6 +12302,33 @@ def api_oneclick():
         total+=enqueue_generated(allowed,{'지역':kw.get('지역',''),'서비스':kw.get('서비스',''),'브랜드':kw.get('브랜드','')},cfg,{'region':kw.get('지역',''),'service':kw.get('서비스','')})[0]
     if total and not wk_active: start_workers(cfg.get('workers',2))
     return jsonify({'ok':True,'generated':total,'sites':len(allowed),'picks':count})
+
+@app.route('/api/sites/unattended-verify',methods=['POST'])
+def api_unattended_verify():
+    import requests as rq
+    from form_schema import Parser
+    d=request.get_json(silent=True) or {}
+    site=next((s for s in load_sites() if s.get('id')==d.get('site_id') and is_permitted(s)),None)
+    row=next((h for h in load_json(HISTORY_FILE,[]) if h.get('id')==d.get('job_id') and h.get('site_id')==d.get('site_id')),None)
+    if not site or not row or not str(row.get('title','')).startswith('[테스트]'):
+        return jsonify({'ok':False,'error':'기존 기능 테스트 작업 필요'}),400
+    try:
+        url=str(d.get('result_url') or '')
+        target=urllib.parse.urlsplit(url); origin=urllib.parse.urlsplit(site.get('site_url',''))
+        query=urllib.parse.parse_qs(target.query)
+        if target.scheme not in ('https','http') or target.netloc!=origin.netloc or query.get('bo_table')!=[str(site.get('bo_table'))] or not query.get('wr_id',[''])[0].isdigit():
+            raise ValueError('게시글 URL 검증 실패')
+        response=rq.get(url,timeout=20); response.raise_for_status(); response.encoding=response.apparent_encoding
+        if urllib.parse.urlsplit(response.url).netloc!=origin.netloc: raise ValueError('게시글 호스트 변경')
+        parsed=Parser(); parsed.feed(response.text); text=parsed.root.text()
+        expected=str(d.get('expected_text') or '').strip()
+        if not expected or row['title'] not in text or expected not in text: raise ValueError('제목 또는 본문 불일치')
+        stamp=datetime.now().isoformat(timespec='seconds')
+        history_update(row['id'],status='done',result_url=url,message='기존 게시글 조회 검증 완료 (재발행 없음)',verification_recovered_at=stamp)
+        set_site_flag(site['id'],unattended_result={'state':'verified','url':url,'checked_at':stamp},unattended_audit={'state':'ready','checked_at':stamp},daily_limit=1,min_interval_minutes=1440)
+        return jsonify({'ok':True,'result_url':url})
+    except Exception as exc:
+        return jsonify({'ok':False,'error':str(exc)[:100]}),400
 
 @app.route('/api/sites/unattended-audit',methods=['POST'])
 def api_unattended_audit():

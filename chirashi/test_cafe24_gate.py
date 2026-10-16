@@ -109,7 +109,7 @@ class UnattendedTests(unittest.TestCase):
             headers={}
             def get(self,*a,**k):
                 assert k['verify'] is True
-                return SimpleNamespace(status_code=200,url='https://example.com/bbs/write.php',text='<form action="write_update.php"><input name="wr_subject"><textarea name="wr_content"></textarea><input name="captcha_key"></form>')
+                return SimpleNamespace(status_code=200,apparent_encoding='utf-8',encoding='utf-8',url='https://example.com/bbs/write.php',text='<form action="write_update.php"><input name="wr_subject"><textarea name="wr_content"></textarea><input name="captcha_key"></form>')
             def post(self,*a,**k): raise AssertionError('must not submit')
         env={'load_config':lambda:{},'re':__import__('re'),'_HTTP_UA':'test','set_site_flag':lambda *a,**k:None,'datetime':__import__('datetime').datetime}
         exec(compile(ast.Module(body=[fn],type_ignores=[]),'http-test','exec'),env)
@@ -129,15 +129,16 @@ class LegacyGuestFormTest(unittest.TestCase):
         class Session:
             headers={}
             def get(self,*a,**k):
-                return SimpleNamespace(status_code=200,url='https://example.com/bbs/write.php?bo_table=free',text='<form action=write_update.php><input name=uid value=trusted-token><input name=wr_subject><textarea name=wr_content></textarea></form><script src="jquery.kcaptcha.js"></script>')
+                return SimpleNamespace(status_code=200,apparent_encoding='cp949',encoding='cp949',url='https://example.com/bbs/write.php?bo_table=free',text='<form action=write_update.php><input name=uid value=trusted-token><input name=wr_subject><textarea name=wr_content></textarea></form><script src="jquery.kcaptcha.js"></script>')
             def post(self,*a,**k):
                 calls.append(k)
                 return SimpleNamespace(url='https://example.com/bbs/board.php?bo_table=free&wr_id=123',text='posted')
-        env={'load_config':lambda:{},'re':re,'urllib':__import__('urllib'),'_HTTP_UA':'test','_pick_writer':lambda s:'test','_post_password':lambda c:'test','_brand_email':lambda *a:'','_strip_non_bmp':lambda s:s}
+        env={'load_config':lambda:{},'re':re,'urllib':__import__('urllib'),'_HTTP_UA':'test','_pick_writer':lambda s:'test','_post_password':lambda c:'test','_brand_email':lambda *a:'','_strip_non_bmp':lambda s:s,'set_site_flag':lambda *a,**k:None,'datetime':__import__('datetime').datetime}
         exec(compile(ast.Module(body=[fn],type_ignores=[]),'http-test','exec'),env)
         with patch.dict(sys.modules,requests=SimpleNamespace(Session=Session)):
-            ok,result=env['gnuboard_post_http']({'site_url':'https://example.com','bo_table':'free','_unattended_job':True},'test','body')
+            ok,result=env['gnuboard_post_http']({'site_url':'https://example.com','bo_table':'free','_unattended_job':True},'기능확인','body')
         self.assertTrue(ok)
         self.assertEqual(len(calls),1)
         self.assertTrue(calls[0]['verify'])
-        self.assertEqual(calls[0]['data']['uid'],'trusted-token')
+        self.assertIn(b'uid=trusted-token',calls[0]['data'])
+        self.assertIn(urllib.parse.quote('기능확인',encoding='cp949').encode('ascii'),calls[0]['data'])
