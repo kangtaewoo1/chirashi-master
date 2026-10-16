@@ -3928,8 +3928,8 @@ def gnuboard_post_http(site, title, content_html):
     # ── 캡차 ──
     capm=re.search(r'g5_captcha_url\s*=\s*["\']([^"\']+)["\']',html)
     needs_cap=bool(capm) or ('captcha_key' in low) or ('kcaptcha' in low)
-    if needs_cap:
-        return None,'CAPTCHA 사람 입력 필요 — 같은 브라우저 워커로 전환'
+    # ★OCR 복원(2026-10-16 대표님 '캡차는 전용 OCR로 먼저'): 10-13 5507c9a가 캡차 보드를 무조건 None(사람 입력 워커로 전환)으로
+    #   넘겨 HTTP 경로의 전용모델 OCR(아래 _fetch_captcha_answer)이 전혀 안 쓰였음 → 아래 흐름 그대로 진행(OCR 실패 시 None→셀레늄).
     cap_base=(capm.group(1) if capm else (base+'/plugin/kcaptcha')) if needs_cap else ''
     # ★캡차 사이트인데 무료 OCR(ddddocr)이 없는 환경(서버 VPS)이면: 2captcha 잔액0으로 삽질하지 말고
     #   즉시 None 반환 → 노드(ddddocr 됨)가 claim해 무료로 처리하도록 위임(2026-09-14 대표님 지시).
@@ -4255,10 +4255,35 @@ def gnuboard_post(site, title, content_html, skip_login=False):
 
     captcha_tid=''
     if _cap:
-        success,msg,captcha_tid=wait_for_manual_captcha(d,site,_cap)
-        if not success:
-            finish_captcha_task(captcha_tid,False,msg)
-            return False,msg
+        # ★OCR 우선 복원(2026-10-16 대표님 '캡차는 전용 OCR로 먼저 풀고 실패할 때만 사람 대기'): 10-13 74f53c3이 자동해결
+        #   (kcaptcha=자체 OCR 94%→2captcha, recaptcha=오디오/2captcha, turnstile=2captcha/사람클릭)을 사람 입력 10분 대기로
+        #   통째 교체 → kcaptcha 보드 전부 'CAPTCHA 수동 입력 대기시간 만료'(워커 10분 점유, 실측 실패 1위). 자동해결 먼저,
+        #   실패·불확실·입력칸 못 찾음일 때만 사람 대기(세션 보존 기능은 그대로).
+        _auto_ok=False; _auto_msg=''
+        try:
+            _ok_c,_auto_msg,_ans_c,_info_c=solve_captcha_with_2captcha(d,site,_cap,load_config())
+        except Exception as _e_c:
+            _ok_c,_auto_msg,_ans_c=False,f'자동해결 예외: {str(_e_c)[:60]}',''
+        if _ok_c:
+            if _cap=='kcaptcha':
+                for _sel in ["input[name='captcha_key']","#captcha_key","input[name='wr_key']","input[name*='captcha']","input[id*='captcha']"]:
+                    try:
+                        _inp=d.find_element(By.CSS_SELECTOR,_sel)
+                        if _inp and _inp.is_displayed():
+                            _inp.clear(); _inp.send_keys(str(_ans_c)); _auto_ok=True; time.sleep(1); break
+                    except Exception: pass
+                if not _auto_ok: _auto_msg='kcaptcha 입력칸을 찾지 못함'
+            else:
+                _auto_ok=True   # recaptcha/turnstile은 solver가 토큰을 페이지에 심어 둠
+        _sn=site.get('name') or (site.get('site_url','') or '')[:24]
+        if _auto_ok:
+            add_log(f'[캡차 자동해결] {_sn} — {_auto_msg}')
+        else:
+            add_log(f'[캡차 자동해결 실패→사람 대기] {_sn} — {_auto_msg}')
+            success,msg,captcha_tid=wait_for_manual_captcha(d,site,_cap)
+            if not success:
+                finish_captcha_task(captcha_tid,False,msg)
+                return False,msg
 
     # 등록: native click으로 정상 제출(referer/token 자연스러움) + 짧은 page_load_timeout으로
     #       렌더러 25초 블록 회피 + 상태 접근은 _safe 폴링(제출 후 current_url이 25초 멈추던 문제 해결)

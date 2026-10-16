@@ -9,7 +9,9 @@ from unittest.mock import patch
 from form_schema import measure_html
 
 class ReadOnlyAuditTest(unittest.TestCase):
-    def test_http_captcha_form_hands_off_without_any_post_or_solver(self):
+    def test_http_captcha_form_hands_off_only_when_no_ocr_available(self):
+        # 2026-10-16: 캡차 보드도 HTTP 경로가 전용 OCR을 먼저 쓴다. OCR·2captcha가 둘 다 없는 환경(서버 VPS)에서만
+        #   제출 없이 None(노드/셀레늄 위임)으로 넘긴다.
         tree=ast.parse(Path(__file__).with_name('app.py').read_text(encoding='utf-8'))
         fn=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='gnuboard_post_http')
         calls=[]
@@ -17,11 +19,11 @@ class ReadOnlyAuditTest(unittest.TestCase):
         session=types.SimpleNamespace(headers={},get=lambda *a,**kw:(calls.append('GET') or types.SimpleNamespace(status_code=200,text=html)),post=lambda *a,**kw:self.fail('No submission allowed'))
         fake=types.ModuleType('requests');fake.Session=lambda:session
         env={'re':re,'load_config':lambda:{},'_HTTP_UA':'test','_pick_writer':lambda s:'Test','_post_password':lambda c:'test',
-             '_brand_email':lambda *a:'','_strip_non_bmp':lambda s:s,'_ocr_available':lambda:self.fail('No CAPTCHA solver allowed')}
+             '_brand_email':lambda *a:'','_strip_non_bmp':lambda s:s,'_ocr_available':lambda:False}
         exec(compile(ast.Module(body=[fn],type_ignores=[]),'app.py','exec'),env)
         with patch.dict(sys.modules,{'requests':fake}):
             ok,message=env['gnuboard_post_http']({'site_url':'http://approved.example','bo_table':'free'},'Functional test','Test body')
-        self.assertIsNone(ok);self.assertIn('사람 입력',message);self.assertEqual(calls,['GET'])
+        self.assertIsNone(ok);self.assertIn('무료 OCR 없는 환경',message);self.assertEqual(calls,['GET'])
     def test_uncertain_submission_and_human_wait_are_never_reposted(self):
         import threading
         tree=ast.parse(Path(__file__).with_name('app.py').read_text(encoding='utf-8'))
@@ -38,12 +40,13 @@ class ReadOnlyAuditTest(unittest.TestCase):
             env['_do_publish_job']({'title':'Functional test','content':'Test body'}, {'id':'approved'}, {'post_delay':0},'Test','job','history')
             self.assertEqual(len(calls),1)
             self.assertEqual(updates[-1]['status'],'failed')
-    def test_gnuboard_waits_for_human_in_same_worker_session(self):
+    def test_gnuboard_tries_auto_solver_then_waits_for_human_in_same_worker_session(self):
+        # 2026-10-16: 자동해결(전용 OCR→2captcha)을 먼저 시도하고, 실패할 때만 같은 워커 세션에서 사람 입력을 기다린다.
         tree=ast.parse(Path(__file__).with_name('app.py').read_text(encoding='utf-8'))
         fn=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='gnuboard_post')
         calls={n.func.id for n in ast.walk(fn) if isinstance(n,ast.Call) and isinstance(n.func,ast.Name)}
         self.assertIn('wait_for_manual_captcha',calls)
-        self.assertNotIn('solve_captcha_with_2captcha',calls)
+        self.assertIn('solve_captcha_with_2captcha',calls)
         messages=[n.value for n in ast.walk(fn) if isinstance(n,ast.Constant) and isinstance(n.value,str)]
         self.assertFalse(any('로그인 필요 추정' in x or '로그인 필요/비표준' in x for x in messages))
     def measure(self,response):
