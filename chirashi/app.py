@@ -6244,7 +6244,12 @@ def do_post(site, title, content_html, skip_login=False):
             parsed=Parser(); parsed.feed(content_html); parsed.close(); expected=parsed.root.text()
             if ' '.join(title.split()) not in text or (expected and expected not in text):
                 return False,'결과 검증 대기 — 제목 또는 본문 확인 필요, 재제출 금지'
-            set_site_flag(site.get('id'),unattended_audit=site['unattended_audit'],unattended_result={'state':'verified','url':result,'checked_at':datetime.now().isoformat(timespec='seconds')})
+            stamp=datetime.now().isoformat(timespec='seconds')
+            receipt={'state':'verified','url':result,'checked_at':stamp,'job_id':site.get('_maintenance_job_id'),
+                     'title_match':True,'body_match':True,'body_sha256':hashlib.sha256(expected.encode('utf-8')).hexdigest()}
+            set_site_flag(site.get('id'),unattended_audit=site['unattended_audit'],unattended_result=receipt)
+            if site.get('_maintenance_history_id'):
+                history_update(site['_maintenance_history_id'],verification_receipt=receipt)
             return True,result
         except Exception:
             return False,'결과 검증 대기 — 조회 실패, 재제출 금지'
@@ -6940,9 +6945,11 @@ def enqueue(sites,title,content,meta=None):
                      'site_name':s.get('name') or s.get('site_url',''),'site_url':s.get('site_url',''),
                      'bo_table':s.get('bo_table',''),'title':title,
                      'region':meta.get('region',''),'service':meta.get('service',''),
+                     'workroom_id':meta.get('workroom_id',''),'workroom_name':meta.get('workroom_name',''),
+                     'queue_source':meta.get('queue_source','explicit'),
                      'status':'queued','result_url':'','message':'','attempts':0})
         job={'job_id':jid,'hist_id':jid,'site':s,'title':title,'content':content,'manual_verification_test':meta.get('manual_verification_test') is True}
-        post_queue.put(job); _persist_add(job)
+        _persist_add(job); post_queue.put(job)
     for s in blocked:
         if _cafe24_node_only(s): continue   # Cafe24는 노드가 발행 — 서버 스킵은 정상이라 로그 안 남김
         _why=('미허용 도메인' if not is_permitted(s) else '제외')
@@ -9798,6 +9805,11 @@ def _publish_combo_to_site(s, kw, wname, rid, cfg, writer_name='', chrome_sem=No
                 html,title=generate_article(pub_kw,cfg,unique=True,workroom_id=rid)
         except Exception as e:
             add_log(f"[작업실:{wname}] 생성오류 {str(e)[:50]}"); return
+        if (fresh.get('unattended_audit') or {}).get('state')=='ready':
+            count,_=enqueue([fresh],title,html,{'region':pub_kw.get('지역',''),'service':pub_kw.get('서비스',''),
+                'workroom_id':rid,'workroom_name':wname,'queue_source':'scheduled_unattended'})
+            if count and not wk_active: start_workers(cfg.get('workers',2))
+            return
         now=datetime.now().strftime('%Y-%m-%d %H:%M:%S'); jid=secrets.token_hex(8)
         history_add({'id':jid,'time':now,'updated':now,'site_id':fresh.get('id'),
             'site_name':fresh.get('name') or fresh.get('site_url',''),'site_url':fresh.get('site_url',''),
