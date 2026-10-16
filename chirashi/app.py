@@ -11274,11 +11274,16 @@ def api_pipeline_claim_sites():
         # ★기본 0=끔(2026-09-30 실측: 편입 후 40분간 21곳 시도 0 성공, 노드 로그 누적 73시도/0성공 — 타임아웃 48·가입폼없음 23.
         #   이 사이트들은 자가입 자체가 안 되는 곳(본인인증·승인제·가입폼 없음)이라 배치당 60초 슬롯만 낭비).
         #   config registered_signup_per_claim=1~3 으로 켜면 재활성(가입 되는 후보가 생기면 사용).
+        # ★기본 2로 재가동(2026-10-16 대표님 '왜 다 비회원사이트만'): 허용 로그인형 51곳 중 mb_id 1곳뿐 → 서버(비회원필터)·노드
+        #   (_node_ready) 양쪽 제외로 발행 0. 집IP HTTP 프로브 결과 50곳 중 28곳은 비회원 글쓰기 폼이 열려 있음(서버 DC IP만
+        #   로그인 벽 → 하이브리드 교정이 로그인형으로 오판). 노드는 비회원 발행 먼저 시도→실패 시 자동가입이라 배치당 2곳
+        #   섞으면 28곳은 집IP로 발행 복귀, 진짜 로그인형은 signup_fail_count 3회로 자기제한. config로 0 주면 끔.
         try:
-            _k=max(0,min(3,int(_cfg.get('registered_signup_per_claim',0) or 0)))
+            _rv=_cfg.get('registered_signup_per_claim')
+            _k=2 if _rv in (None,'') else max(0,min(3,int(_rv)))   # 미설정/빈값=2, 0이면 끔
             _scd=max(1800,int(_cfg.get('registered_signup_cooldown_sec',21600) or 21600))
         except Exception:
-            _k=0; _scd=21600
+            _k=2; _scd=21600
         if _k>0 and _node_all:
             _eids={s.get('id') for s in elig}
             sign_elig=[s for s in sites
