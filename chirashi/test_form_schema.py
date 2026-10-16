@@ -70,3 +70,25 @@ class AccessDenialRegression(__import__('unittest').TestCase):
         from form_schema import measure_html
         result=measure_html('<form action="write_update.php"><input name="wr_subject"><textarea name="wr_content"></textarea></form><p>접근 불가합니다.</p>','http://example.com/bbs/write.php','write')
         self.assertEqual(result['state'],'measured')
+
+
+class SiteFailureClassificationTest(__import__('unittest').TestCase):
+    def test_database_error_is_not_a_missing_field_and_does_not_retain_user_identifiers(self):
+        import json
+        from form_schema import measure_html
+        result=measure_html("Warning: mysqli_connect(): Access denied for user 'private-user'@'localhost'",'http://approved.example/bbs/write.php','write')
+        self.assertEqual(result['state'],'site_database_error')
+        self.assertNotIn('private-user',json.dumps(result))
+
+    def test_hosting_denial_and_login_alert_are_distinct(self):
+        from form_schema import measure_html
+        self.assertEqual(measure_html('<title>Unavailable</title>','http://hosting.webtro.kr/servicedeny.html','write')['state'],'hosting_service_restricted')
+        self.assertEqual(measure_html('<title>404</title>','http://hosting.webtro.kr/404.html','write')['state'],'hosting_unavailable')
+        page="<script>alert('글을 쓸 권한이 없습니다. 로그인 후 이용해 주세요.');location.replace('./login.php');</script>"
+        self.assertEqual(measure_html(page,'https://approved.example/bbs/write.php','write')['state'],'login_required')
+        self.assertEqual(measure_html('<a href="login.php">로그인</a>','https://approved.example','write')['state'],'form_unavailable')
+
+    def test_tls_errors_are_explicit_and_never_disable_validation(self):
+        from form_schema import connection_error_state
+        self.assertEqual(connection_error_state('certificate verify failed: certificate has expired'),'tls_certificate_expired')
+        self.assertEqual(connection_error_state('CERTIFICATE_VERIFY_FAILED self signed certificate'),'tls_validation_error')

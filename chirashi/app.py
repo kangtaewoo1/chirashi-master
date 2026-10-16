@@ -11294,8 +11294,18 @@ def api_pc_queue_audit():
             site=by_id.get(report.get('id'))
             if not site or not is_permitted(site):continue
             state=report.get('state')
-            if state not in ('ready','human_verification_required','form_review','connection_review','unsupported_or_held'):continue
+            if state not in ('ready','human_verification_required','form_review','connection_review','unsupported_or_held','site_database_error','hosting_service_restricted','hosting_unavailable','credentials_required','tls_certificate_expired','tls_validation_error'):continue
             site['pc_write_audit']={'state':state,'fingerprint':str(report.get('fingerprint',''))[:64],'checked_at':datetime.now().isoformat(timespec='seconds')}
+            reasons={'site_database_error':'사이트 DB 인증·연결 장애 — 사이트 호스팅 관리자 확인 필요',
+                     'hosting_service_restricted':'호스팅 서비스 제한 응답 — 서비스·도메인 연결 상태 확인 필요',
+                     'hosting_unavailable':'호스팅 404 응답 — 사이트 및 게시판 경로 복구 필요',
+                     'credentials_required':'현재 회원 로그인 필요 — 기존 게시 권한 계정 등록 필요',
+                     'tls_certificate_expired':'HTTPS 인증서 만료 — 사이트 관리자 갱신 필요',
+                     'tls_validation_error':'HTTPS 인증서 검증 실패 — 사이트 관리자 확인 필요'}
+            if state in reasons:
+                site['unattended_audit']={'state':state,'checked_at':datetime.now().isoformat(timespec='seconds')}
+                site['technical_block_reason']=reasons[state]
+                site['pc_write_audit']['action_required']=reasons[state]
             if state=='human_verification_required':site['has_captcha']=True
             applied+=1
         save_sites(sites)

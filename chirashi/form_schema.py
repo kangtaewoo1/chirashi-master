@@ -143,6 +143,16 @@ def measure_html(markup,url,kind):
     visible_text=re.sub(r'\s+','',p.root.text())
     if not selected and len(visible_text)<300 and any(x in visible_text for x in ('접근불가합니다','접근이차단','접근이거부','AccessDenied','Forbidden')):
         state='access_denied'
+    if not selected:
+        # Classify server failures without retaining raw diagnostics or database identifiers.
+        if re.search(r'(?:mysqli?_connect|Connect Error)',markup,re.I) and re.search(r'Access denied|SQLSTATE|Connection refused',markup,re.I):
+            state='site_database_error'
+        elif re.search(r'/servicedeny\.html(?:[?#]|$)',url,re.I):
+            state='hosting_service_restricted'
+        elif urlsplit(url).hostname=='hosting.webtro.kr' and urlsplit(url).path=='/404.html':
+            state='hosting_unavailable'
+        elif re.search(r'location(?:\.href|\.replace)?[^;]{0,250}login\.php',markup,re.I) and re.search(r'로그인|회원|권한',markup):
+            state='login_required'
     unresolved=[f.get('name') or f.get('id') or f['tag'] for f in evidence if not f['hidden'] and not f['disabled'] and (f['role']=='unknown' or f['required'] is None)]
     canonical={'kind':kind,'form':selected,'challenge':challenge,'state':state}
     signature=hashlib.sha256(json.dumps(canonical,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
@@ -170,3 +180,12 @@ def human_challenge_present(markup):
             if 'disabled' not in attrs:
                 return True
     return bool(re.search(r'veritas-hub|사람인지\s*확인|간단한\s*확인이\s*필요',parser.root.text(),re.I))
+
+
+def connection_error_state(error):
+    text=str(error).lower()
+    if 'certificate' in text and ('expired' in text or 'has expired' in text):
+        return 'tls_certificate_expired'
+    if 'certificate_verify_failed' in text or 'certificate verify failed' in text:
+        return 'tls_validation_error'
+    return 'connection_review'
