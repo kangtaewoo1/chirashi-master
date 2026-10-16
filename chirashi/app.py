@@ -14825,11 +14825,10 @@ const isPub=s=>!s.publishing_block&&!!s.permission&&srcOK(s)&&s.status!=='reject
 const isDead=s=>(s.status==='rejected'||s.status==='failed'||(s.permission===false&&srcOK(s)&&s.write_test_status==='failed'));
 const pubs=sites.filter(isPub);
 const prog=sites.filter(s=>!isPub(s)&&!isDead(s));
-$('siteTabCount').textContent=pubs.length;   // 탭 카운트=실시간 발행가능 수(대표님 요청)
-const showProg=window._siteShowProg||false;
-let shown=pubs.slice();
-if(showProg)shown=shown.concat(prog);   // '안 되는' 사이트는 서버가 자동삭제 — 이 영역은 발행가능/진행중만
-const toggle=`<div class="row" style="margin-bottom:6px;font-size:11px;color:var(--d);flex-wrap:wrap;gap:8px"><span style="color:var(--g)">🟢 발행가능 ${pubs.length}곳</span>${prog.length?`<label style="display:flex;align-items:center;gap:4px"><input type="checkbox" style="width:auto" ${showProg?'checked':''} onclick="window._siteShowProg=this.checked;renderSites()">진행중 ${prog.length}곳 보기</label>`:''}<span style="flex:1"></span></div>`;
+$('siteTabCount').textContent=sites.length;   // 탭 카운트=실시간 발행가능 수(대표님 요청)
+const showOnlyUnattended=window._siteOnlyUnattended===true;
+let shown=showOnlyUnattended?pubs:sites;   // '안 되는' 사이트는 서버가 자동삭제 — 이 영역은 발행가능/진행중만
+const toggle=`<div class="row" style="margin-bottom:6px;font-size:11px;color:var(--d);flex-wrap:wrap;gap:8px"><span>등록 ${sites.length}곳 · 과거 실게시 검증 ${publishable.length}곳 · 현재 무인 발행 가능 ${pubs.length}곳</span><label style="display:flex;align-items:center;gap:4px"><input type="checkbox" style="width:auto" ${showOnlyUnattended?'checked':''} onclick="window._siteOnlyUnattended=this.checked;renderSites()">무인 발행 가능한 곳만 보기</label><span style="flex:1"></span></div>`;
 if(!shown.length){$('siteList').innerHTML=toggle+'<p style="color:var(--d);padding:30px;text-align:center">발행가능 사이트가 아직 없습니다'+(prog.length?' (진행중 '+prog.length+'곳 — 위에서 보기)':'')+'</p>';return}
 $('siteList').innerHTML=toggle+'<table><thead><tr><th><input type="checkbox" id="allCb" onclick="document.querySelectorAll(\'.cb\').forEach(c=>c.checked=this.checked)"></th><th>이름</th><th>URL</th><th>게시판</th><th>오늘</th><th>상태</th><th>동작</th></tr></thead><tbody>'+shown.map(siteRow).join('')+'</tbody></table>';
 checked.forEach(id=>{const c=document.querySelector(`.cb[data-id="${id}"]`);if(c)c.checked=true})}
