@@ -806,4 +806,5 @@ if __name__ == "__main__":
     elif a.cafe24_test:
         cafe24_test(a.cafe24_test, mb_id=a.mb_id, mb_pass=a.mb_pass)
     else:
-        run(once=a.once, workers=a.workers, idle=a.idle)
+        from pc_queue import run as run_queue
+        run_queue(once=a.once,idle=min(a.idle,10))

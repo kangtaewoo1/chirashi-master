@@ -6464,6 +6464,10 @@ def recover_queue():
     n=0; keep=[]; queued_hist=set()
     for job in q:
         hid=job.get('hist_id'); site=job.get('site') or {}
+        if job.get('job_id') in load_json(DATA_DIR/'pc_queue_leases.json',{}):
+            keep.append(job)
+            if hid: queued_hist.add(hid)
+            continue
         current=next((s for s in load_sites() if s.get('id')==site.get('id')),None)
         if job.get('site') and job.get('content') and current and is_publishable(current):
             job['site']=current; post_queue.put(job); keep.append(job); n+=1
@@ -6767,6 +6771,7 @@ def worker_loop():
     while wk_active:
         # 일시정지: 큐에서 꺼내지 않고 대기 (작업 보존)
         if wk_paused: time.sleep(1); continue
+        if _pc_queue_online(): time.sleep(1); continue
         try: job=post_queue.get(timeout=1)
         except: continue
         site=job['site']; title=job['title']; content=job['content']; cfg=load_config()
@@ -10510,7 +10515,7 @@ def chk():
     #  /api/test/* = 발행 테스트 트리거(등록 사이트에 실제 글1건 발행해 검증).
     _p=request.path
     if _p=='/api/version': return  # 배포 SHA 확인 — 공개(민감정보 없음)
-    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/sites/unlock-cafe24','/api/sites/unlock-verified','/api/sites/purge-fake-cafe24','/api/sites/mark-login-required','/api/sites/unmark-login-required','/api/sites/retry-signup','/api/candidates/rescreen-cafe24','/api/candidates/revive-rejected','/api/candidates/unrevive-nonillegal','/api/regions/normalize-existing','/api/site-board','/api/history','/api/ops-dashboard','/api/imap/test','/api/openai/usage','/api/twocaptcha/usage','/api/config/clear-key','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/candidates/reject-unworkable','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/report-site','/api/pipeline/node-beat','/api/unlocker/test','/api/sbr/test','/api/diag') or _p.startswith('/api/test/'):
+    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/sites/unlock-cafe24','/api/sites/unlock-verified','/api/sites/purge-fake-cafe24','/api/sites/mark-login-required','/api/sites/unmark-login-required','/api/sites/retry-signup','/api/candidates/rescreen-cafe24','/api/candidates/revive-rejected','/api/candidates/unrevive-nonillegal','/api/regions/normalize-existing','/api/site-board','/api/history','/api/ops-dashboard','/api/imap/test','/api/openai/usage','/api/twocaptcha/usage','/api/config/clear-key','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/candidates/reject-unworkable','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/pc-queue/claim','/api/pipeline/pc-queue/start','/api/pipeline/pc-queue/report','/api/pipeline/report-site','/api/pipeline/node-beat','/api/unlocker/test','/api/sbr/test','/api/diag') or _p.startswith('/api/test/'):
         tok=(request.args.get('token') or '').strip()
         cfgtok=(load_config().get('log_token') or '').strip()
         if cfgtok and tok==cfgtok:
@@ -11264,6 +11269,130 @@ def api_pipeline_report():
             add_log(f'[PC노드 회신오류] {name} {str(e)[:60]}')
     _node_beat(node_id, action=(f'발행 {registered}곳 등록' if registered else f'회신 {applied}건'), publish=registered)
     return jsonify({'ok':True,'applied':applied,'registered':registered})
+
+_PC_QUEUE_LOCK=threading.RLock()
+_PC_SITE_LOCKS={}
+
+def _pc_queue_online():
+    state=load_json(DATA_DIR/'pc_queue_state.json',{})
+    return state.get('protocol')==1 and time.time()-float(state.get('last_seen',0))<90
+
+def _pc_queue_authorized(leases,d):
+    item=leases.get(str(d.get('job_id','')))
+    if not item or not secrets.compare_digest(str(item.get('lease_token','')),str(d.get('lease_token',''))) or item.get('node_id')!=d.get('node_id'):
+        return None
+    return item
+
+@app.route('/api/pipeline/pc-queue/claim',methods=['POST'])
+def api_pc_queue_claim():
+    d=request.get_json(silent=True) or {}
+    if d.get('protocol')!=1: return jsonify({'ok':False,'error':'protocol required'}),400
+    node=str(d.get('node_id',''))[:80]
+    if not node: return jsonify({'ok':False}),400
+    save_json(DATA_DIR/'pc_queue_state.json',{'protocol':1,'node_id':node,'last_seen':time.time()})
+    _node_beat(node,action='검증된 실제 큐 대기')
+    with _PC_QUEUE_LOCK:
+        leases=load_json(DATA_DIR/'pc_queue_leases.json',{})
+        # An unstarted lease may be re-delivered; submitted jobs require result reconciliation.
+        job=None
+        for old in leases.values():
+            if old.get('state')=='leased' and old.get('expires_at',0)<time.time():
+                job=old['job']; break
+        if job is None:
+            try: job=post_queue.get_nowait()
+            except queue.Empty: return jsonify({'ok':True,'job':None})
+        site=next((x for x in load_sites() if x.get('id')==job.get('site',{}).get('id')),None)
+        if not site or not is_publishable(site) or not under_daily_limit(site,load_config()) or not under_min_interval(site)[0]:
+            history_update(job['hist_id'],status='skipped',message='PC 큐 검증: 권한·보류·발행 한도 확인 필요')
+            _persist_remove(job['job_id']); leases.pop(job['job_id'],None)
+            save_json(DATA_DIR/'pc_queue_leases.json',leases)
+            return jsonify({'ok':True,'job':None})
+        lock=_PC_SITE_LOCKS.get(job['job_id'])
+        if lock is None:
+            lock=_site_lock(site['id'])
+            if not lock.acquire(blocking=False):
+                post_queue.put(job); return jsonify({'ok':True,'job':None})
+            _PC_SITE_LOCKS[job['job_id']]=lock
+        token=secrets.token_hex(24)
+        job['site']=site
+        leases[job['job_id']]={'state':'leased','node_id':node,'lease_token':token,'expires_at':time.time()+120,'job':job}
+        save_json(DATA_DIR/'pc_queue_leases.json',leases)
+        history_update(job['hist_id'],status='pc_leased',execution_node=node,executor='pc_queue',message='PC가 실제 큐 작업 수신')
+        keys=('id','site_url','bo_table','platform','permission','registration_source','write_test_status','verified_post_url','unattended_audit','writer_name','login_required','has_captcha','maintenance_hold','manual_review_only')
+        return jsonify({'ok':True,'job':{'job_id':job['job_id'],'lease_token':token,'site':{k:site.get(k) for k in keys},'title':job['title'],'content':job['content']}})
+
+@app.route('/api/pipeline/pc-queue/start',methods=['POST'])
+def api_pc_queue_start():
+    d=request.get_json(silent=True) or {}
+    with _PC_QUEUE_LOCK:
+        leases=load_json(DATA_DIR/'pc_queue_leases.json',{}); item=_pc_queue_authorized(leases,d)
+        if not item or item.get('state')!='leased' or item.get('expires_at',0)<time.time():
+            return jsonify({'ok':False,'error':'lease unavailable; do not submit'}),409
+        site=next((x for x in load_sites() if x.get('id')==item['job']['site']['id']),None)
+        if not site or not is_publishable(site) or not under_daily_limit(site,load_config()) or not under_min_interval(site)[0]:
+            return jsonify({'ok':False,'error':'publishing hold; do not submit'}),409
+        item['state']='submitting'; item['started_at']=datetime.now().isoformat(timespec='seconds')
+        save_json(DATA_DIR/'pc_queue_leases.json',leases)
+        history_update(item['job']['hist_id'],status='pc_posting',message='PC 제출 시작 승인; 재전송 금지')
+        return jsonify({'ok':True})
+
+def _pc_finalize(site,job_id,ok):
+    with POST_LOCK:
+        sites=load_sites()
+        for current in sites:
+            if current.get('id')!=site.get('id'): continue
+            if current.get('pc_last_finalized_job')==job_id: break
+            current['pc_last_finalized_job']=job_id
+            current['status']='done' if ok else 'failed'
+            if ok:
+                today=datetime.now().strftime('%Y-%m-%d')
+                if current.get('posted_date')!=today: current['posted_date']=today;current['posted_today']=0
+                current['posted_today']=int(current.get('posted_today',0))+1
+                current['last_post_at']=datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                current['fail_streak']=0
+            break
+        save_sites(sites)
+
+@app.route('/api/pipeline/pc-queue/report',methods=['POST'])
+def api_pc_queue_report():
+    import requests as rq
+    from form_schema import Parser
+    d=request.get_json(silent=True) or {}
+    with _PC_QUEUE_LOCK:
+        leases=load_json(DATA_DIR/'pc_queue_leases.json',{}); item=_pc_queue_authorized(leases,d)
+        if not item: return jsonify({'ok':False}),403
+        if item.get('state')=='finished': return jsonify({'ok':True,'already_recorded':True})
+        if item.get('state')!='submitting': return jsonify({'ok':False}),409
+        job=item['job']; site=job['site']; ok=False; url=str(d.get('result_url','')); message='PC 결과 검증 대기 — 재제출 금지'; receipt={}
+        try:
+            if d.get('ok') is not True: raise ValueError(str(d.get('message','PC 발행 중단'))[:180])
+            target=urllib.parse.urlsplit(url); origin=urllib.parse.urlsplit(site['site_url']); query=urllib.parse.parse_qs(target.query)
+            if target.scheme not in ('http','https') or target.netloc!=origin.netloc or query.get('bo_table')!=[str(site['bo_table'])] or not query.get('wr_id',[''])[0].isdigit(): raise ValueError('결과 URL 불일치')
+            response=rq.get(url,timeout=20); response.raise_for_status();response.encoding=response.apparent_encoding
+            if urllib.parse.urlsplit(response.url).netloc!=origin.netloc: raise ValueError('결과 호스트 변경')
+            parsed=Parser();parsed.feed(response.text);text=parsed.root.text()
+            parsed=Parser();parsed.feed(job['content']);expected=parsed.root.text()
+            if not expected or ' '.join(job['title'].split()) not in text or expected not in text: raise ValueError('제목·본문 결과 불일치')
+            receipt={'state':'verified','job_id':job['job_id'],'url':url,'title_match':True,'body_match':True,'body_sha256':hashlib.sha256(expected.encode()).hexdigest(),'checked_at':datetime.now().isoformat(timespec='seconds'),'executor':'pc_queue','node_id':d['node_id']}
+            ok=True;message='PC 실제 큐 발행 및 서버 제목·본문 검증 완료'
+        except Exception as exc:
+            message='PC 발행 보류 — '+str(exc)[:200]
+        # Finish receipt before releasing the durable lease; uncertain submissions are never requeued.
+        history_update(job['hist_id'],status='done' if ok else 'failed',result_url=url if ok else '',message=message,verification_receipt=receipt,execution_node=d['node_id'],executor='pc_queue')
+        if ok:
+            set_site_flag(site['id'],unattended_result=receipt)
+        else:
+            set_site_flag(site['id'],unattended_audit={'state':'result_review','checked_at':datetime.now().isoformat(timespec='seconds')})
+        _pc_finalize(site,job['job_id'],ok)
+        item['state']='finished';item['ok']=ok;item.pop('job',None)
+        save_json(DATA_DIR/'pc_queue_leases.json',leases)
+        _persist_remove(job['job_id'])
+        lock=_PC_SITE_LOCKS.pop(job['job_id'],None)
+        if lock:
+            try:lock.release()
+            except RuntimeError:pass
+        _node_beat(d['node_id'],action='PC 큐 검증 완료' if ok else 'PC 큐 결과 보류',publish=1 if ok else 0)
+        return jsonify({'ok':True,'verified':ok,'result_url':url if ok else ''})
 
 @app.route('/api/pipeline/claim-sites',methods=['POST'])
 def api_pipeline_claim_sites():
