@@ -3395,14 +3395,16 @@ def get_driver(remote=False):
         #   만료/자체서명 SSL이라 크롬이 'NET::ERR_CERT_AUTHORITY_INVALID' 경고 화면에서 멈춰 폼 자체를
         #   못 봤음(자동가입 '비밀번호 칸 도달 실패'의 실제 원인). 발행 대상 사이트는 우리가 거래하는 게 아니라
         #   글만 쓰면 되므로 인증서 경고를 넘어 진행한다(지문 위조 아님, 접근성 옵션).
-        opts.add_argument('--ignore-certificate-errors')
-        opts.set_capability('acceptInsecureCerts',True)
+        if not getattr(threading.current_thread(),'_manual_review_browser',False):
+            opts.add_argument('--ignore-certificate-errors')
+            opts.set_capability('acceptInsecureCerts',True)
         cb=os.environ.get('CHROME_BIN')  # 리눅스 VPS: chromium 경로 지정 가능
         if cb: opts.binary_location=cb
         # ★스레드별 독립 프로파일(WinError5·프로파일잠금 방지): 동시 크롬이 같은 기본 프로파일을 공유하면 충돌.
         try:
             import tempfile
             _udd=os.path.join(tempfile.gettempdir(),f'chr_{re.sub(r"[^A-Za-z0-9]","_",tid)}')
+            if getattr(threading.current_thread(),'_manual_review_browser',False): _udd += '_review_'+uuid.uuid4().hex[:12]
             opts.add_argument('--user-data-dir='+_udd)
         except Exception: pass
         svc=Service(_get_driver_path())   # 캐시된 driver 경로(동시 install 충돌 방지)
@@ -6720,7 +6722,10 @@ def _do_publish_job(job,site,cfg,name,job_id,hid):
         """한 발행 잡을 실제 처리(한도·간격 확인 → 발행 → 재시도/기록). 사이트별 락 안에서 호출됨."""
         site=dict(site); site['_maintenance_job_id']=job_id; site['_maintenance_history_id']=hid
         site['_manual_review_job']=bool(job.get('manual_verification_test'))
-        if site['_manual_review_job']: site.pop('cooldown_until',None)  # one requested diagnostic test; retain real daily/minimum posting limits
+        if site['_manual_review_job']:
+            site.pop('cooldown_until',None)
+            threading.current_thread()._manual_review_browser=True
+            reset_driver()  # one requested diagnostic test; retain real daily/minimum posting limits
         title=job['title']; content=job['content']
         # 1일 한도 확인 (도배 방지)
         if not under_daily_limit(site,cfg):
@@ -12230,11 +12235,19 @@ def api_post():
     if manual_test:
         if len(ids)!=1 or not title.startswith('[테스트]') or not content:
             return jsonify({'ok':False,'error':'단일 사이트 기능 테스트만 허용'}),400
+        guest_measured=False
+        candidate=next((x for x in load_sites() if x.get('id') in ids),None)
+        if candidate and candidate.get('permission') and not candidate.get('mb_id') and not candidate.get('maintenance_hold'):
+            try:
+                profile=_read_form_schema(candidate,'write')
+                guest_measured=profile.get('state')=='measured' and 'login' not in str(profile.get('source_url','')).lower()
+            except Exception: pass
         with POST_LOCK:
             all_sites=load_sites()
             for item in all_sites:
                 if item.get('id') in ids and item.get('permission') and not item.get('maintenance_hold'):
                     item['manual_review_only']=True
+                    if guest_measured: item['login_required']=False
             save_sites(all_sites)
     meta={'region':region,'service':service,'manual_verification_test':manual_test}
     sites=[s for s in load_sites() if s.get('id') in ids]
