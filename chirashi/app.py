@@ -3931,6 +3931,8 @@ def gnuboard_post_http(site, title, content_html):
     # 링크 필드(있으면 영상/랜딩)
     if re.search(r'name=["\']wr_link1["\']',html,re.I):
         data['wr_link1']=(cfg.get('video_url') or cfg.get('landing_url') or '').strip()
+    if site.get('_unattended_job') and title.startswith('[테스트]'):
+        data.update(wr_name='게시 기능 테스트',wr_email='',wr_homepage='',wr_link1='')
     # ── 캡차 ──
     capm=re.search(r'g5_captcha_url\s*=\s*["\']([^"\']+)["\']',html)
     needs_cap=human_challenge_present(html)
