@@ -13,8 +13,8 @@ class ReadOnlyAuditTest(unittest.TestCase):
         tree=ast.parse(Path(__file__).with_name('app.py').read_text(encoding='utf-8'))
         fn=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='gnuboard_post_http')
         calls=[]
-        html='<form action="write_update.php"><input name="wr_subject"><input name="captcha_key"></form>'
-        session=types.SimpleNamespace(headers={},get=lambda *a,**kw:(calls.append('GET') or types.SimpleNamespace(status_code=200,text=html)),post=lambda *a,**kw:self.fail('No submission allowed'))
+        html='<form action="write_update.php"><input name="wr_subject"><input name="captcha_key"><textarea name="wr_content"></textarea></form>'
+        session=types.SimpleNamespace(headers={},get=lambda *a,**kw:(calls.append('GET') or types.SimpleNamespace(status_code=200,text=html,url="http://approved.example/bbs/write.php")),post=lambda *a,**kw:self.fail('No submission allowed'))
         fake=types.ModuleType('requests');fake.Session=lambda:session
         env={'re':re,'load_config':lambda:{},'_HTTP_UA':'test','_pick_writer':lambda s:'Test','_post_password':lambda c:'test',
              '_brand_email':lambda *a:'','_strip_non_bmp':lambda s:s,'_ocr_available':lambda:False}

@@ -3887,7 +3887,8 @@ def gnuboard_post_http(site, title, content_html):
         return None,f'폼 GET {r.status_code} — 폴백'
     html=r.text or ''
     from form_schema import measure_html
-    if measure_html(html,bbs+'/write.php','write')['state']=='access_denied':
+    measured=measure_html(html,r.url,'write')
+    if measured['state']=='access_denied':
         return False,'보안 차단 — 접근 불가 응답, 사이트 관리자 확인 필요'
     from form_schema import human_challenge_present
     if site.get('_unattended_job'):
@@ -3897,13 +3898,18 @@ def gnuboard_post_http(site, title, content_html):
             return False,'사람 확인 또는 글쓰기 양식 변경 감지'
     low=html.lower()
     # 로그인 게이트/회원전용이면 폴백(비회원 글쓰기 폼이 아님)
-    if ('mb_password' in low and 'login' in low and 'wr_subject' not in low) or ('name="wr_subject"' not in low):
+    if ('mb_password' in low and 'login' in low and 'wr_subject' not in low) or measured['state']!='measured':
         return None,'비회원 글쓰기 폼 아님 — 폴백'
     # 폼의 write_update 액션 확인
     if 'write_update.php' not in low:
         return None,'write_update 액션 없음 — 폴백'
     # ── 폼 필드 수집 ──
+    from form_schema import Parser
+    parsed=Parser(); parsed.feed(html); parsed.close()
     def _hidden(name,default=''):
+        for node in parsed.nodes:
+            if node.tag=='input' and node.attrs.get('name')==name:
+                return node.attrs.get('value',default)
         mm=re.search(r'<input[^>]*name=["\']'+re.escape(name)+r'["\'][^>]*value=["\']([^"\']*)["\']',html,re.I)
         if mm: return mm.group(1)
         mm=re.search(r'<input[^>]*value=["\']([^"\']*)["\'][^>]*name=["\']'+re.escape(name)+r'["\']',html,re.I)

@@ -116,3 +116,28 @@ class UnattendedTests(unittest.TestCase):
         with patch.dict(sys.modules,requests=SimpleNamespace(Session=Session)):
             ok,message=env['gnuboard_post_http']({'id':'test','site_url':'https://example.com','bo_table':'free','_unattended_job':True},'title','body')
         self.assertFalse(ok)
+
+
+class LegacyGuestFormTest(unittest.TestCase):
+    def test_unquoted_fields_and_hidden_token_submit_once(self):
+        from types import SimpleNamespace
+        import sys, re, urllib.parse
+        from unittest.mock import patch
+        tree=ast.parse(Path(__file__).with_name('app.py').read_text(encoding='utf-8'))
+        fn=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='gnuboard_post_http')
+        calls=[]
+        class Session:
+            headers={}
+            def get(self,*a,**k):
+                return SimpleNamespace(status_code=200,url='https://example.com/bbs/write.php?bo_table=free',text='<form action=write_update.php><input name=uid value=trusted-token><input name=wr_subject><textarea name=wr_content></textarea></form><script src="jquery.kcaptcha.js"></script>')
+            def post(self,*a,**k):
+                calls.append(k)
+                return SimpleNamespace(url='https://example.com/bbs/board.php?bo_table=free&wr_id=123',text='posted')
+        env={'load_config':lambda:{},'re':re,'urllib':__import__('urllib'),'_HTTP_UA':'test','_pick_writer':lambda s:'test','_post_password':lambda c:'test','_brand_email':lambda *a:'','_strip_non_bmp':lambda s:s}
+        exec(compile(ast.Module(body=[fn],type_ignores=[]),'http-test','exec'),env)
+        with patch.dict(sys.modules,requests=SimpleNamespace(Session=Session)):
+            ok,result=env['gnuboard_post_http']({'site_url':'https://example.com','bo_table':'free','_unattended_job':True},'test','body')
+        self.assertTrue(ok)
+        self.assertEqual(len(calls),1)
+        self.assertTrue(calls[0]['verify'])
+        self.assertEqual(calls[0]['data']['uid'],'trusted-token')
