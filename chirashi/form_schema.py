@@ -164,6 +164,8 @@ def human_challenge_present(markup):
     for node in parser.nodes:
         attrs=node.attrs
         marker=' '.join(str(attrs.get(k,'')) for k in ('name','id','class','src'))
+        if 'data-sitekey' in attrs or (node.tag=='script' and re.search(r'recaptcha|hcaptcha|turnstile',marker,re.I)):
+            return True
         if node.tag in {'input','textarea','img','iframe','div','span'} and re.search(r'captcha|turnstile|veritas-hub|(?:^|\s)wr_key(?:\s|$)',marker,re.I):
             if 'disabled' not in attrs:
                 return True

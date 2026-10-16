@@ -5,7 +5,7 @@ import urllib.request
 from collections import Counter
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from cafe24_gate import publishing_block
+from cafe24_gate import publishing_block, unattended_block
 
 
 def snapshot(base):
@@ -20,7 +20,7 @@ def snapshot(base):
     today_status = Counter(str(x.get('status', 'unknown')) for x in history if str(x.get('time', '')).startswith(today))
     ready = sum(bool(s.get('permission') and s.get('status') != 'rejected'
                      and s.get('write_test_status') == 'passed' and s.get('verified_post_url')
-                     and not publishing_block(s)) for s in sites)
+                     and not publishing_block(s) and not unattended_block(s)) for s in sites)
     guard = json.loads((base / 'hub_guard.json').read_text()) if (base / 'hub_guard.json').exists() else {}
     maintenance = json.loads((base / 'hub_maintenance.json').read_text()) if (base / 'hub_maintenance.json').exists() else {}
     import urllib.parse

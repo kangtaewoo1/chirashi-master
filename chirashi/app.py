@@ -12296,6 +12296,9 @@ def api_unattended_audit():
     ids=(request.get_json(silent=True) or {}).get('site_ids',[])
     if not isinstance(ids,list) or not 1<=len(ids)<=50:
         return jsonify({'ok':False,'error':'1~50개 사이트 ID 필요'}),400
+    activate=(request.get_json(silent=True) or {}).get('activate') is True
+    if activate and len(ids)!=1:
+        return jsonify({'ok':False,'error':'단일 사이트 검증 후 연결 필요'}),400
     records=[]
     for site in [s for s in load_sites() if s.get('id') in ids and is_permitted(s)]:
         state='adapter_review'; fingerprint=''
@@ -12311,8 +12314,12 @@ def api_unattended_audit():
                 state=('ready' if same_origin and schema['state']=='measured' and not human_challenge_present(response.text) else 'human_or_form_review')
         except Exception:
             state='connection_review'
+        if state=='ready' and not activate: state='eligible'
         audit={'state':state,'fingerprint':fingerprint,'checked_at':datetime.now().isoformat(timespec='seconds')}
-        set_site_flag(site.get('id'),unattended_audit=audit)
+        if state=='ready':
+            set_site_flag(site.get('id'),daily_limit=1,min_interval_minutes=1440,unattended_audit=audit)
+        else:
+            set_site_flag(site.get('id'),unattended_audit=audit)
         records.append({'site_id':site.get('id'),**audit})
     return jsonify({'ok':True,'sites':records})
 
@@ -12515,7 +12522,7 @@ def _site_is_pub(s):
     return bool(s.get('permission') and s.get('registration_source') in _adm
                 and s.get('status')!='rejected' and s.get('write_test_status')=='passed'
                 and re.match(r'^https?://', str(s.get('verified_post_url') or ''))
-                and not publishing_block(s))
+                and not publishing_block(s) and not unattended_block(s))
 
 @app.route('/api/site-board',methods=['GET'])
 def api_site_board():
@@ -12536,7 +12543,7 @@ def api_site_board():
                      'url':s.get('site_url'),'platform':s.get('platform'),'bo_table':s.get('bo_table'),
                      'state':state,'status':s.get('status'),'posted_today':s.get('posted_today',0),
                      'signup_status':s.get('signup_status'),'login_saved':bool(s.get('mb_pass') or s.get('mb_pass_enc')),
-                     'block':publishing_block(s) or s.get('technical_block_reason') or s.get('verification_fail_reason') or ''})
+                     'block':publishing_block(s) or unattended_block(s) or s.get('technical_block_reason') or s.get('verification_fail_reason') or ''})
     # 2) 후보 — 사이트에 없는 도메인만(중복 제거). approved인데 사이트에 없으면 등록대기로.
     for c in cands:
         dom=c.get('domain') or _domain_of(c.get('url') or '')
