@@ -152,3 +152,13 @@ class ServerQueueOnlyTest(unittest.TestCase):
         env={'jsonify':lambda value:value}
         exec(compile(ast.Module(body=[fn],type_ignores=[]),'claim-test','exec'),env)
         self.assertEqual(env['api_pipeline_claim_sites']()['sites'],[])
+
+
+class ExplicitAuditHoldTest(unittest.TestCase):
+    def test_historical_success_cannot_override_current_hold_or_uncertain_submission(self):
+        from cafe24_gate import unattended_block
+        legacy={'platform':'gnuboard','write_test_status':'passed','verified_post_url':'https://example.com/bbs/board.php?bo_table=free&wr_id=42'}
+        self.assertEqual(unattended_block(legacy),'')
+        for state in ('human_or_form_review','connection_review','result_review','eligible'):
+            self.assertTrue(unattended_block(dict(legacy,unattended_audit={'state':state})),state)
+        self.assertEqual(unattended_block(dict(legacy,unattended_audit={'state':'ready'})),'')

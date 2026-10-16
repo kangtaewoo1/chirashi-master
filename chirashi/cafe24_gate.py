@@ -95,6 +95,9 @@ def unattended_block(site):
         return 'human_verification_required'
     if site.get('platform') != 'gnuboard' or site.get('login_required') or site.get('mb_id'):
         return 'unattended_adapter_unverified'
+    audit_state=(site.get('unattended_audit') or {}).get('state')
+    if audit_state and audit_state!='ready':
+        return 'unattended_'+str(audit_state)
     # ★회귀 수정(2026-10-17 대표님 '뭔가 잘못되고 있음' 실측): 339f4dc가 '감사(unattended_audit) 통과 보드만 무인
     #   발행'으로 바꾸자, unattended_audit 필드가 없던 기존 검증 완료 발행처 전부가 'unattended_audit_required'로
     #   막혀 22:23부터 발행 0건(서버 publishable 2). → 실게시로 검증 완료(verified_post_url + write_test_status=passed)된
