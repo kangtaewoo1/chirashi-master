@@ -569,6 +569,7 @@ def load_config():
        'publish_loop_enabled':True,'publish_interval_sec':300,   # 24시간 상시발행 루프(5분 주기 큐 보충)
        'workroom_workers':6,   # ★2026-09-15 대표님 '사이트간 최대한 병렬': 4→6(서버 메모리 mem_cap≈15 내). 작업실 동시 처리 슬롯.
        'strict_screen':True,   # ★빡센 검수(대표님 지시): 홍보글 흔적 있는 방치·개방 게시판만 ready 통과
+       'unattended_gate_enabled':True,   # ★무인 발행 감사 게이트(2026-10-17). False면 실게시 검증된 사이트는 감사차단 무시하고 발행(대표님만 변경 가능 — 자율AI 수정과 분리).
        'signup_parallel':4,   # ★자동가입 전담 병렬 수(대표님 지시). 후보들을 동시에 가입 시도. 전역 크롬상한 내에서.
 
        'publish_fanout':8,   # ★한 조합을 발행가능 사이트들에 '동시에' 뿌리는 병렬 크롬 수(대표님 '최대한 병렬'). 4→8. 1=순차
@@ -671,6 +672,15 @@ def load_config():
     if not c.get('node_publish_all_on_v5'):
         c['node_publish_all']=True
         c['node_publish_all_on_v5']=True
+        try: save_json(CONFIG_FILE,c)
+        except Exception: pass
+    # ★1회 마이그레이션(2026-10-17 대표님 '게이트 자체를 꺼' 결정): 무인 발행 감사 게이트(unattended_block)를 끈다.
+    #   어제 22:14~ 자율 유지보수가 추가한 게이트가 발행 실패마다 찍히는 일시상태(result_review·human_or_form_review)로
+    #   기존 검증 완료 발행처를 영구 차단 → 22:23부터 발행 0건. 코드 수정은 자율AI가 계속 되돌려, 설정값으로 끈다.
+    #   is_autopostable가 이 플래그를 보고 verified 사이트는 게이트를 건너뜀(config는 자율AI가 안 건드림).
+    if not c.get('unattended_gate_off_v1'):
+        c['unattended_gate_enabled']=False
+        c['unattended_gate_off_v1']=True
         try: save_json(CONFIG_FILE,c)
         except Exception: pass
     # 1회 마이그레이션: sbr_country='kr' 제거 — endpoint customer name 깨서 'Wrong customer name'
@@ -6899,7 +6909,17 @@ def is_permitted(site):
 def is_autopostable(site):
     """자동발행 대상 = 허용 + 실제 게시 성공 URL 검증 완료.
        사람 확인 없는 양식 실측을 통과한 사이트만 무인 큐에 허용."""
-    if publishing_block(site) or unattended_block(site):
+    # ★감사 게이트 설정 스위치(2026-10-17 대표님 '게이트 자체를 꺼' 결정): unattended_audit 게이트가
+    #   발행 실패마다 찍히는 일시 상태(result_review·human_or_form_review)로 기존 검증 완료 발행처를 영구 차단해
+    #   22:23부터 발행 0건. 서버 자율 유지보수가 게이트 코드를 계속 조여 코드 수정이 되돌려짐. → config
+    #   unattended_gate_enabled=False(대표님만 설정 변경 가능, 자율AI가 못 건드림)이면, 실게시 검증 완료
+    #   (verified_post_url+passed) 사이트는 unattended_block(감사 차단)을 통과시킨다. publishing_block(cafe24
+    #   계정·캡차)과 로그인·캡차·데모 제외는 그대로 적용. 미검증 신규 보드는 영향 없음(아래에서 verified만 허용).
+    _gate_on=bool(load_config().get('unattended_gate_enabled',True))
+    _verified=str(site.get('verified_post_url') or '').startswith(('http://','https://')) and site.get('write_test_status')=='passed'
+    if publishing_block(site):
+        return False
+    if (_gate_on or not _verified) and unattended_block(site):
         return False
     verified_url=str(site.get('verified_post_url') or '')
     # 로그인 필요 사이트인데 로그인 정보(mb_id)가 없으면 발행 제외 — 가입 미완료 사이트가
