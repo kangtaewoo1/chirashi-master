@@ -142,3 +142,13 @@ class LegacyGuestFormTest(unittest.TestCase):
         self.assertTrue(calls[0]['verify'])
         self.assertIn(b'uid=trusted-token',calls[0]['data'])
         self.assertIn(urllib.parse.quote('기능확인',encoding='cp949').encode('ascii'),calls[0]['data'])
+
+
+class ServerQueueOnlyTest(unittest.TestCase):
+    def test_legacy_node_claim_cannot_bypass_unattended_gate_or_hold_site_lock(self):
+        tree=ast.parse(Path(__file__).with_name('app.py').read_text(encoding='utf-8'))
+        fn=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='api_pipeline_claim_sites')
+        fn.decorator_list=[]
+        env={'jsonify':lambda value:value}
+        exec(compile(ast.Module(body=[fn],type_ignores=[]),'claim-test','exec'),env)
+        self.assertEqual(env['api_pipeline_claim_sites']()['sites'],[])
