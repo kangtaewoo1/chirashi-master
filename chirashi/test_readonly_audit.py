@@ -75,3 +75,24 @@ class ReadOnlyAuditTest(unittest.TestCase):
 
 if __name__=='__main__': unittest.main()
 
+
+
+class AuditSettingsPreservationTest(unittest.TestCase):
+    def test_reactivation_does_not_replace_site_posting_limits(self):
+        import datetime
+        tree=ast.parse(Path(__file__).with_name('app.py').read_text(encoding='utf-8'))
+        fn=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='api_unattended_audit')
+        fn.decorator_list=[];updates=[]
+        site={'id':'site','platform':'gnuboard','site_url':'https://approved.example','bo_table':'free','daily_limit':37,'min_interval_minutes':17}
+        env={'request':types.SimpleNamespace(get_json=lambda **k:{'site_ids':['site'],'activate':True}),
+             'jsonify':lambda x:x,'load_sites':lambda:[site],'is_permitted':lambda s:True,'publishing_block':lambda s:'',
+             '_signup_origin':lambda s:'https://approved.example','urllib':__import__('urllib'),'measure_html':measure_html,
+             'set_site_flag':lambda sid,**kw:updates.append(kw),'datetime':datetime.datetime}
+        response=types.SimpleNamespace(raise_for_status=lambda:None,apparent_encoding='utf-8',url='https://approved.example/bbs/write.php',text='<form><input name="wr_subject"><textarea name="wr_content"></textarea></form>')
+        exec(compile(ast.Module(body=[fn],type_ignores=[]),'audit-test','exec'),env)
+        with patch.dict(sys.modules,requests=types.SimpleNamespace(get=lambda *a,**k:response)):
+            result=env['api_unattended_audit']()
+        self.assertTrue(result['ok'])
+        self.assertEqual(updates[0]['unattended_audit']['state'],'ready')
+        self.assertNotIn('daily_limit',updates[0])
+        self.assertNotIn('min_interval_minutes',updates[0])

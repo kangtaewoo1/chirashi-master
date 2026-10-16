@@ -465,7 +465,11 @@ def _read_form_schema(site,kind):
         url=site.get('write_url') or base+('/board/product/write.html?board_no='+board if platform=='cafe24' else '/bbs/write.php?bo_table='+board)
     if urllib.parse.urlsplit(url).netloc.lower()!=urllib.parse.urlsplit(base).netloc.lower():
         raise ValueError('폼 측정 URL이 등록 사이트와 다릅니다')
-    response=rq.get(url,timeout=20,headers={'User-Agent':'Mozilla/5.0 (read-only form audit)'})
+    try:
+        response=rq.get(url,timeout=20,headers={'User-Agent':'Mozilla/5.0 (read-only form audit)'})
+    except rq.exceptions.SSLError as exc:
+        from form_schema import connection_error_state
+        raise RuntimeError(connection_error_state(exc)) from None
     if response.status_code>=400: raise RuntimeError('사이트 접속 응답 HTTP '+str(response.status_code))
     if 'charset=' not in response.headers.get('Content-Type','').lower():
         match=re.search(r'charset=["\']?\s*([\w-]+)',response.content[:4096].decode('ascii','ignore'),re.I)
@@ -12319,7 +12323,7 @@ def api_unattended_verify():
         if not expected or row['title'] not in text or expected not in text: raise ValueError('제목 또는 본문 불일치')
         stamp=datetime.now().isoformat(timespec='seconds')
         history_update(row['id'],status='done',result_url=url,message='기존 게시글 조회 검증 완료 (재발행 없음)',fail_reason='',fail_reason_ko='',verification_recovered_at=stamp)
-        set_site_flag(site['id'],status='done',fail_streak=0,unattended_result={'state':'verified','url':url,'checked_at':stamp},unattended_audit={'state':'ready','checked_at':stamp},daily_limit=1,min_interval_minutes=1440)
+        set_site_flag(site['id'],status='done',fail_streak=0,unattended_result={'state':'verified','url':url,'checked_at':stamp},unattended_audit={'state':'ready','checked_at':stamp})
         return jsonify({'ok':True,'result_url':url})
     except Exception as exc:
         return jsonify({'ok':False,'error':str(exc)[:100]}),400
@@ -12352,7 +12356,7 @@ def api_unattended_audit():
         if state=='ready' and not activate: state='eligible'
         audit={'state':state,'fingerprint':fingerprint,'checked_at':datetime.now().isoformat(timespec='seconds')}
         if state=='ready':
-            set_site_flag(site.get('id'),daily_limit=1,min_interval_minutes=1440,unattended_audit=audit)
+            set_site_flag(site.get('id'),unattended_audit=audit)
         else:
             set_site_flag(site.get('id'),unattended_audit=audit)
         records.append({'site_id':site.get('id'),**audit})
