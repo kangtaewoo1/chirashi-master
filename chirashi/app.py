@@ -6236,7 +6236,20 @@ def do_post(site, title, content_html, skip_login=False):
         return False,'게시 권한 없음 — 수동 검증 전용 사이트, 자동 발행 보류'
     if site.get('maintenance_hold'):
         return False,'게시 권한 없음 — 관리자 발행 보류'
-    if not site.get('_manual_review_job'):
+    # ★게이트 설정 스위치 + 기존 안정경로 우회(2026-10-17 '게이트 꺼' / 10-18 '이 PC에서 잘 돌게' 실측):
+    #   자율AI가 추가한 '무인 발행 전용 엄격경로'(HTTP 선발행+엄격 결과검증)가 조금만 안 맞으면 '재제출 금지'로
+    #   실패하고 result_review를 찍어 악순환 → 발행 0건. config unattended_gate_enabled=False이고 실게시 검증 완료
+    #   (verified_post_url+passed, publishing_block 아님)인 사이트는 이 엄격경로를 통째로 건너뛰고 아래 기존 안정
+    #   경로(학습레시피→gnuboard_post, 어제까지 잘 되던 경로)로 발행한다. 그 외는 기존 게이트/엄격경로 유지.
+    _gate_off_verified=False
+    try:
+        if (not bool(load_config().get('unattended_gate_enabled',True))
+                and str(site.get('verified_post_url') or '').startswith(('http://','https://'))
+                and site.get('write_test_status')=='passed'
+                and not publishing_block(site)):
+            _gate_off_verified=True
+    except Exception: pass
+    if not site.get('_manual_review_job') and not _gate_off_verified:
         if publishing_block(site) or unattended_block(site):
             return False,'무인 발행 보류 — 사람 확인 없는 양식 검증 필요'
         ok,result=gnuboard_post_http(dict(site, _unattended_job=True),title,content_html)
