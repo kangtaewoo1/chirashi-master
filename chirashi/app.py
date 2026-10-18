@@ -3957,7 +3957,14 @@ def gnuboard_post_http(site, title, content_html):
     # ── 캡차 ──
     capm=re.search(r'g5_captcha_url\s*=\s*["\']([^"\']+)["\']',html)
     needs_cap=human_challenge_present(html)
-    if needs_cap:
+    # ★kcaptcha는 자동 OCR로 풀므로 '사람 확인 제외'에서 뺀다(2026-10-18 대표님 '서버 워커 깔끔하게' 실측:
+    #   자율AI가 human_challenge_present True면 무조건 return False로 막아, 전용 OCR로 풀 수 있는 그누보드 kcaptcha
+    #   55건이 '사람 확인 필요'로 전부 버려짐). 진짜 사람 확인(recaptcha·turnstile·hcaptcha·veritas-hub·'사람인지
+    #   확인')만 제외하고, kcaptcha(g5_captcha_url 또는 그 외 captcha 마크업)는 아래 _fetch_captcha_answer OCR 경로로
+    #   내려보낸다(OCR 실패 시 None→셀레늄·노드 위임, 기존 설계대로).
+    _low=html.lower()
+    _hard_human=bool(re.search(r'recaptcha|hcaptcha|h-captcha|turnstile|veritas-hub|사람인지\s*확인|간단한\s*확인이\s*필요|data-sitekey',_low))
+    if needs_cap and _hard_human:
         return False,'사람 확인 필요 — 자동 풀이 및 제출 제외'
     # ★OCR 복원(2026-10-16 대표님 '캡차는 전용 OCR로 먼저'): 10-13 5507c9a가 캡차 보드를 무조건 None(사람 입력 워커로 전환)으로
     #   넘겨 HTTP 경로의 전용모델 OCR(아래 _fetch_captcha_answer)이 전혀 안 쓰였음 → 아래 흐름 그대로 진행(OCR 실패 시 None→셀레늄).
