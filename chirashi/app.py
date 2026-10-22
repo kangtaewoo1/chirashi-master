@@ -6268,15 +6268,15 @@ def do_post(site, title, content_html, skip_login=False):
     #   실패하고 result_review를 찍어 악순환 → 발행 0건. config unattended_gate_enabled=False이고 실게시 검증 완료
     #   (verified_post_url+passed, publishing_block 아님)인 사이트는 이 엄격경로를 통째로 건너뛰고 아래 기존 안정
     #   경로(학습레시피→gnuboard_post, 어제까지 잘 되던 경로)로 발행한다. 그 외는 기존 게이트/엄격경로 유지.
-    _gate_off_verified=False
-    try:
-        if (not bool(load_config().get('unattended_gate_enabled',True))
-                and str(site.get('verified_post_url') or '').startswith(('http://','https://'))
-                and site.get('write_test_status')=='passed'
-                and not publishing_block(site)):
-            _gate_off_verified=True
-    except Exception: pass
-    if not site.get('_manual_review_job') and not _gate_off_verified:
+    # ★게이트 OFF면 unattended_block(자율AI 감사 게이트) 전체 무시(2026-10-23 대표님 '전처럼 가입·캡차·승격 다 해'):
+    #   게이트를 config로 끈다는 건 '그 감사 차단을 안 쓴다'는 뜻. 노드 승격(auto_signup→do_post 발행테스트)은 미검증
+    #   신규 후보로 실제 발행을 해봐야 승격되는데, 게이트가 verified 아닌 후보를 막아 승격이 전멸했음(ready 612 적체).
+    #   게이트 OFF면 publishing_block(cafe24 계정·캡차 등 진짜 차단)만 보고, unattended_block은 건너뛴다.
+    #   게이트 ON(기본)이면 기존 동작 유지(자율AI 방식). 노드는 로컬 크롬·OCR로 실제 양식을 돌리므로 '무인 양식 검증' 불필요.
+    try: _gate_on=bool(load_config().get('unattended_gate_enabled',True))
+    except Exception: _gate_on=True
+    # 게이트 OFF면 자율AI 엄격경로(_unattended_job)를 통째로 건너뛰고 아래 기존 안정경로로 발행(노드 승격 포함).
+    if not site.get('_manual_review_job') and _gate_on:
         if publishing_block(site) or unattended_block(site):
             return False,'무인 발행 보류 — 사람 확인 없는 양식 검증 필요'
         ok,result=gnuboard_post_http(dict(site, _unattended_job=True),title,content_html)
