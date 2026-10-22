@@ -524,6 +524,7 @@ def learn_signup_profile(site,force=False):
                      'signup_email_verification':bool(profile.get('email_verification_required'))})
         return profile
 
+_CFG_CACHE=None   # (mtime_key, read_ts, parsed_dict) — load_config 디스크읽기 캐시(TTL 0.8s, save_config가 무효화)
 def load_config():
     d={'brand':'인천홍마니','phone':'01082755736','phones':'','openai_key':'','model':'gpt-4o-mini',
        'openai_admin_key':'','openai_monthly_budget_usd':20.0,
@@ -598,7 +599,23 @@ def load_config():
        #   설정 시 모든 자동가입에 이 아이디/비번 사용(대표님이 관리·중복ID 감소).
        'signup_fixed_id':'','signup_fixed_pw':'',
        'log_token':'cae3aaa53d6f3576a1c1f6a258f79129'}   # 읽기전용 로그 조회 토큰(?token= 로 /api/logs·/api/worker-log 접근)
-    c=load_json(CONFIG_FILE,None)
+    # ★config 파일읽기 캐시(2026-10-23 대표님 '사이트 느려짐' 실측: /api/worker-log 49초): is_autopostable 등이
+    #   사이트마다 load_config()를 불러 worker-log가 121회+ 디스크 읽기+JSON파싱 → 느림. 파일 mtime이 같으면
+    #   0.8초 내 재읽기는 캐시된 파싱본을 재사용(save_config가 파일을 바꾸면 mtime 달라져 자동 무효화). 반환은 복사본.
+    global _CFG_CACHE
+    c=None
+    try:
+        _st=os.stat(CONFIG_FILE); _key=(_st.st_mtime_ns,_st.st_size); _nowm=time.time()
+        _cc=_CFG_CACHE
+        if _cc and _cc[0]==_key and (_nowm-_cc[1])<0.8:
+            c=_cc[2]
+    except Exception:
+        _key=None
+    if c is None:
+        c=load_json(CONFIG_FILE,None)
+        try:
+            if _key is not None and isinstance(c,dict): _CFG_CACHE=(_key,time.time(),c)
+        except Exception: pass
     if c is None or not isinstance(c,dict): save_json(CONFIG_FILE,d); return d.copy()
     for k,v in d.items():
         if k not in c: c[k]=v
@@ -863,7 +880,10 @@ def _twocaptcha_usage_summary(cfg):
     except Exception as e:
         return {'ok':False,'disabled':False,'error':str(e)[:180],'currency':'USD','balance':0.0,'remaining_usd':0.0,'charged_since_last_check_usd':0.0,'updated_at':None}
 
-def save_config(c): save_json(CONFIG_FILE,c)
+def save_config(c):
+    global _CFG_CACHE
+    _CFG_CACHE=None   # 저장 즉시 캐시 무효화(다음 load_config가 새 파일 읽음)
+    save_json(CONFIG_FILE,c)
 def _log_category(msg):
     """로그 메시지 앞부분으로 작업 종류를 자동 분류(워커 실행로그 탭 필터용).
     기존 add_log 호출을 안 고쳐도 [발굴]/[검수]/[가입]/[발행] 프리픽스로 자동 분류된다."""
