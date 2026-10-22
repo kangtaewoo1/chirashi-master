@@ -801,10 +801,19 @@ if __name__ == "__main__":
     a = ap.parse_args()
     if a.headful:
         os.environ["CHIRASHI_HEADFUL"] = "1"   # app.get_driver가 이 값을 보고 headless를 끈다(드라이버 생성 전에 설정)
+    # ★노드 실행 모드(2026-10-23 대표님 '전처럼 발굴→가입→캡차→승격 다 해' 실측): 자율 유지보수가 노드 진입점을
+    #   pc_queue.run(가입·캡차 없음, 'No signup or challenge solver')으로 바꿔 등록 사이트 비회원 발행만 하고
+    #   ready 후보 승격(자동가입·캡차풀이)이 전부 멈췄음. 환경변수 PC_NODE_MODE로 선택:
+    #     full(기본) = pc_node.run — 등록 사이트 발행 + 미등록 후보 claim→자동가입→캡차→발행테스트→승격(예전 방식).
+    #     queue      = pc_queue.run — 서버 리뷰 큐만(자율AI 새 방식, 가입·캡차 없음).
+    #   full이어도 서버가 claim으로 ready 후보를 내려줘야 승격함(서버 node_publish_all·claim 조건은 서버쪽 별도 수정).
+    _mode=os.environ.get('PC_NODE_MODE','full').strip().lower()
     if a.cafe24_inspect:
         cafe24_inspect(a.cafe24_inspect)
     elif a.cafe24_test:
         cafe24_test(a.cafe24_test, mb_id=a.mb_id, mb_pass=a.mb_pass)
-    else:
+    elif _mode=='queue':
         from pc_queue import run as run_queue
         run_queue(once=a.once,idle=min(a.idle,10))
+    else:
+        run(once=a.once, workers=a.workers, idle=a.idle)
