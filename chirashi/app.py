@@ -2621,9 +2621,48 @@ def _ocr_install_diag():
     except Exception as e:
         return False,f'pip 실행 예외: {str(e)[:120]} | import초기오류:{_imp_err}'
 
+def _extract_colored_glyphs(image_bytes):
+    """★색상구분 캡차(2026-10-23 대표님 실측 '빨간글자만 순서대로'): 전체 글자 중 '빨간 글자'만
+       남긴 이미지(PNG bytes)를 반환. 색상 구분 캡차가 아니면 None(기존 OCR 그대로).
+       판정: 어두운(글자) 픽셀 중 '빨강 우세'(R≫G,B)가 5~80%면 색상 캡차로 보고 빨강만 남긴다.
+       그누보드 일부 스킨이 쓰는 '빨간 글자만 입력' 유형을 뚫기 위함. 단색 캡차엔 영향 없음(None 반환)."""
+    try:
+        import io as _io
+        from PIL import Image as _Im
+        im=_Im.open(_io.BytesIO(image_bytes)).convert('RGB')
+        px=im.load(); W,H=im.size
+        dark=0; red=0
+        for y in range(H):
+            for x in range(W):
+                r,g,b=px[x,y]
+                if r+g+b>600: continue          # 밝은 배경 제외
+                dark+=1
+                if r>=110 and r-g>=55 and r-b>=55:  # 빨강 우세(글자)
+                    red+=1
+        if dark<20: return None
+        ratio=red/dark
+        # 빨강이 글자의 일부일 때만 색상 캡차로 판단(전부 빨강=0.8↑ 또는 거의 없음=0.05↓ 면 단색 취급)
+        if ratio<0.05 or ratio>0.80: return None
+        out=_Im.new('RGB',(W,H),(255,255,255))
+        opx=out.load()
+        for y in range(H):
+            for x in range(W):
+                r,g,b=px[x,y]
+                if r+g+b<=600 and r>=110 and r-g>=55 and r-b>=55:
+                    opx[x,y]=(0,0,0)            # 빨간 글자 → 검정(OCR 친화)
+        _b=_io.BytesIO(); out.save(_b,'PNG'); return _b.getvalue()
+    except Exception:
+        return None
+
 def _ocr_kcaptcha(image_bytes):
-    """kcaptcha 이미지(bytes) → OCR 텍스트. ★전용 재학습모델 우선(2026-09-15) → ddddocr 폴백."""
+    """kcaptcha 이미지(bytes) → OCR 텍스트. ★전용 재학습모델 우선(2026-09-15) → ddddocr 폴백.
+       ★색상 캡차(빨간글자만) 전처리(2026-10-23): 빨강만 남긴 이미지가 나오면 그걸로 OCR."""
     global _DDDD_OCR,_DDDD_TRIED
+    # ⓪ 색상구분 캡차면 빨간 글자만 남긴 이미지로 교체(단색이면 None → 원본 유지).
+    try:
+        _red=_extract_colored_glyphs(image_bytes)
+        if _red: image_bytes=_red
+    except Exception: pass
     # ① 전용 CRNN 모델 먼저(그누보드 kcaptcha=6자리 숫자 특화, 검증정확도 92%). 6자리 나오면 즉시 채택.
     try:
         _m=_kcaptcha_model_predict(image_bytes)
