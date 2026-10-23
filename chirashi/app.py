@@ -11544,13 +11544,23 @@ def api_pipeline_claim_sites():
         for s in sites:
             if s.get('pc_claim_by') and float(s.get('pc_claim_expire',0) or 0) <= now:
                 s['pc_claim_by']=''; s['pc_claim_expire']=0
+        _retry_cool=now-max(300,int(_cfg.get('pc_site_retry_sec',900) or 900))  # 같은 사이트 재시도 최소간격(기본 15분)
         def _node_target(s):
-            # 노드가 발행해야 하는 등록 사이트 = cafe24(계정무관) 또는 계정 보유 로그인 사이트
-            if not is_autopostable(s): return False
+            # ★노드 재시도 대상(2026-10-23 claim 0 문제 수정): is_autopostable은 '검증완료(passed)'만 통과시켜
+            #   cafe24 전부(write_test failed/human_verification)가 영영 claim에서 빠졌다. 노드는 집IP+2captcha로
+            #   Turnstile을 뚫어 '재검증·재발행'하는 게 목적이므로, 검증 실패여도 재시도 대상에 넣는다.
             if s.get('pc_claim_by') and float(s.get('pc_claim_expire',0) or 0) > now: return False  # 이미 claim됨
+            if float(s.get('pc_last_try',0) or 0) > _retry_cool: return False   # 최근 시도 → 쿨다운
+            if not is_permitted(s) or s.get('status')=='rejected': return False
+            if s.get('maintenance_hold') or s.get('secret_forced'): return False
+            if s.get('write_access_state')=='admin_only': return False          # 관리자전용은 영구불가
+            if s.get('signup_phone_cert'): return False                         # 휴대폰 본인인증은 자동불가
             plat=s.get('platform')
-            if plat=='cafe24': return True
-            if s.get('login_required') and str(s.get('mb_id') or '').strip(): return True
+            _verified=str(s.get('verified_post_url') or '').startswith(('http://','https://'))
+            # cafe24: 계정 있거나 과거 발행흔적 있으면 재시도(Turnstile은 노드가 2captcha로)
+            if plat=='cafe24' and (str(s.get('mb_id') or '').strip() or _verified): return True
+            # 계정 보유 로그인 사이트: 집 IP 로그인 발행 재시도
+            if s.get('login_required') and str(s.get('mb_id') or '').strip() and _verified: return True
             return False
         elig=[s for s in sites if _node_target(s)]
         # cafe24 먼저(집 IP 아니면 못 함), 그다음 로그인 사이트. 오래 안 쓴 것 우선.
