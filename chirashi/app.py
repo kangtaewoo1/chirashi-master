@@ -11573,8 +11573,14 @@ def api_pipeline_claim_sites():
         _wid=(_room or {}).get('id') or ''
         _wname=(_room or {}).get('name') or ''
         _wimgs=_workroom_image_urls(_wid) if _wid else []
+        # ★작업실 키워드 메인 목록(한 줄=메인) — 사이트마다 랜덤 메인 1개로 {지역,서비스,브랜드} 조합 생성.
+        #   없으면 노드가 '키워드 없음'으로 스킵(2026-10-23 cafe24 실패 원인 수정).
+        _mains=[ln.strip() for ln in ((_room or {}).get('keyword_csv') or '').splitlines()
+                if ln.strip() and not ln.lstrip().startswith('#')]
         for s in elig[:n]:
             s['pc_claim_by']=node_id; s['pc_claim_expire']=now+ttl; s['pc_last_try']=now
+            try: _kw=_auto_subkeywords(random.choice(_mains)) if _mains else {}
+            except Exception: _kw={}
             picked.append({
                 'id':s.get('id'),'site_url':s.get('site_url',''),'platform':s.get('platform',''),
                 'bo_table':s.get('bo_table',''),'write_url':s.get('write_url',''),
@@ -11583,7 +11589,7 @@ def api_pipeline_claim_sites():
                 'login_required':bool(s.get('login_required')),'signup_exhausted':bool(s.get('signup_exhausted')),
                 'mb_id':s.get('mb_id',''),'mb_pass':_decrypt_password(s.get('mb_pass_enc') or s.get('mb_pass','')),
                 'name':s.get('name') or s.get('site_url',''),
-                'workroom_id':_wid,'workroom_name':_wname,'image_urls':_wimgs,   # 작업실 이미지(절대URL)·이력
+                'kw':_kw,'workroom_id':_wid,'workroom_name':_wname,'image_urls':_wimgs,   # 키워드·작업실 이미지·이력
             })
         if picked: save_sites(sites)
     if picked:
