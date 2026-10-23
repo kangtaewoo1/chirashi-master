@@ -11488,8 +11488,60 @@ def api_pc_queue_report():
 
 @app.route('/api/pipeline/claim-sites',methods=['POST'])
 def api_pipeline_claim_sites():
-    """Unattended publishing uses the audited server queue; no legacy PC handoff."""
-    return jsonify({'ok':True,'sites':[],'ttl':0,'reason':'audited_server_queue_only'})
+    """★등록 사이트(계정 보유 로그인 사이트 + cafe24)를 노드(집 IP)에 넘겨 로컬 발행시킨다(2026-10-23 복구).
+       서버(DC IP)는 로그인/Turnstile에 막혀 실패만 쌓이므로 이들은 집 IP 노드가 전담.
+       claim 잠금(pc_claim_by·pc_claim_expire, TTL)으로 서버·다른 노드와 중복 방지. 결과는 report-site로 회신.
+       body: {node_id, n}. 반환: {sites:[비번 포함], ttl, llm}."""
+    d=request.get_json(silent=True) or {}
+    node_id=str(d.get('node_id') or '').strip() or 'pc'
+    n=max(1,min(10,int(d.get('n',4) or 4)))
+    _cfg=load_config()
+    ttl=max(120,min(1800,int(_cfg.get('pc_claim_ttl',600) or 600)))
+    now=time.time()
+    picked=[]
+    with POST_LOCK:
+        sites=load_sites()
+        # 만료된 claim 먼저 회수(죽은 노드가 잡고 있던 것 되살리기)
+        for s in sites:
+            if s.get('pc_claim_by') and float(s.get('pc_claim_expire',0) or 0) <= now:
+                s['pc_claim_by']=''; s['pc_claim_expire']=0
+        def _node_target(s):
+            # 노드가 발행해야 하는 등록 사이트 = cafe24(계정무관) 또는 계정 보유 로그인 사이트
+            if not is_autopostable(s): return False
+            if s.get('pc_claim_by') and float(s.get('pc_claim_expire',0) or 0) > now: return False  # 이미 claim됨
+            plat=s.get('platform')
+            if plat=='cafe24': return True
+            if s.get('login_required') and str(s.get('mb_id') or '').strip(): return True
+            return False
+        elig=[s for s in sites if _node_target(s)]
+        # cafe24 먼저(집 IP 아니면 못 함), 그다음 로그인 사이트. 오래 안 쓴 것 우선.
+        elig.sort(key=lambda s:(0 if s.get('platform')=='cafe24' else 1, float(s.get('pc_last_try',0) or 0)))
+        # ★발행 작업실 선택(2026-10-23): 활성(키워드 있는) 작업실 중 첫 번째 = 노래방. 그 작업실 kw·이미지를 노드에 실어
+        #   보내 ① 노래방 키워드로 ② 작업실 저장이미지를 박아 발행하게 한다(없으면 노드가 통합풀/이미지없이 폴백).
+        _room=next((r for r in (load_json(WORKROOMS_FILE,[]) or [])
+                    if (r.get('keyword_csv') or r.get('keywords') or '').strip()
+                    and not (r.get('keyword_csv') or '').lstrip().startswith('#')),None)
+        _wid=(_room or {}).get('id') or ''
+        _wname=(_room or {}).get('name') or ''
+        _wimgs=_workroom_image_urls(_wid) if _wid else []
+        for s in elig[:n]:
+            s['pc_claim_by']=node_id; s['pc_claim_expire']=now+ttl; s['pc_last_try']=now
+            picked.append({
+                'id':s.get('id'),'site_url':s.get('site_url',''),'platform':s.get('platform',''),
+                'bo_table':s.get('bo_table',''),'write_url':s.get('write_url',''),
+                'write_entry_url':s.get('write_entry_url',''),'verified_post_url':s.get('verified_post_url',''),
+                'article_board_name':s.get('article_board_name',''),
+                'login_required':bool(s.get('login_required')),'signup_exhausted':bool(s.get('signup_exhausted')),
+                'mb_id':s.get('mb_id',''),'mb_pass':_decrypt_password(s.get('mb_pass_enc') or s.get('mb_pass','')),
+                'name':s.get('name') or s.get('site_url',''),
+                'workroom_id':_wid,'workroom_name':_wname,'image_urls':_wimgs,   # 작업실 이미지(절대URL)·이력
+            })
+        if picked: save_sites(sites)
+    if picked:
+        add_log(f'[노드 claim] {node_id} ← 등록사이트 {len(picked)}곳 (cafe24·회원) 로컬발행 배정','파이프라인')
+    # 노드가 Turnstile 설정 동기화에 쓰는 llm 블록(기존 claim과 동일 형식)
+    _llm={'turnstile_mode':_cfg.get('turnstile_mode','auto'),'twocaptcha_enabled':bool(_cfg.get('twocaptcha_enabled'))}
+    return jsonify({'ok':True,'sites':picked,'ttl':ttl,'llm':_llm})
 
 @app.route('/api/pipeline/report-site',methods=['POST'])
 def api_pipeline_report_site():
