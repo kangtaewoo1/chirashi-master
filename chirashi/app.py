@@ -5053,7 +5053,40 @@ def cafe24_post(site, title, content_html, skip_login=False):
             add_log(f"[Cafe24글쓰기시도] {wu.split('/board/')[-1][:40]} → 현재:{_cur.split('//')[-1][:50]}")
             _cl=_cur.lower()
             if 'veritas-hub' in _cl or '/challenge' in _cl:
-                _chal_stuck+=1; continue   # 풀었는데도 챌린지 = 이 URL 조합이 틀려 재챌린지(404) — 다음 추측 대신 목록경유
+                # ★확실히 챌린지 페이지에 있을 때 직접 2captcha로 Turnstile 풀기(2026-10-25): _pass_turnstile_if_present의
+                #   감지 폴링(4초)이 네비게이션 타이밍을 놓쳐 솔버가 호출조차 안 됐음(노드로그 [Turnstile진단] 0건). 여기선
+                #   URL이 확정 veritas-hub라 감지 실패 없음 — 솔버 직접 호출 후 챌린지 이탈 확인되면 폼으로 진행.
+                _solved=False
+                try:
+                    _ok_v,_msg_v,_,_=solve_captcha_with_2captcha(d,site,'turnstile',load_config())
+                    if _ok_v:
+                        for _ in range(30):
+                            time.sleep(0.5)
+                            try: _vv=(d.current_url or '').lower()
+                            except Exception: _vv=''
+                            if 'veritas-hub' not in _vv and '/challenge' not in _vv:
+                                _solved=True; break
+                        add_log(f"[Cafe24 Turnstile {'통과' if _solved else '미이탈'}] {(site.get('name') or base)[:20]} — 2captcha")
+                    else:
+                        add_log(f"[Cafe24 Turnstile 해결실패] {(site.get('name') or base)[:20]} — {str(_msg_v)[:50]}")
+                except Exception as _e_v:
+                    add_log(f"[Cafe24 Turnstile 예외] {str(_e_v)[:50]}")
+                if _solved:
+                    # 챌린지 벗어남 → 폼 뜰 때까지 폴링 후, 안 뜨면 원래 write URL 재진입 1회
+                    _dl2=min(time.time()+18,_entry_deadline)
+                    while time.time()<_dl2:
+                        if _form_ready(): opened=True; break
+                        time.sleep(0.5)
+                    if not opened:
+                        try: d.get(wu); _settle_nav(); dismiss_alerts(d)
+                        except Exception: pass
+                        _dl3=min(time.time()+15,_entry_deadline)
+                        while time.time()<_dl3:
+                            if _form_ready(): opened=True; break
+                            time.sleep(0.5)
+                    if opened: break
+                    continue   # 풀었지만 폼 못 띄움 → 다음 후보 URL
+                _chal_stuck+=1; continue   # 풀기 실패 = 이 URL 조합이 틀려 재챌린지(404) — 다음 추측 대신 목록경유
             # ★홈으로 리다이렉트됐으면(경로에 board/write/article 없음) 폼 폴링 낭비 말고 즉시 다음 후보로.
             #   (takago 등은 write.html 직접 get이 홈으로 튕김 — 28초 폴링 소모 방지, article경유에 시간 확보.)
             if _cur and _cur not in ('about:blank','data:,') and not any(k in _cl for k in ('/board/','write','/article/','board_no','bo_table')):
