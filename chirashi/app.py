@@ -4701,6 +4701,29 @@ def cafe24_post(site, title, content_html, skip_login=False):
                 time.sleep(0.5)
             if not _found:
                 return True
+        # ★챌린지 감지됨 — 2captcha로 Turnstile을 실제로 푼다(2026-10-25 대표님 'cafe24 뚫어보기').
+        #   기존엔 여기서 바로 raise(탐지만 하고 포기)해 2captcha가 호출조차 안 됐음(실측 2captcha $0.003만 소모).
+        #   solver가 토큰을 페이지(cf-turnstile-response)에 심고 콜백 호출 → 챌린지 벗어날 때까지 대기 후 True.
+        _sn2=site.get('name') or (site.get('site_url','') or '')[:24]
+        try:
+            _ok_t,_msg_t,_,_=solve_captcha_with_2captcha(d,site,'turnstile',load_config())
+        except Exception as _e_t:
+            _ok_t,_msg_t=False,f'turnstile 자동해결 예외: {str(_e_t)[:60]}'
+        if _ok_t:
+            # 토큰 제출 후 챌린지 이탈 대기(최대 ~15초): URL·본문에서 챌린지 마커가 사라지면 통과.
+            for _ in range(30):
+                time.sleep(0.5)
+                try: _c2=(d.current_url or '').lower()
+                except Exception: _c2=''
+                try: _p2=(d.page_source or '').lower()
+                except Exception: _p2=''
+                if ('veritas-hub' not in _c2 and 'challenge' not in _c2
+                        and 'turnstile' not in _p2 and '사람인지' not in (d.page_source or '')):
+                    add_log(f'[Cafe24 Turnstile 통과] {_sn2} — 2captcha 해결')
+                    return True
+            add_log(f'[Cafe24 Turnstile 제출했으나 미이탈] {_sn2} — {_msg_t}')
+        else:
+            add_log(f'[Cafe24 Turnstile 자동해결 실패] {_sn2} — {_msg_t}')
         raise AccessStopped('[human_verification_required] Cafe24 사람 확인 필요 — 자동 발행 보류')
 
     # ★skip_login=True(가입 직후)여도 cafe24는 세션이 실제 살아있는지 확인 → 죽었으면 로그인 수행(2026-09-12 mereta:
@@ -11551,12 +11574,19 @@ def api_pipeline_claim_sites():
             #   Turnstile을 뚫어 '재검증·재발행'하는 게 목적이므로, 검증 실패여도 재시도 대상에 넣는다.
             if s.get('pc_claim_by') and float(s.get('pc_claim_expire',0) or 0) > now: return False  # 이미 claim됨
             if float(s.get('pc_last_try',0) or 0) > _retry_cool: return False   # 최근 시도 → 쿨다운
-            if not is_permitted(s) or s.get('status')=='rejected': return False
+            if s.get('status')=='rejected': return False
             if s.get('maintenance_hold') or s.get('secret_forced'): return False
             if s.get('write_access_state')=='admin_only': return False          # 관리자전용은 영구불가
             if s.get('signup_phone_cert'): return False                         # 휴대폰 본인인증은 자동불가
             plat=s.get('platform')
             _verified=str(s.get('verified_post_url') or '').startswith(('http://','https://'))
+            # ★cafe24 human_verification 재시도 bypass(2026-10-25): cafe24가 Turnstile 실패로 permission=False가 되면
+            #   is_permitted에서 걸려 노드가 영영 재시도 못 하는 데드엔드였음. cafe24는 집IP+2captcha로만 Turnstile을
+            #   뚫을 수 있으므로, human_verification 상태 + 계정/발행흔적 있으면 permission 꺼졌어도 노드에만 넘긴다.
+            #   (서버 DC IP 발행은 permission=False로 계속 차단됨 — 안전. 2captcha 해결될 때까지 쿨다운마다 재시도.)
+            _c24_retry=(plat=='cafe24' and s.get('write_access_state')=='human_verification_required'
+                        and (str(s.get('mb_id') or '').strip() or _verified))
+            if not is_permitted(s) and not _c24_retry: return False
             # cafe24: 계정 있거나 과거 발행흔적 있으면 재시도(Turnstile은 노드가 2captcha로)
             if plat=='cafe24' and (str(s.get('mb_id') or '').strip() or _verified): return True
             # 계정 보유 로그인 사이트: 집 IP 로그인 발행 재시도
