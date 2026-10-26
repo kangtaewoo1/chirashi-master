@@ -138,6 +138,12 @@ def unattended_block(site):
         return ''
     if site.get('manual_review_only'):
         return 'manual_review_only'
+    # Older remote failures predate the saved CAPTCHA flag; retain their explicit stop evidence.
+    previous_failure=str(site.get('last_fail_reason') or '')
+    if '사람 확인 필요' in previous_failure:
+        return 'human_verification_required'
+    if '결과 검증 대기' in previous_failure and '재제출 금지' in previous_failure:
+        return 'unattended_result_review'
     # ★회귀 수정(2026-10-17 대표님 '뭔가 잘못되고 있음'·'번호 이상' 실측): 339f4dc가 '감사(unattended_audit) 통과 보드만
     #   무인 발행'으로 바꾸고 6c73452가 'audit_state!=ready면 무조건 차단'을 verified 체크보다 앞에 끼워, 발행 실패마다
     #   자동으로 찍히는 일시 audit_state('human_or_form_review'·'result_review')가 기존 검증 완료 발행처를 영구 차단 →
