@@ -4,6 +4,9 @@ import re
 import threading
 from urllib.parse import parse_qs, urlsplit
 
+# Bright Data 통합
+from bright_data import bright_data_client, get_bright_data_proxy, enable_web_unlocker
+
 _context = threading.local()
 
 class AccessStopped(Exception):
