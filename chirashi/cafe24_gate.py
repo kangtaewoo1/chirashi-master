@@ -97,10 +97,6 @@ def unattended_block(site):
         return ''
     if site.get('manual_review_only'):
         return 'manual_review_only'
-    if site.get('has_captcha') or site.get('write_access_state') in ('admin_only', 'human_verification_required'):
-        return 'human_verification_required'
-    if site.get('platform') != 'gnuboard' or site.get('login_required') or site.get('mb_id'):
-        return 'unattended_adapter_unverified'
     # ★회귀 수정(2026-10-17 대표님 '뭔가 잘못되고 있음'·'번호 이상' 실측): 339f4dc가 '감사(unattended_audit) 통과 보드만
     #   무인 발행'으로 바꾸고 6c73452가 'audit_state!=ready면 무조건 차단'을 verified 체크보다 앞에 끼워, 발행 실패마다
     #   자동으로 찍히는 일시 audit_state('human_or_form_review'·'result_review')가 기존 검증 완료 발행처를 영구 차단 →
@@ -114,6 +110,11 @@ def unattended_block(site):
     _hard_hold = audit_state in ('admin_only', 'human_verification_required', 'manual_review', 'result_review', 'site_database_error', 'hosting_service_restricted', 'hosting_unavailable', 'credentials_required', 'tls_certificate_expired', 'tls_validation_error')
     if _hard_hold:
         return 'unattended_'+str(audit_state)
+    # ★문제 수정: admin_only 상태인 사이트는 먼저 처리되어야 함 (platform != gnuboard 조건보다 우선)
+    if site.get('has_captcha') or site.get('write_access_state') in ('admin_only', 'human_verification_required'):
+        return 'human_verification_required'
+    if site.get('platform') != 'gnuboard' or site.get('login_required') or site.get('mb_id'):
+        return 'unattended_adapter_unverified'
     if audit_state and audit_state!='ready' and not _verified_post:
         return 'unattended_'+str(audit_state)
     if _verified_post:
