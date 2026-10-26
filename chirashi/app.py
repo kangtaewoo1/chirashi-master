@@ -541,7 +541,7 @@ def load_config():
        'google_api_key':'','google_cx':'','brave_api_key':'','search_provider':'brave','discover_enabled':True,
        'discover_daily_target':500,'discover_query_limit':500,'discover_batch':50,'discover_keywords':'',
        'finder_ratio':1.0,   # 발굴 쿼리 중 '게시판 찾기'(finder) 비중(1.0=100%). 업소 직접키워드는 미사용
-       'site_goal':500,   # 실제 발행 가능 사이트 확보 목표(대시보드 진행률 표시용)
+       'site_goal':50,   # 실제 발행 가능 사이트 확보 목표(대시보드 진행률 표시용)
        # 웹빌더/템플릿 플랫폼 등 발행 불가 도메인 제외 목록(한 줄에 하나, 발굴에서 즉시 제외). 설정에서 관리.
        'excluded_domains':'isweb.co.kr\nimweb.me\nimweb.io\nmodoo.at\ncreatorlink.net\nwixsite.com\nweebly.com\nblog.me',
        'discover_direct_queries':'','video_url':'','landing_url':'','post_email':'','guest_post_password':'',
@@ -8335,8 +8335,8 @@ def discover_once(cfg=None, max_queries=10):
     # 목표를 채울 때까지 계속 발굴한다(대표님 요청). 목표 도달 시 discover_loop이 자동 중단.
     # ※ Brave 쿼리당 과금 — 배치(discover_batch)·주기(discover_interval_sec)로 속도는 유지.
     try:
-        _pub=len([s for s in load_sites() if is_publishable(s)])
-        _goal=int(cfg.get('site_goal',500) or 500)
+        _pub=len([s for s in load_sites() if is_autopostable(s)])
+        _goal=int(cfg.get('site_goal',50) or 50)
         if _pub < _goal:
             if st.get('_goal_mode_logged')!=today:
                 add_log(f'[발굴] 발행가능 {_pub}/{_goal} — 목표까지 한도해제 연속 발굴 모드')
@@ -10228,8 +10228,8 @@ def discover_loop():
             ready=bool(cfg.get('brave_api_key')) if provider=='brave' else bool(cfg.get('google_api_key') and cfg.get('google_cx'))
             # 발행가능 사이트가 목표(site_goal)에 도달하면 발굴 중단 — Brave 크레딧 절약(전략C).
             # 막혀서 목표 밑으로 떨어지면 자동 재개된다.
-            pub_count=len([s for s in load_sites() if is_publishable(s)])
-            goal=int(cfg.get('site_goal',500) or 500)
+            pub_count=len([s for s in load_sites() if is_autopostable(s)])
+            goal=int(cfg.get('site_goal',50) or 50)
             if cfg.get('discover_enabled') and ready and pub_count < goal:
                 discover_once(cfg,max_queries=int(cfg.get('discover_batch',50) or 50))
             elif cfg.get('discover_enabled') and pub_count >= goal:
@@ -13037,11 +13037,29 @@ def api_wk_pause():
 def api_wk_resume():
     resume_workers(); return jsonify({'ok':True})
 
+def _apply_site_goal_50(cfg):
+    """Apply the acquisition goal once, without changing concurrency or later user choices."""
+    if cfg.get('site_goal_50_applied') is not True:
+        updated=dict(cfg, site_goal=50, site_goal_50_applied=True)
+        save_config(updated)
+        return updated
+    return cfg
+
+def _site_goal_progress(cfg, sites):
+    """Count current qualified sites; historical registrations do not meet the goal."""
+    try: goal=max(1,int(cfg.get('site_goal',50) or 50))
+    except (TypeError,ValueError): goal=50
+    done=sum(1 for s in sites if is_autopostable(s))
+    registered=sum(1 for s in sites if s.get('permission') and s.get('status')!='rejected'
+                   and str(s.get('verified_post_url') or '').startswith(('http://','https://')))
+    return {'site_goal':goal,'site_done':done,'site_perm':registered,
+            'site_remaining':max(0,goal-done),'site_goal_reached':done>=goal}
+
 @app.route('/api/workers/stats',methods=['GET'])
 def api_wk_stats():
     # 500곳 목표 진행률: 실게시 검증된 발행 가능 사이트 수 집계
     try:
-        cfg=load_config(); goal=int(cfg.get('site_goal',500) or 500)
+        cfg=load_config(); goal=int(cfg.get('site_goal',50) or 50)
         sites=load_sites()
         # ★표기 정확화(2026-09-24 대표님 '발행가능 33뿐?' — 실측: 발행처 110곳인데 화면 33): 옛 카운트가
         #   write_test_status=='passed' + registration_source ADMIN을 요구해, 발행이력(verified_post_url) 있는
@@ -13053,13 +13071,16 @@ def api_wk_stats():
         site_perm=sum(1 for s in sites if s.get('permission') and s.get('status')!='rejected'
                       and str(s.get('verified_post_url') or '').startswith(('http://','https://')))
     except Exception:
-        goal=500; publishable=0; site_perm=0
+        goal=50; publishable=0; site_perm=0
+    try: progress=_site_goal_progress(cfg,sites)
+    except Exception: progress={'site_goal':goal,'site_done':publishable,'site_perm':site_perm,
+                               'site_remaining':max(0,goal-publishable),'site_goal_reached':False}
     # 실제 발행 주체는 작업실 워커(_WR_SLOTS의 독립 크롬 스레드)다. 살아있는 슬롯 수를 센다.
     try: wr_workers=sum(1 for t in _WR_SLOTS.values() if t and t.is_alive())
     except Exception: wr_workers=0
     return jsonify({**wk_stats,'active':wk_active,'paused':wk_paused,
                     'wr_workers':wr_workers,
-                    'site_goal':goal,'site_done':publishable,'site_perm':site_perm})
+                    **progress})
 
 @app.route('/api/workers/reset',methods=['POST'])
 def api_wk_reset():
@@ -15240,7 +15261,7 @@ async function purgeDeadSites(){
 // ---- 통계/진행률 폴링 ----
 async function poll(){const r=await api('/workers/stats','GET');if(!r)return;
 $('q').textContent=r.queued||0;$('ok').textContent=r.success||0;$('fl').textContent=r.fail||0;$('sk').textContent=r.skipped||0;
-if(r.site_goal){const sg=$('siteGoal');if(sg){const done=r.site_done||0,perm=r.site_perm||done,goal=r.site_goal;const pct=Math.round(perm/goal*100);sg.textContent=done+'곳 · 발행처 '+perm+'/'+goal+' ('+pct+'%)';sg.style.color=perm>=goal?'var(--g)':'var(--p)'}}
+if(r.site_goal){const sg=$('siteGoal');if(sg){const done=r.site_done||0,perm=r.site_perm||0,goal=r.site_goal,remaining=Math.max(0,goal-done);const pct=Math.min(100,Math.round(done/goal*100));sg.textContent=done+'/'+goal+'곳 ('+pct+'%) · 추가 '+remaining+'곳 필요 · 검증 이력 발행처 '+perm+'곳';sg.style.color=done>=goal?'var(--g)':'var(--p)'}}
 const wn=(r.wr_workers==null?null:r.wr_workers);if(wn!=null){$('ws').textContent=wn>0?(wn+'개 발행중'):'정지';$('ws').style.color=wn>0?'var(--g)':'var(--d)';}else{const wstate=r.paused?'PAUSE':(r.active?'ON':'OFF');$('ws').textContent=wstate;$('ws').style.color=r.paused?'var(--y)':(r.active?'var(--g)':'var(--d)');}
 const total=r.total||0,done=r.done||0;
 if(total>0){$('progCard').style.display='block';const pct=Math.round(done/total*100);$('progBar').style.width=pct+'%';$('progText').textContent=`${done} / ${total} (${pct}%)`+(r.skipped?` · 스킵 ${r.skipped}`:'')}else{$('progCard').style.display='none'}
@@ -15280,7 +15301,7 @@ def main():
             cfg['discover_query_limit']=500
             cfg['discover_batch']=50
             cfg['auto_pipeline_batch']=10
-            cfg['site_goal']=500
+            cfg.setdefault('site_goal',50)
             cfg['discover_enabled']=True
             cfg['auto_pipeline_enabled']=True
             cfg['goal500_applied']='v2'
@@ -15290,6 +15311,7 @@ def main():
             except Exception: pass
             print('🎯 500곳 목표 세팅 v2 적용 — 발굴 하루500·1분주기·배치50·파이프라인10·자동ON·발굴리셋')
     except Exception as e: print('500 세팅 적용 실패:',e)
+    cfg=_apply_site_goal_50(cfg)
     host=os.environ.get('HOST','127.0.0.1'); port=int(os.environ.get('PORT','8888'))
     print(f'\n찌라시 마스터 v6 - 정직 발행 모드\nhttp://{host}:{port}\n브랜드: {cfg.get("brand","설정필요")}')
     if os.environ.get('CHIRASHI_PASSWORD') is None and cfg.get('password','admin1234')=='admin1234':
