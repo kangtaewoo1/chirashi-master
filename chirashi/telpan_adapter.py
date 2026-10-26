@@ -12,6 +12,75 @@ from urllib.parse import urlsplit
 ORIGIN = 'https://www.telpan.co.kr'
 _lock = threading.Lock()
 _test_lock = threading.Lock()
+_signup_lock = threading.Lock()
+
+
+def signup_profile(data):
+    """Only fields used by Telpan's own signup form; never invent an identity."""
+    profile = {key: str(data.get(key) or '').strip() for key in ('nickname', 'email', 'snsId')}
+    profile['password'] = str(data.get('password') or '')
+    if (not profile['nickname'] or len(profile['nickname']) > 100
+            or not profile['password'] or len(profile['password']) > 256
+            or not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+', profile['email'])
+            or not profile['snsId'] or len(profile['snsId']) > 200):
+        raise ValueError('닉네임·새 비밀번호·본인 이메일·SNS 아이디가 모두 필요합니다.')
+    return profile
+
+
+def signup_once(profile, post=None):
+    """The same public endpoint as the official form. No retries or IP switching."""
+    import requests
+    try:
+        r = (post or requests.post)(ORIGIN + '/api/signup', json=profile,
+                                   timeout=25, allow_redirects=False)
+        if 300 <= r.status_code < 400:
+            return 'unknown', '가입 응답이 다른 주소로 이동했습니다. 재가입 요청을 중지했습니다.'
+        data = r.json()
+        if r.status_code == 200 and data.get('success') is True:
+            return 'created', '텔판이 회원가입 성공을 확인했습니다. 서버 로그인을 확인합니다.'
+        # Do not echo arbitrary remote messages: they may contain submitted private fields.
+        message = str(data.get('message') or '')
+        if any(x in message for x in ('IP', '아이피', '1계정')):
+            return 'restricted', '텔판의 IP당 가입 제한으로 중지했습니다. IP를 바꾸거나 우회하지 않습니다.'
+        if any(x in message for x in ('이미', '중복', '존재')):
+            return 'duplicate', '이미 사용 중인 가입 정보입니다. 추가 가입 요청을 중지했습니다.'
+        if any(x in message.lower() for x in ('captcha', '인증', '보안문자')):
+            return 'human_required', '텔판에서 본인 인증 또는 보안 확인을 요구하여 중지했습니다.'
+        if r.status_code >= 500:
+            return 'unknown', '텔판 응답을 확인하지 못했습니다. 중복 가입 방지를 위해 재요청하지 않습니다.'
+        return 'rejected', '텔판이 가입 요청을 승인하지 않았습니다. 가입 조건을 확인해주세요.'
+    except Exception:
+        return 'unknown', '가입 결과 확인이 필요합니다. 중복 가입 방지를 위해 재요청하지 않습니다.'
+
+
+def verify_login(ctx):
+    """Prove ordinary login and write-form access without posting or copying sessions."""
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
+    cred = json.loads((Path(ctx['DATA_DIR']) / 'telpan_login_private.json').read_text(encoding='utf-8'))
+    d = None
+    try:
+        d = new_driver(ctx); wait = WebDriverWait(d, 25)
+        d.get(ORIGIN + '/signup')
+        wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, 'input[placeholder="닉네임 입력"]')))
+        if urlsplit(d.current_url).netloc != 'www.telpan.co.kr': raise ValueError('origin')
+        d.find_element(By.CSS_SELECTOR, 'input[placeholder="닉네임 입력"]').send_keys(cred['nickname'])
+        d.find_element(By.CSS_SELECTOR, 'input[placeholder="비밀번호 입력"]').send_keys(ctx['_decrypt_password'](cred['password_enc']))
+        d.find_element(By.XPATH, '//button[@type="submit" and normalize-space()="로그인"]').click()
+        wait.until(lambda x: urlsplit(x.current_url).path == '/')
+        wait.until(lambda x: any(cred['nickname'] in e.text for e in x.find_elements(By.CSS_SELECTOR, '.user-profile')))
+        d.get(ORIGIN + '/board/ads/write')
+        wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, 'input[placeholder="제목을 입력하세요"]')))
+        if d.current_url != ORIGIN + '/board/ads/write': raise ValueError('write permission')
+        if any(e.is_displayed() for e in d.find_elements(By.CSS_SELECTOR,
+                'iframe[src*="recaptcha"],iframe[src*="hcaptcha"],.cf-turnstile,input[name="captcha"]')):
+            raise ValueError('human required')
+        return {'login_verified': True, 'write_form_visible': True, 'submitted_posts': 0}
+    finally:
+        if d:
+            try: d.quit()
+            except Exception: pass
 
 
 def valid_post_url(url):
@@ -232,10 +301,63 @@ def register(app, ctx):
     @app.route('/api/telpan/status')
     def telpan_status():
         site = current()
+        signup = ctx['load_json'](Path(ctx['DATA_DIR']) / 'telpan_signup_private.json', {})
         return jsonify(ok=True, login_saved=path.exists(), enabled=bool(site.get('telpan_enabled')),
                        ready=not bool(block(site)), reason=block(site),
                        test_status=site.get('write_test_status', ''),
-                       receipt=site.get('unattended_result') or {}, failure=site.get('last_fail_reason', ''))
+                       receipt=site.get('unattended_result') or {}, failure=site.get('last_fail_reason', ''),
+                       signup={k: signup[k] for k in ('state', 'message', 'login_verified', 'write_form_visible') if k in signup})
+
+    @app.route('/api/telpan/signup', methods=['POST'])
+    def telpan_signup():
+        if not csrf_ok(): return jsonify(ok=False, error='화면을 새로 열어주세요'), 403
+        data = request.get_json(silent=True) or {}
+        if data.get('signup_confirmed') is not True:
+            return jsonify(ok=False, error='텔판 가입 요청 및 계정 저장을 확인해주세요'), 400
+        try: profile = signup_profile(data)
+        except ValueError as exc: return jsonify(ok=False, error=str(exc)), 400
+        if not _signup_lock.acquire(blocking=False):
+            return jsonify(ok=False, error='가입 결과 확인 중입니다. 다시 제출하지 마세요.'), 409
+        journal = Path(ctx['DATA_DIR']) / 'telpan_signup_private.json'
+        try:
+            prior = ctx['load_json'](journal, {})
+            if prior.get('state') in ('requesting', 'unknown', 'created', 'login_verified', 'login_review'):
+                return jsonify(ok=False, error='이전 가입 요청이 있습니다. 중복 생성 대신 기존 계정을 확인해주세요.'), 409
+            if _lock.locked() or _test_lock.locked():
+                return jsonify(ok=False, error='기존 텔판 작업 완료 후 진행해주세요'), 409
+            # A private pending credential survives an ambiguous signup response. Do not activate it yet.
+            private_write(Path(ctx['DATA_DIR']) / 'telpan_signup_pending_private.json', {
+                'nickname': profile['nickname'], 'password_enc': ctx['_encrypt_password'](profile['password'])})
+            record = {'state': 'requesting', 'message': '텔판에 정상 가입 요청을 1회 보내는 중입니다.',
+                      'requested_at': datetime.now().isoformat(timespec='seconds'), 'requests': 1}
+            private_write(journal, record)
+            state, message = signup_once(profile)
+            record.update(state=state, message=message); private_write(journal, record)
+            if state != 'created': return jsonify(ok=False, state=state, error=message), 409
+            # Same request context as the existing secure-save route; permission holds are preserved.
+            saved = telpan_save()
+            if isinstance(saved, tuple):
+                record.update(state='login_review', message='가입은 완료됐지만 서버 계정 저장을 확인해야 합니다.')
+                private_write(journal, record)
+                return jsonify(ok=False, error=record['message']), 409
+
+            def login_check():
+                try:
+                    proof = verify_login(ctx)
+                    record.update(state='login_verified', message='신규 가입·서버 로그인·글쓰기 화면 확인 완료. 실제 발행 검증은 아직 대기 중입니다.', **proof)
+                except Exception:
+                    record.update(state='login_review', message='가입은 완료됐지만 서버 로그인 확인이 필요합니다. 새 계정을 반복 생성하지 않습니다.')
+                finally:
+                    private_write(journal, record)
+                    _test_lock.release()
+            if not _test_lock.acquire(blocking=False):
+                record.update(state='login_review', message='가입은 완료됐습니다. 진행 중인 서버 작업이 끝난 뒤 로그인 확인이 필요합니다.')
+                private_write(journal, record)
+                return jsonify(ok=True, message=record['message'])
+            threading.Thread(target=login_check, name='TELPAN_LOGIN', daemon=True).start()
+            return jsonify(ok=True, message=message)
+        finally:
+            _signup_lock.release()
 
     @app.route('/api/telpan/setup', methods=['POST'])
     def telpan_save():
@@ -308,15 +430,25 @@ def register(app, ctx):
         return jsonify(ok=True, message='서버에서 무료 테스트 글 1건의 등록·공개 조회 검증을 시작했습니다.')
 
 
-PAGE = '''<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+PAGE = r'''<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>텔판 자동발행 연결</title><style>body{font:18px/1.7 sans-serif;background:#101827;color:#eef3fb;max-width:680px;margin:40px auto;padding:20px}input,button{font:inherit;box-sizing:border-box;width:100%;padding:12px;margin:8px 0;border-radius:8px}button{background:#4085ff;color:white;border:0;cursor:pointer}a{color:#8bbaff}pre{white-space:pre-wrap;overflow-wrap:anywhere}label{display:block}</style>
-<h1>텔판 자동발행 연결</h1><p>가입한 텔판 계정을 한 번 저장해주세요. 비밀번호는 서버에 암호화해 보관하며 화면에 다시 표시하지 않습니다.</p>
+<h1>텔판 가입 · 서버 연결</h1><p>아래 정보를 직접 입력하고 가입 요청을 누르면, 서버가 텔판 가입과 로그인을 확인합니다. 비밀번호는 암호화해 보관하며 다시 표시하지 않습니다.</p>
+<form id="signupAccount"><h2>새 계정으로 가입</h2>
+<label>새 닉네임<input id="newNickname" autocomplete="off" required maxlength="100"></label>
+<label>새 비밀번호<input id="newPassword" type="password" autocomplete="new-password" required maxlength="256"></label>
+<label>본인 이메일<input id="newEmail" type="email" autocomplete="email" required></label>
+<label>텔레그램 또는 카카오톡 ID<input id="newSns" autocomplete="off" required maxlength="200"></label>
+<label><input id="signupConfirmed" type="checkbox" required style="width:auto">입력한 정보로 텔판에 가입을 요청하고, 계정을 이 서버에 암호화해 저장합니다.</label>
+<button id="signupButton">텔판 가입 요청 · 서버 로그인 확인</button></form>
+<p>중복 가입·IP당 가입 제한·보안 인증이 나오면 자동으로 멈춥니다. 글은 아래 별도 검증 버튼을 눌러야 등록됩니다.</p>
+<details><summary>이미 가입한 계정 연결</summary>
 <form id="account"><label>텔판 닉네임<input id="nickname" autocomplete="username" required></label>
 <label>텔판 기존 비밀번호<input id="password" type="password" autocomplete="current-password" required></label>
-<button>계정 저장</button></form><p>계정 저장 후 서버 검증을 통과해야 자동발행 대상으로 들어갑니다. 제목 40자·본문 500자 제한을 유지합니다.</p>
+<button>계정 저장</button></form></details><p>서버 발행 검증을 통과해야 자동발행 대상으로 들어갑니다. 제목 40자·본문 500자 제한을 유지합니다.</p>
 <button id="test">서버에서 무료 테스트 글 1건 발행·조회</button><pre id="result" role="status"></pre><a href="/">대시보드로 돌아가기</a>
 <script>const result=document.getElementById('result');const csrf={{csrf|tojson}};
 async function send(url,data){let r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json','X-Telpan-CSRF':csrf},body:JSON.stringify(data)});let v=await r.json();result.textContent=v.message||v.error;return v}
 document.getElementById('account').onsubmit=async e=>{e.preventDefault();await send('/api/telpan/setup',{nickname:document.getElementById('nickname').value,password:document.getElementById('password').value});document.getElementById('password').value=''};
+document.getElementById('signupAccount').onsubmit=async e=>{e.preventDefault();const b=document.getElementById('signupButton');b.disabled=true;try{await send('/api/telpan/signup',{nickname:document.getElementById('newNickname').value,password:document.getElementById('newPassword').value,email:document.getElementById('newEmail').value,snsId:document.getElementById('newSns').value,signup_confirmed:document.getElementById('signupConfirmed').checked})}catch(e){result.textContent='응답 확인이 필요합니다. 다시 가입 요청하지 말고 결과를 확인해주세요.'}finally{document.getElementById('newPassword').value='';b.disabled=false}};
 document.getElementById('test').onclick=()=>send('/api/telpan/test',{});
-async function status(){let r=await fetch('/api/telpan/status');let s=await r.json();if(s.receipt&&s.receipt.state==='verified'){result.textContent='서버 발행·공개 조회 검증 완료\n'+s.receipt.url+'\n제목 일치: '+s.receipt.title_match+' / 본문 일치: '+s.receipt.body_match}else if(s.failure){result.textContent=s.failure}else if(!s.login_saved){result.textContent='텔판 계정 저장이 필요합니다.'}}status();setInterval(status,5000);</script></html>'''
+async function refreshStatus(){let r=await fetch('/api/telpan/status');let s=await r.json();if(s.receipt&&s.receipt.state==='verified'){result.textContent='서버 발행·공개 조회 검증 완료\n'+s.receipt.url+'\n제목 일치: '+s.receipt.title_match+' / 본문 일치: '+s.receipt.body_match}else if(s.signup&&s.signup.message){result.textContent=s.signup.message}else if(s.failure){result.textContent=s.failure}else if(!s.login_saved){result.textContent='신규 가입 정보를 입력하거나 기존 계정을 연결해주세요.'}}refreshStatus();setInterval(refreshStatus,5000);</script></html>'''

@@ -103,7 +103,8 @@ class SetupTests(unittest.TestCase):
         self.ctx = {'DATA_DIR': Path(self.tmp.name), 'POST_LOCK': threading_lock(),
                     'load_sites': lambda:copy.deepcopy(self.sites),
                     'save_sites': lambda value:self.sites.__setitem__(slice(None), copy.deepcopy(value)),
-                    '_encrypt_password': lambda pw:'ciphertext-for-test', 'load_json': lambda *a:{}}
+                    '_encrypt_password': lambda pw:'ciphertext-for-test',
+                    'load_json': lambda path, default:__import__('json').loads(Path(path).read_text(encoding='utf-8')) if Path(path).exists() else default}
         t.register(self.app, self.ctx)
         self.client = self.app.test_client()
 
@@ -129,6 +130,67 @@ class SetupTests(unittest.TestCase):
         self.assertTrue(after['maintenance_hold']); self.assertEqual(after['min_interval_minutes'],1440)
         self.assertEqual(after['daily_limit'],1); self.assertEqual(after['posted_today'],1)
         self.assertEqual(after['verified_post_url'],''); self.assertNotIn('unattended_result',after)
+
+    def test_rendered_page_script_is_valid_javascript(self):
+        import re, shutil, subprocess
+        node = shutil.which('node')
+        if not node: self.skipTest('Node unavailable for browser-script syntax check')
+        page = self.client.get('/telpan').text
+        script = re.search(r'<script>(.*?)</script>', page, re.S).group(1)
+        p = subprocess.run([node, '--check'], input=script, text=True, capture_output=True)
+        self.assertEqual(p.returncode, 0, p.stderr)
+
+    def test_signup_requires_complete_identity_and_explicit_request(self):
+        with self.client.session_transaction() as sess: sess['telpan_csrf'] = 'test-csrf'
+        with patch.object(t, 'signup_once') as call:
+            for data in ({}, {'signup_confirmed':True,'nickname':'u','password':'pw'}):
+                r=self.client.post('/api/telpan/signup', json=data, headers={'X-Telpan-CSRF':'test-csrf'})
+                self.assertEqual(r.status_code,400)
+            call.assert_not_called()
+
+    def test_unknown_signup_is_durable_and_never_repeated(self):
+        with self.client.session_transaction() as sess: sess['telpan_csrf'] = 'test-csrf'
+        data={'signup_confirmed':True,'nickname':'new-user','password':'test-password',
+              'email':'user@example.test','snsId':'test-id'}
+        with patch.object(t,'signup_once',return_value=('unknown','결과 확인 필요')) as call:
+            self.client.post('/api/telpan/signup',json=data,headers={'X-Telpan-CSRF':'test-csrf'})
+            r=self.client.post('/api/telpan/signup',json=data,headers={'X-Telpan-CSRF':'test-csrf'})
+            self.assertEqual(r.status_code,409);self.assertEqual(call.call_count,1)
+        self.assertFalse(self.sites)
+        self.assertNotIn(data['password'],self.client.get('/api/telpan/status').text)
+
+    def test_created_then_login_verified_still_does_not_count_as_published(self):
+        with self.client.session_transaction() as sess: sess['telpan_csrf'] = 'test-csrf'
+        data={'signup_confirmed':True,'nickname':'new-user','password':'test-password',
+              'email':'user@example.test','snsId':'test-id'}
+        with patch.object(t,'signup_once',return_value=('created','가입 성공')), \
+             patch.object(t,'verify_login',return_value={'login_verified':True,'write_form_visible':True,'submitted_posts':0}), \
+             patch.object(t.threading,'Thread',side_effect=lambda target,**kw:SimpleNamespace(start=target)):
+            r=self.client.post('/api/telpan/signup',json=data,headers={'X-Telpan-CSRF':'test-csrf'})
+        self.assertEqual(r.status_code,200)
+        self.assertEqual(self.client.get('/api/telpan/status').json['signup']['state'],'login_verified')
+        self.assertEqual(self.sites[0]['write_test_status'],'pending')
+        self.assertEqual(self.sites[0]['verified_post_url'],'');self.assertTrue(t.block(self.sites[0]))
+
+
+class SignupTransportTests(unittest.TestCase):
+    def test_uses_the_official_form_endpoint_once_with_no_redirect_or_proxy(self):
+        profile=t.signup_profile({'nickname':'name','password':'password','email':'a@example.test','snsId':'contact'})
+        post=Mock(return_value=SimpleNamespace(status_code=200,json=lambda:{'success':True}))
+        self.assertEqual(t.signup_once(profile,post)[0],'created')
+        post.assert_called_once_with(t.ORIGIN+'/api/signup',json=profile,timeout=25,allow_redirects=False)
+
+    def test_ip_restriction_and_private_errors_do_not_leak_or_retry(self):
+        for raw,state in [('동일 IP에서는 1계정만 가입 가능합니다','restricted'),
+                          ('이미 존재하는 닉네임입니다','duplicate'),('CAPTCHA 인증 필요','human_required'),
+                          ('unexpected password=secret email=private','rejected')]:
+            post=Mock(return_value=SimpleNamespace(status_code=400,json=lambda:{'success':False,'message':raw}))
+            result,message=t.signup_once({},post);self.assertEqual(result,state);post.assert_called_once()
+            self.assertNotIn('secret',message);self.assertNotIn('private',message)
+
+    def test_timeout_and_redirect_hold_for_review(self):
+        for post in (Mock(side_effect=TimeoutError('secret')),Mock(return_value=SimpleNamespace(status_code=302))):
+            self.assertEqual(t.signup_once({},post)[0],'unknown');post.assert_called_once()
 
 
 def threading_lock():
