@@ -6370,7 +6370,9 @@ def _post_gnuboard_brightdata(site, title, content_html, skip_login=False):
                     and old_id.isdigit() and int(post_id)<=int(old_id))):
             return False,'결과 검증 대기 — 새 게시글 URL 확인 실패, 재제출 금지'
         response=rq.get(result,timeout=20)
-        response.raise_for_status();response.encoding=response.apparent_encoding
+        response.raise_for_status()
+        # Legacy boards declare EUC-KR; a missing encoding guess must not overwrite it.
+        response.encoding=getattr(response,'encoding',None) or response.apparent_encoding or 'utf-8'
         if urllib.parse.urlsplit(response.url).netloc!=origin.netloc:
             return False,'결과 검증 대기 — 게시글 호스트 변경, 재제출 금지'
         parsed=Parser();parsed.feed(response.text);parsed.close();actual=parsed.root.text()

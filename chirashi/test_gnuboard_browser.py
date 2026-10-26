@@ -20,12 +20,12 @@ class GnuboardBrowserTest(unittest.TestCase):
                      'bo_table':'free','write_test_status':'passed','unattended_audit':{'state':'ready'},
                      'verified_post_url':'https://approved.example/bbs/board.php?bo_table=free&wr_id=10'},**changes)
 
-    def run_post(self,site=None,result=None,body='Unique title Unique body',response_url=None,error=None):
+    def run_post(self,site=None,result=None,body='Unique title Unique body',response_url=None,error=None,encoding=None):
         site=site or self.site()
         url='https://approved.example/bbs/board.php?bo_table=free&wr_id=11'
         post=Mock(return_value=result if result is not None else (True,url))
         reset=Mock();updates=Mock();hist=Mock()
-        get=Mock(return_value=SimpleNamespace(text=body,url=response_url or url,apparent_encoding='utf-8',raise_for_status=lambda:None))
+        get=Mock(return_value=SimpleNamespace(text=body,url=response_url or url,encoding=encoding,apparent_encoding=None if encoding else 'utf-8',raise_for_status=lambda:None))
         if error:get.side_effect=error
         env={'is_autopostable':lambda s:s.get('permission') and s.get('status')!='rejected',
              'publishing_block':publishing_block,'unattended_block':unattended_block,'gnuboard_post':post,
@@ -43,6 +43,10 @@ class GnuboardBrowserTest(unittest.TestCase):
         receipt=updates.call_args.kwargs['unattended_result']
         self.assertEqual(receipt['transport'],'brightdata_browser_api')
         self.assertTrue(receipt['title_match'] and receipt['body_match']);hist.assert_called_once()
+
+    def test_public_read_preserves_declared_legacy_encoding_without_a_guess(self):
+        result,post,get,reset,updates,hist=self.run_post(encoding='euc-kr')
+        self.assertTrue(result[0]);self.assertEqual(get.return_value.encoding,'euc-kr')
 
     def test_permission_and_human_holds_never_start_remote_submission(self):
         for change in ({'permission':False},{'status':'rejected'},{'maintenance_hold':True},
