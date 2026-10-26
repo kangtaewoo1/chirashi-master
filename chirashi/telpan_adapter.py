@@ -13,11 +13,74 @@ ORIGIN = 'https://www.telpan.co.kr'
 _lock = threading.Lock()
 _test_lock = threading.Lock()
 _signup_lock = threading.Lock()
+_knowledge_lock = threading.RLock()
+
+# Site recipe: reusable field roles and routes, never account values or passwords.
+FLOW = {
+    'origin': ORIGIN, 'adapter': 'telpan',
+    'routes': {'signup': ORIGIN+'/signup', 'signup_submit': ORIGIN+'/api/signup',
+               'login': ORIGIN+'/signup', 'write': ORIGIN+'/board/ads/write'},
+    'fields': [
+        {'name':'nickname', 'role':'account_nickname', 'type':'text', 'required':True, 'selector':'input[placeholder="닉네임 입력"]'},
+        {'name':'password', 'role':'account_password', 'type':'password', 'required':True, 'selector':'input[placeholder="비밀번호 입력"]'},
+        {'name':'email', 'role':'owner_email', 'type':'email', 'required':True, 'selector':'input[type="email"]'},
+        {'name':'snsId', 'role':'contact_sns', 'type':'text', 'required':True, 'selector':'input[placeholder="@telegram 또는 카카오톡 ID"]'}],
+    'limits': {'title_utf16':40, 'body_utf16':500, 'signup_attempts_per_request':1,
+               'retry_uncertain_submission':False, 'ip_restriction_bypass':False}
+}
+
+
+def remember_flow(ctx, event=None):
+    from form_schema import merge_flow_knowledge
+    path = Path(ctx['DATA_DIR']) / 'site_flow_knowledge.json'
+    lock = ctx.get('_json_lock', lambda p:_knowledge_lock)(path)
+    with lock:
+        knowledge = ctx['load_json'](path, {})
+        knowledge[ORIGIN] = merge_flow_knowledge(knowledge.get(ORIGIN), FLOW, event)
+        private_write(path, knowledge)
+        return knowledge[ORIGIN]
+
+
+def learned_signup_profile():
+    """Bridge the custom SPA adapter into the app's existing signup-learning interface."""
+    from form_schema import merge_flow_knowledge
+    known = merge_flow_knowledge({}, FLOW)
+    fields = [dict(f, hidden=False) for f in known['fields']]
+    return {'signup_url':FLOW['routes']['signup'], 'form_url':FLOW['routes']['signup'],
+            'form_action':FLOW['routes']['signup_submit'], 'form_method':'POST', 'fields':fields,
+            'rules':{}, 'rule_sources':{}, 'captcha':False, 'email_verification_required':None,
+            'fingerprint':known['fingerprint'], 'measured_at':datetime.now().isoformat(timespec='seconds'),
+            'schema':{'schema_version':2, 'state':'adapter_documented', 'adapter':'telpan'},
+            'evidence_level':'observed_ui_and_public_client_code',
+            'live_signup_verified':False, 'missing_profile_roles':[f['role'] for f in fields]}
+
+
+def resume_known_account(site, ctx, submit=True):
+    """Generic pipeline dispatches here instead of treating Telpan as a Gnuboard."""
+    known = remember_flow(ctx)
+    if not submit:
+        return False, '텔판 가입 경로 학습 완료 — 가입·로그인·글 제출은 수행하지 않았습니다.'
+    path = Path(ctx['DATA_DIR']) / 'telpan_login_private.json'
+    if not path.exists():
+        roles = [f['role'] for f in known['fields'] if f['required']]
+        site.update(signup_status='profile_required', signup_missing_roles=roles,
+                    signup_url=FLOW['routes']['signup'])
+        return False, '텔판 가입 프로필 미등록 — 학습된 필수 항목: 닉네임·비밀번호·본인 이메일·SNS 연락처'
+    try:
+        verify_login(ctx)
+        cred = json.loads(path.read_text(encoding='utf-8'))
+        site.update(mb_id=cred['nickname'], signup_status='complete', login_required=True)
+        remember_flow(ctx, {'stage':'login', 'state':'verified'})
+        return True, '저장된 텔판 계정의 서버 로그인·글쓰기 화면 재확인 완료 — 실제 발행은 별도 검증'
+    except Exception:
+        remember_flow(ctx, {'stage':'login', 'state':'review'})
+        return False, '텔판 기존 계정 로그인 확인 필요 — 새 계정 반복 생성 중지'
 
 
 def signup_profile(data):
     """Only fields used by Telpan's own signup form; never invent an identity."""
-    profile = {key: str(data.get(key) or '').strip() for key in ('nickname', 'email', 'snsId')}
+    names = [f['name'] for f in FLOW['fields'] if f['name'] != 'password']
+    profile = {key: str(data.get(key) or '').strip() for key in names}
     profile['password'] = str(data.get('password') or '')
     if (not profile['nickname'] or len(profile['nickname']) > 100
             or not profile['password'] or len(profile['password']) > 256
@@ -31,7 +94,7 @@ def signup_once(profile, post=None):
     """The same public endpoint as the official form. No retries or IP switching."""
     import requests
     try:
-        r = (post or requests.post)(ORIGIN + '/api/signup', json=profile,
+        r = (post or requests.post)(FLOW['routes']['signup_submit'], json=profile,
                                    timeout=25, allow_redirects=False)
         if 300 <= r.status_code < 400:
             return 'unknown', '가입 응답이 다른 주소로 이동했습니다. 재가입 요청을 중지했습니다.'
@@ -128,7 +191,7 @@ def content(title, body_html):
     title = str(title).strip()
     # Javascript maxlength counts UTF-16 code units. Never silently truncate a post.
     units = lambda s: len(s.encode('utf-16-le')) // 2
-    if not title or not body or units(title) > 40 or units(body) > 500:
+    if not title or not body or units(title) > FLOW['limits']['title_utf16'] or units(body) > FLOW['limits']['body_utf16']:
         raise ValueError('텔판은 제목 40자·본문 500자 이내의 글이 필요합니다. 원문을 자르지 않고 보류했습니다.')
     return title, body
 
@@ -263,6 +326,7 @@ def publish(site, title, body_html, ctx, bootstrap=False):
         if len(urls) != 1 or urls[0] == site.get('verified_post_url'):
             raise ValueError('new post not uniquely identified')
         receipt = verify_public(urls[0], title, body)
+        remember_flow(ctx, {'stage':'server_post', 'state':'verified', 'receipt':receipt})
         private_write(journal, dict(record, state='verified', receipt=receipt))
         ctx['set_site_flag'](site['id'], unattended_result=receipt,
                              last_publish_transport='telpan_server_browser')
@@ -285,6 +349,7 @@ def register(app, ctx):
     from flask import request, jsonify, render_template_string, session
     path = Path(ctx['DATA_DIR']) / 'telpan_login_private.json'
     sid = 'telpan-ads'
+    remember_flow(ctx)
 
     def current():
         return next((s for s in ctx['load_sites']() if s.get('id') == sid), {})
@@ -292,6 +357,16 @@ def register(app, ctx):
     def csrf_ok():
         return bool(session.get('telpan_csrf') and secrets.compare_digest(
             str(request.headers.get('X-Telpan-CSRF', '')), session['telpan_csrf']))
+
+    @app.route('/api/telpan/knowledge')
+    def telpan_knowledge():
+        return jsonify(ok=True, knowledge=remember_flow(ctx))
+
+    @app.route('/site-knowledge')
+    def site_knowledge():
+        remember_flow(ctx)
+        knowledge=ctx['load_json'](Path(ctx['DATA_DIR'])/'site_flow_knowledge.json',{})
+        return render_template_string(KNOWLEDGE_PAGE, rows=list(knowledge.values()))
 
     @app.route('/telpan')
     def telpan_setup():
@@ -332,6 +407,7 @@ def register(app, ctx):
                       'requested_at': datetime.now().isoformat(timespec='seconds'), 'requests': 1}
             private_write(journal, record)
             state, message = signup_once(profile)
+            remember_flow(ctx, {'stage':'signup', 'state':state})
             record.update(state=state, message=message); private_write(journal, record)
             if state != 'created': return jsonify(ok=False, state=state, error=message), 409
             # Same request context as the existing secure-save route; permission holds are preserved.
@@ -344,8 +420,10 @@ def register(app, ctx):
             def login_check():
                 try:
                     proof = verify_login(ctx)
+                    remember_flow(ctx, {'stage':'login', 'state':'verified'})
                     record.update(state='login_verified', message='신규 가입·서버 로그인·글쓰기 화면 확인 완료. 실제 발행 검증은 아직 대기 중입니다.', **proof)
                 except Exception:
+                    remember_flow(ctx, {'stage':'login', 'state':'review'})
                     record.update(state='login_review', message='가입은 완료됐지만 서버 로그인 확인이 필요합니다. 새 계정을 반복 생성하지 않습니다.')
                 finally:
                     private_write(journal, record)
@@ -433,6 +511,7 @@ def register(app, ctx):
 PAGE = r'''<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>텔판 자동발행 연결</title><style>body{font:18px/1.7 sans-serif;background:#101827;color:#eef3fb;max-width:680px;margin:40px auto;padding:20px}input,button{font:inherit;box-sizing:border-box;width:100%;padding:12px;margin:8px 0;border-radius:8px}button{background:#4085ff;color:white;border:0;cursor:pointer}a{color:#8bbaff}pre{white-space:pre-wrap;overflow-wrap:anywhere}label{display:block}</style>
 <h1>텔판 가입 · 서버 연결</h1><p>아래 정보를 직접 입력하고 가입 요청을 누르면, 서버가 텔판 가입과 로그인을 확인합니다. 비밀번호는 암호화해 보관하며 다시 표시하지 않습니다.</p>
+<p><a href="/site-knowledge">사이트별로 학습한 가입·로그인 방식과 실제 검증 결과 보기</a></p>
 <form id="signupAccount"><h2>새 계정으로 가입</h2>
 <label>새 닉네임<input id="newNickname" autocomplete="off" required maxlength="100"></label>
 <label>새 비밀번호<input id="newPassword" type="password" autocomplete="new-password" required maxlength="256"></label>
@@ -452,3 +531,15 @@ document.getElementById('account').onsubmit=async e=>{e.preventDefault();await s
 document.getElementById('signupAccount').onsubmit=async e=>{e.preventDefault();const b=document.getElementById('signupButton');b.disabled=true;try{await send('/api/telpan/signup',{nickname:document.getElementById('newNickname').value,password:document.getElementById('newPassword').value,email:document.getElementById('newEmail').value,snsId:document.getElementById('newSns').value,signup_confirmed:document.getElementById('signupConfirmed').checked})}catch(e){result.textContent='응답 확인이 필요합니다. 다시 가입 요청하지 말고 결과를 확인해주세요.'}finally{document.getElementById('newPassword').value='';b.disabled=false}};
 document.getElementById('test').onclick=()=>send('/api/telpan/test',{});
 async function refreshStatus(){let r=await fetch('/api/telpan/status');let s=await r.json();if(s.receipt&&s.receipt.state==='verified'){result.textContent='서버 발행·공개 조회 검증 완료\n'+s.receipt.url+'\n제목 일치: '+s.receipt.title_match+' / 본문 일치: '+s.receipt.body_match}else if(s.signup&&s.signup.message){result.textContent=s.signup.message}else if(s.failure){result.textContent=s.failure}else if(!s.login_saved){result.textContent='신규 가입 정보를 입력하거나 기존 계정을 연결해주세요.'}}refreshStatus();setInterval(refreshStatus,5000);</script></html>'''
+
+KNOWLEDGE_PAGE='''<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>사이트별 가입·로그인 학습</title>
+<style>body{font:17px/1.6 sans-serif;background:#101827;color:#eef3fb;max-width:1050px;margin:30px auto;padding:20px}article{background:#1c293c;padding:20px;border-radius:12px;margin:20px 0}a{color:#8bbaff}dt{font-weight:bold;color:#9fc0ff}dd{margin:0 0 15px}li{margin:5px 0}</style>
+<h1>사이트별 가입·로그인 학습</h1><p>필수 입력값과 처리 경로를 저장해 다음 작업에 재사용합니다. 가입·로그인·발행은 각각 실제 확인된 단계만 표시합니다. 비밀번호와 연락처는 학습 기록에 저장하지 않습니다.</p>
+{% for r in rows %}<article><h2>{{r.origin}} · 학습 v{{r.version}}</h2><dl>
+<dt>필수 정보의 의미</dt><dd><ul>{% for f in r.fields %}<li>{{ {'account_nickname':'닉네임: 로그인할 계정 이름','account_password':'비밀번호: 해당 계정의 비밀번호','owner_email':'이메일: 본인이 답변·인증을 받을 주소','contact_sns':'SNS 아이디: 본인 텔레그램 또는 카카오톡 연락처'}.get(f.role,f.role) }}</li>{% endfor %}</ul></dd>
+<dt>구현 상태</dt><dd>전용 가입·로그인 처리 연결됨</dd>
+<dt>실제 가입 결과</dt><dd>{{(r.evidence.get('signup') or {}).get('state','아직 검증되지 않음')}}</dd>
+<dt>실제 서버 로그인</dt><dd>{{'확인 완료' if (r.evidence.get('login') or {}).get('state')=='verified' else '아직 검증되지 않음'}}</dd>
+<dt>실제 서버 발행·공개 제목·본문 조회</dt><dd>{% if r.server_publish_verified %}확인 완료 · <a href="{{r.evidence.server_post.url}}">검증한 글 보기</a>{% else %}아직 검증되지 않음{% endif %}</dd>
+<dt>유지하는 제한</dt><dd>IP당 가입 제한·인증·게시 권한 유지. 결과 불확실 시 재제출 중지. 텔판 제목 40자·본문 500자.</dd></dl></article>{% endfor %}
+<a href="/telpan">텔판 연결</a> · <a href="/">운영 대시보드</a></html>'''

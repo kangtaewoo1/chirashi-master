@@ -500,7 +500,8 @@ def learn_signup_profile(site,force=False):
     with _signup_learn_locks[host]:
         profiles=load_signup_profiles(); old=profiles.get(host) or {}
         # 올인원 실행 때마다 상대 사이트를 두드리지 않는다. 최근 정상 측정값은 30분 재사용.
-        if old and not force and (old.get('schema') or {}).get('schema_version')==2:
+        if (old and not force and (old.get('schema') or {}).get('schema_version')==2
+                and (host!='www.telpan.co.kr' or (old.get('schema') or {}).get('adapter')=='telpan')):
             try: fresh=(datetime.now()-datetime.fromisoformat(old.get('measured_at',''))).total_seconds()<1800
             except: fresh=False
             if fresh:
@@ -510,7 +511,12 @@ def learn_signup_profile(site,force=False):
                              'signup_profile_measured_at':profile['measured_at'],'signup_has_captcha':profile['captcha'],
                              'signup_email_verification':bool(profile.get('email_verification_required'))})
                 return profile
-        measured=_signup_form_measure(site); changed=old.get('fingerprint')!=measured['fingerprint']; history=list(old.get('history') or [])
+        if site.get('platform')=='telpan' or _signup_origin(site)=='https://www.telpan.co.kr':
+            from telpan_adapter import learned_signup_profile
+            measured=learned_signup_profile()
+        else:
+            measured=_signup_form_measure(site)
+        changed=old.get('fingerprint')!=measured['fingerprint']; history=list(old.get('history') or [])
         if old and changed:
             history.append({'fingerprint':old.get('fingerprint'),'rules':old.get('rules',{}),'measured_at':old.get('measured_at')})
         history=history[-20:]
@@ -8775,6 +8781,9 @@ def auto_signup(site, submit=True):
        submit=False면 제출 직전까지만(폼 입력·캡차해결) 수행하고 실제 가입은 안 함(검증용).
        반환: (ok, msg). 성공 시 site에 mb_id/mb_pass가 저장돼 있다.
        이메일 인증 필요·지원불가 캡차는 실패로 반환(가입 대상 제외)."""
+    if site.get('platform')=='telpan' or _signup_origin(site)=='https://www.telpan.co.kr':
+        from telpan_adapter import resume_known_account
+        return resume_known_account(site,globals(),submit=submit)
     from selenium.webdriver.common.by import By
     cfg=load_config()
     _snm=site.get('name') or site.get('site_url','')
@@ -12995,6 +13004,12 @@ def api_site_signup_prepare(sid):
     d=request.get_json(silent=True) or {}; now=datetime.now().isoformat(timespec='seconds')
     sites=load_sites(); site=next((s for s in sites if s.get('id')==sid),None)
     if not site: return jsonify({'ok':False,'error':'사이트 없음'}),404
+    if site.get('platform')=='telpan' or _signup_origin(site)=='https://www.telpan.co.kr':
+        from telpan_adapter import learned_signup_profile
+        profile=learned_signup_profile()
+        return jsonify(ok=True,status='profile_required',learned=True,
+                       required_fields=profile['fields'],entry_url='/telpan',
+                       notice='학습한 텔판 경로를 재사용합니다. 계정정보가 없으면 등록 대기로 표시하며 임의 이메일·SNS를 생성하지 않습니다.')
     learn_error=''; profile=None
     try: profile=learn_signup_profile(site,force=False)
     except Exception as e: learn_error=str(e)[:180]
@@ -14415,6 +14430,7 @@ DASH_HTML=r'''<header><div class="logo" onclick="window.scrollTo({top:0,behavior
 </div>
 
 <div id="p-set" class="panel">
+<p><a href="/site-knowledge" style="color:#60a5fa">사이트별 가입·로그인 학습 및 실측 내역</a></p>
 <p><a href="/telpan" style="color:#60a5fa">텔판 자동발행 연결 · 계정 저장 및 서버 발행 검증</a></p>
 <!-- ★설정 탭 압축 재구성(대표님 2026-09-11 '자리 차지 많다·깔끔하게·눈에 잘 들어오게' + 'OpenAI 화면에서 제거'):
      라벨-입력 가로 배치(.f), 3열 자동 그리드, 긴 설명은 title 툴팁/한 줄로, 고급(IMAP·Bright Data·지역생성·단가)은 접힘(details.adv).

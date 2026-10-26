@@ -6,6 +6,54 @@ from datetime import datetime, timezone
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlsplit, urlunsplit, parse_qsl, urlencode
 
+
+def merge_flow_knowledge(previous, definition, event=None):
+    """Version an adapter's value-free recipe and retain distinct live evidence stages."""
+    origin = definition['origin']
+    base = urlsplit(origin)
+    if base.scheme != 'https' or not base.hostname or base.username or base.password or base.path:
+        raise ValueError('Invalid knowledge origin')
+    recipe = {'origin': origin, 'adapter': definition['adapter'], 'fields': [], 'routes': {},
+              'limits': dict(definition.get('limits') or {})}
+    for field in definition['fields']:
+        # Actual values, secrets, contact details and remote error text never enter this store.
+        clean = {k: field[k] for k in ('name', 'role', 'required', 'type', 'selector') if k in field}
+        recipe['fields'].append(clean)
+    for name, url in definition['routes'].items():
+        p = urlsplit(url)
+        if (p.scheme != base.scheme or p.netloc != base.netloc or p.username or p.password
+                or p.query or p.fragment):
+            raise ValueError('Cross-origin or private knowledge URL')
+        recipe['routes'][name] = url
+    fingerprint = hashlib.sha256(json.dumps(recipe, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+    previous = previous or {}
+    changed = previous.get('fingerprint') != fingerprint
+    history = list(previous.get('history') or [])
+    if previous and changed:
+        history.append({'version': previous.get('version'), 'fingerprint': previous.get('fingerprint'),
+                        'evidence': previous.get('evidence') or {}})
+    evidence = {} if changed else dict(previous.get('evidence') or {})
+    if event:
+        stage = event.get('stage'); state = event.get('state')
+        allowed = {'signup': {'created', 'restricted', 'duplicate', 'human_required', 'unknown', 'rejected'},
+                   'login': {'verified', 'review'}, 'server_post': {'verified'}, 'browser_post': {'verified'}}
+        if stage not in allowed or state not in allowed[stage]: raise ValueError('Unknown evidence stage')
+        item = {'state': state, 'checked_at': datetime.now(timezone.utc).isoformat()}
+        if stage in ('server_post', 'browser_post'):
+            receipt = event.get('receipt') or {}; p = urlsplit(str(receipt.get('url') or ''))
+            if (p.scheme != base.scheme or p.netloc != base.netloc or p.username or p.password or p.query
+                    or p.fragment or not receipt.get('title_match') or not receipt.get('body_match')
+                    or receipt.get('public_read_without_authentication') is not True):
+                raise ValueError('Public post receipt required')
+            if stage == 'server_post' and receipt.get('transport') != definition['adapter']+'_server_browser':
+                raise ValueError('Browser-only evidence is not server evidence')
+            item.update(url=receipt['url'], title_match=True, body_match=True, public_read=True)
+        evidence[stage] = item
+    return {**recipe, 'fingerprint': fingerprint, 'version': int(previous.get('version', 0)) + int(changed),
+            'history': history[-20:], 'evidence': evidence,
+            'implementation_state': 'adapter_implemented',
+            'server_publish_verified': (evidence.get('server_post') or {}).get('state') == 'verified'}
+
 class Node:
     def __init__(self, tag='', attrs=None, parent=None):
         self.tag=tag; self.attrs=dict(attrs or []); self.parent=parent; self.children=[]; self.parts=[]
