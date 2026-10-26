@@ -62,5 +62,16 @@ class SiteGoalTests(unittest.TestCase):
         for cfg in ({},{'site_goal':None},{'site_goal':'invalid'}):
             self.assertEqual(self.env['_site_goal_progress'](cfg,[])['site_goal'],50)
 
+    def test_dashboard_uses_qualified_sites_not_historical_registrations(self):
+        import json, subprocess
+        source=Path(__file__).with_name('app.py').read_text(encoding='utf-8')
+        statement=next(line for line in source.splitlines() if line.startswith('if(r.site_goal){'))
+        script="const r={site_goal:50,site_done:15,site_perm:112}; const el={style:{}}; const $=id=>el;"+statement+"; console.log(JSON.stringify(el));"
+        result=subprocess.run(['node','-e',script],check=True,capture_output=True,encoding='utf-8')
+        value=json.loads(result.stdout)
+        self.assertIn('15/50곳 (30%)',value['textContent'])
+        self.assertIn('추가 35곳 필요',value['textContent'])
+        self.assertEqual(value['style']['color'],'var(--p)')
+
 
 if __name__=='__main__': unittest.main()
