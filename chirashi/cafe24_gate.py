@@ -4,13 +4,6 @@ import re
 import threading
 from urllib.parse import parse_qs, urlsplit, unquote, quote
 
-# Bright Data 통합
-import chirashi.bright_data as bright_data_module
-bright_data_client = bright_data_module.bright_data_client
-get_bright_data_proxy = bright_data_module.get_bright_data_proxy
-enable_web_unlocker = bright_data_module.enable_web_unlocker
-brave_search_query = bright_data_module.brave_search_query
-
 _context = threading.local()
 
 class AccessStopped(Exception):
@@ -158,33 +151,6 @@ def unattended_block(site):
     _hard_hold = audit_state in ('admin_only', 'human_verification_required', 'manual_review', 'result_review', 'site_database_error', 'hosting_service_restricted', 'hosting_unavailable', 'credentials_required', 'tls_certificate_expired', 'tls_validation_error')
     if _hard_hold:
         return 'unattended_'+str(audit_state)
-    # ★Bright Data 통합: Cloudflare 보안 우회 기능 추가
-    if bright_data_client.is_available() and site.get('has_captcha'):
-        # Bright Data를 사용하여 CAPTCHA 해결 가능 여부 확인
-        try:
-            captcha_info = {
-                'site_url': site.get('site_url'),
-                'platform': site.get('platform', 'cafe24')
-            }
-            # CAPTCHA 해결 시도
-            if enable_web_unlocker():
-                # CAPTCHA가 있는 경우는 일반적으로 차단하지만, Bright Data를 사용하여 해결 가능하면 통과
-                # 실제 구현은 solve_captcha_with_bright_data 함수를 통해 처리됨
-                pass  # 여기서는 단순히 확인만 수행
-        except Exception as e:
-            print(f"CAPTCHA 해결 시도 중 오류: {e}")
-    # ★Brave Search 통합: 사이트 검증 기능 개선
-    if bright_data_client.is_available() and site.get('platform') == 'cafe24':
-        try:
-            # Brave Search를 사용하여 사이트 검색 결과 확인
-            search_result = brave_search_query(f"site:{site.get('site_url')}", 5)
-            if search_result and 'web' in search_result:
-                results = search_result['web'].get('results', [])
-                # 검색 결과가 없거나, 특정 조건이 충족되지 않으면 차단
-                if not results or len(results) < 2:  # 적은 수의 결과는 신뢰도 낮음
-                    return 'low_search_result_count'
-        except Exception as e:
-            print(f"Brave Search 검색 중 오류: {e}")
     # ★문제 수정: admin_only 상태인 사이트는 먼저 처리되어야 함 (platform != gnuboard 조건보다 우선)
     if site.get('has_captcha') or site.get('write_access_state') in ('admin_only', 'human_verification_required'):
         return 'human_verification_required'

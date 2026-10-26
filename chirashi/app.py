@@ -4295,6 +4295,10 @@ def gnuboard_post(site, title, content_html, skip_login=False):
     except Exception: pass
     _cap=detect_captcha(d)
     if _use_sbr and _cap:
+        set_site_flag(site.get('id'),has_captcha=True,
+                      write_access_state='human_verification_required',
+                      unattended_audit={'state':'human_verification_required',
+                                        'checked_at':datetime.now().isoformat(timespec='seconds')})
         return False,'무인 발행 보류 — 사람 확인 필요, 재제출 금지'
 
     # 제목 — 일부 스킨은 wr_subject가 hidden 입력(JS 에디터 연동)이라 send_keys가
@@ -7089,11 +7093,14 @@ def is_autopostable(site):
     #   unattended_gate_enabled=False(대표님만 설정 변경 가능, 자율AI가 못 건드림)이면, 실게시 검증 완료
     #   (verified_post_url+passed) 사이트는 unattended_block(감사 차단)을 통과시킨다. publishing_block(cafe24
     #   계정·캡차)과 로그인·캡차·데모 제외는 그대로 적용. 미검증 신규 보드는 영향 없음(아래에서 verified만 허용).
-    _gate_on=bool(load_config().get('unattended_gate_enabled',True))
+    _cfg=load_config()
+    _gate_on=bool(_cfg.get('unattended_gate_enabled',True))
     _verified=str(site.get('verified_post_url') or '').startswith(('http://','https://')) and site.get('write_test_status')=='passed'
     if publishing_block(site):
         return False
-    if (_gate_on or not _verified) and unattended_block(site):
+    # Queue admission must match the remote publisher even when the legacy audit switch is off.
+    _remote_gnu=site.get('platform')=='gnuboard' and bool(_cfg.get('sbr_enabled'))
+    if (_gate_on or not _verified or _remote_gnu) and unattended_block(site):
         return False
     verified_url=str(site.get('verified_post_url') or '')
     # 로그인 필요 사이트인데 로그인 정보(mb_id)가 없으면 발행 제외 — 가입 미완료 사이트가

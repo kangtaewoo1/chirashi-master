@@ -93,5 +93,17 @@ class GnuboardBrowserTest(unittest.TestCase):
         eval(compile(ast.Expression(expression),'driver-choice-test','eval'),{'get_driver':driver,'_use_sbr':True})
         driver.assert_called_once_with(remote=True)
 
+    def test_detected_challenge_is_saved_before_any_form_fill(self):
+        fn=next(n for n in self.tree.body if isinstance(n,ast.FunctionDef) and n.name=='gnuboard_post')
+        branch=next(n for n in fn.body if isinstance(n,ast.If) and ast.unparse(n.test)=='_use_sbr and _cap')
+        probe=ast.FunctionDef(name='probe',args=ast.arguments(posonlyargs=[],args=[],kwonlyargs=[],kw_defaults=[],defaults=[]),body=[branch],decorator_list=[])
+        updates=Mock()
+        env={'_use_sbr':True,'_cap':'recaptcha','site':self.site(),'set_site_flag':updates,'datetime':datetime}
+        exec(compile(ast.fix_missing_locations(ast.Module(body=[probe],type_ignores=[])),'challenge-test','exec'),env)
+        self.assertFalse(env['probe']()[0])
+        updates.assert_called_once()
+        self.assertTrue(updates.call_args.kwargs['has_captcha'])
+        self.assertEqual(updates.call_args.kwargs['write_access_state'],'human_verification_required')
+
 
 if __name__=='__main__': unittest.main()

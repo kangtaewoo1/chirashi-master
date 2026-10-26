@@ -5,7 +5,7 @@ import sys
 sys.path.insert(0, '.')
 
 # 모듈 경로 수정
-from chirashi.cafe24_gate import access_reason, guarded_publish, stop_on_alerts, result_is_new, publishing_block, unattended_block
+from cafe24_gate import access_reason, guarded_publish, stop_on_alerts, result_is_new, publishing_block, unattended_block
 
 class GateTests(unittest.TestCase):
     def test_queue_requires_credentials_and_verified_board(self):

@@ -58,6 +58,17 @@ class SiteGoalTests(unittest.TestCase):
         value=next(n.value for n in fn.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='fan' for t in n.targets))
         self.assertEqual(eval(compile(ast.Expression(value),'fanout-test','eval'),{'cfg':{'publish_fanout':50}}),12)
 
+    def test_remote_queue_rejects_holds_even_with_legacy_gate_disabled(self):
+        self.env['load_config']=lambda:{'unattended_gate_enabled':False,'sbr_enabled':True}
+        self.assertTrue(self.env['is_autopostable'](self.valid()))
+        for change in ({'has_captcha':True},{'write_access_state':'admin_only'},
+                       {'write_access_state':'human_verification_required'},
+                       {'unattended_audit':{'state':'result_review'}},
+                       {'unattended_audit':{'state':'tls_certificate_expired'}},
+                       {'manual_review_only':True}):
+            with self.subTest(change=change):
+                self.assertFalse(self.env['is_autopostable'](dict(self.valid(),**change)))
+
     def test_missing_or_invalid_goal_uses_fifty(self):
         for cfg in ({},{'site_goal':None},{'site_goal':'invalid'}):
             self.assertEqual(self.env['_site_goal_progress'](cfg,[])['site_goal'],50)
