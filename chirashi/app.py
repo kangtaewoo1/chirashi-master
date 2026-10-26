@@ -21,7 +21,7 @@ for _stream in ('stdout', 'stderr'):
 from datetime import datetime, timedelta
 from pathlib import Path
 from collections import defaultdict
-from cafe24_gate import AccessStopped, guarded_publish, stop_on_alerts, result_is_new, publishing_block, unattended_block, login_requirement_confirmed
+from cafe24_gate import AccessStopped, guarded_publish, stop_on_alerts, result_is_new, publishing_block, unattended_block, login_requirement_confirmed, normalize_browser_endpoint, browser_connection_error
 from form_schema import measure_html, changes_between
 import urllib3; urllib3.disable_warnings()
 
@@ -3396,20 +3396,7 @@ def get_driver(remote=False):
                         try: _drivers[rkey].quit()
                         except: pass
                         _drivers.pop(rkey,None)
-                if not ep.startswith('http'): ep='https://'+ep
-                if ':9515' not in ep and not re.search(r':\d+',ep.split('@')[-1]): ep=ep.rstrip('/')+':9515'
-                # ★geo 완전 정화(2026-09-09 대표님 'Wrong customer name' 마저 잡기): endpoint에 예전
-                #   주입/저장으로 -country-XX가 박혀 있으면 username을 깨 인증실패 → username 부분에서 제거.
-                #   (username=스킴 뒤 ~ 첫 ':' 전. 비번·호스트는 건드리지 않음.)
-                _mm=re.match(r'(https?://)([^:@/]+)(.*)$',ep)
-                if _mm:
-                    _user=re.sub(r'-country-[a-z]{2}','',_mm.group(2))   # username에서 -country-XX 제거
-                    ep=f'{_mm.group(1)}{_user}{_mm.group(3)}'
-                # geo 주입(sbr_country)은 기본 끔. 명시할 때만(권장 안 함) 다시 붙임.
-                _cc=str(cfg.get('sbr_country') or '').strip().lower()
-                if _cc and '-country-' not in ep:
-                    _m2=re.match(r'(https?://)([^:@/]+)(.*)$',ep)
-                    if _m2: ep=f'{_m2.group(1)}{_m2.group(2)}-country-{_cc}{_m2.group(3)}'
+                ep=normalize_browser_endpoint(ep)
                 opts=webdriver.ChromeOptions(); opts.add_argument('--lang=ko-KR')
                 # ★renderer timeout 근본해결(2026-09-08 대표님 '원격크롬 방식 재검토'): pageLoadStrategy='none'.
                 #   기본(normal)은 d.get()이 페이지 완전로드까지 대기 → 원격크롬+CF처리+해외지연이 겹쳐
@@ -3418,13 +3405,13 @@ def get_driver(remote=False):
                 opts.page_load_strategy='none'
                 # command 응답 타임아웃도 넉넉히(해외 왕복 대비).
                 try:
-                    from selenium.webdriver.remote.remote_connection import RemoteConnection
-                    conn=RemoteConnection(ep,keep_alive=True)
+                    from selenium.webdriver.chromium.remote_connection import ChromiumRemoteConnection
+                    conn=ChromiumRemoteConnection(ep,'goog','chrome')
                     try: conn.set_timeout(180)
                     except Exception: pass
                     d=webdriver.Remote(command_executor=conn,options=opts)
-                except Exception:
-                    d=webdriver.Remote(command_executor=ep,options=opts)
+                except Exception as exc:
+                    raise RuntimeError(browser_connection_error(exc)) from None
                 # none 전략이라 page_load_timeout은 사실상 무의미하나 안전값. implicitly_wait로 요소대기.
                 try: d.set_page_load_timeout(120)
                 except Exception: pass
@@ -13360,67 +13347,40 @@ def api_unlocker_test():
 
 @app.route('/api/sbr/test',methods=['GET','POST'])
 def api_sbr_test():
-    """Scraping Browser(원격 크롬)가 이 환경에서 실제로 연결·페이지로드 되는지 실측 진단. 토큰 접근 가능.
-       ★타카고 CF+로그인 발행을 재시도하기 전, '이번엔 되는지'를 근거로 판정하기 위한 것.
-       (이전 보류 사유=한국VPS↔해외 Bright Data 프록시 왕복지연으로 원격크롬 renderer timeout.)
-       각 단계 소요시간(연결/get/제목확보)을 반환해 병목이 연결인지 렌더인지 구분한다."""
-    from selenium.webdriver.common.by import By
+    """One explicit, bounded Browser API session; never publish or change access flags."""
+    from selenium import webdriver
+    from selenium.webdriver.chromium.remote_connection import ChromiumRemoteConnection
     cfg=load_config()
-    ep=str(cfg.get('sbr_endpoint') or '').strip()
-    if not (cfg.get('sbr_enabled') and ep):
-        return jsonify({'ok':False,'error':'Scraping Browser 미설정(설정에서 활성화+endpoint 입력 필요)'})
-    # ★진단(2026-09-09): username(비번 제외)·geo·호스트를 마스킹해 보여줌 — 'Wrong customer name' 원인 파악.
-    #   Bright Data 정상 형식: brd-customer-{ID}-zone-{ZONE}. ID가 없거나 -country- 붙어있으면 문제.
-    def _mask_ep(e):
-        try:
-            e2=e if e.startswith('http') else 'https://'+e
-            _m=re.match(r'https?://([^:@/]+)(?::[^@]*)?@([^/]+)',e2)  # user @ host(비번 제거)
-            if _m: return {'username':_m.group(1),'host':_m.group(2)}
-        except Exception: pass
-        return {'username':'(파싱실패)','host':'?'}
-    _epinfo=_mask_ep(ep); _epinfo['sbr_country']=str(cfg.get('sbr_country') or '(없음)')
-    _epinfo['has_country_flag']=('-country-' in ep)
-    target=(request.args.get('url') or 'https://takago.store/board/product/list.html?board_no=6').strip()
-    steps={}; t0=time.time()
-    d=None
+    if request.method!='POST':
+        return jsonify({'ok':False,'configured':bool(cfg.get('sbr_endpoint')),
+                        'error':'설정 화면의 연결 테스트 버튼을 눌러 주세요. 테스트는 예제 페이지 1장을 엽니다.'}),405
     try:
-        d=get_driver(remote=True)                       # 원격 크롬 연결(브라우저 세션 생성)
-        steps['connect_sec']=round(time.time()-t0,1)
-        # get — pageLoadStrategy='none'이라 즉시 반환. 이후 <title>/요소를 폴링한다.
-        tg=time.time()
-        try: d.get(target)
-        except Exception as e: steps['get_error']=str(e)[:120]
-        steps['get_return_sec']=round(time.time()-tg,1)
-        # 제목/URL 확보까지 폴링(원격+CF 처리 대비 최대 40초). 여기서 timeout이면 이전과 동일 벽.
-        tp=time.time(); title=''; cur=''
-        while time.time()-tp<40:
-            try:
-                title=(d.title or ''); cur=(d.current_url or '')
-                if title or (cur and cur!='data:,' and cur!='about:blank'): break
-            except Exception: pass
-            time.sleep(1)
-        steps['page_ready_sec']=round(time.time()-tp,1)
-        try: psrc=(d.page_source or '')
-        except Exception: psrc=''
-        low=psrc.lower()
-        cf_blocked=any(k in low for k in ['just a moment','cf-chl','challenge-platform','_cf_chl'])
-        has_form=any(k in psrc for k in ['상품','게시','글쓰기','list','write','제목','member'])
-        got_page=bool(title) or len(psrc)>2000
-        verdict=('연결·페이지로드 성공 — CF+로그인 재시도 가치 있음' if got_page and not cf_blocked else
-                 'CF 잔존(원격이 CF 못 넘음)' if cf_blocked else
-                 '연결됐으나 페이지 못 받음(renderer timeout 의심 — 이전 벽 그대로)')
-        return jsonify({'ok':True,'url':target,'steps':steps,'total_sec':round(time.time()-t0,1),
-                        'title':title[:80],'current_url':cur[:120],'bytes':len(psrc),
-                        'cf_blocked':cf_blocked,'looks_usable':has_form,'verdict':verdict,'endpoint':_epinfo})
-    except Exception as e:
-        return jsonify({'ok':False,'error':f'원격 연결/실행 예외: {str(e)[:200]}',
-                        'steps':steps,'total_sec':round(time.time()-t0,1),'endpoint':_epinfo,
-                        'hint':'연결 자체 실패면 endpoint(비번 포함)·잔액·계정상태 확인'})
+        endpoint=normalize_browser_endpoint(cfg.get('sbr_endpoint'))
+    except ValueError as exc:
+        return jsonify({'ok':False,'configured':False,'error':str(exc)})
+    driver=None;started=time.monotonic()
+    try:
+        options=webdriver.ChromeOptions()
+        options.page_load_strategy='eager'
+        connection=ChromiumRemoteConnection(endpoint,'goog','chrome')
+        connection.set_timeout(45)
+        driver=webdriver.Remote(command_executor=connection,options=options)
+        driver.set_page_load_timeout(30)
+        driver.get('https://example.com/')
+        title=str(driver.title or '')
+        valid=title.strip()=='Example Domain'
+        return jsonify({'ok':valid,'configured':True,'target':'https://example.com/',
+                        'total_sec':round(time.monotonic()-started,1),
+                        'message':('Bright Data에 연결해 예제 페이지를 확인했습니다. 실제 게시글은 발행하지 않았습니다.' if valid else
+                                   '원격 브라우저에 연결됐지만 예제 페이지를 확인하지 못했습니다.'),
+                        'publishing_enabled':bool(cfg.get('sbr_enabled'))})
+    except Exception as exc:
+        return jsonify({'ok':False,'configured':True,'error':browser_connection_error(exc),
+                        'total_sec':round(time.monotonic()-started,1)})
     finally:
-        # 진단 세션은 남기지 않는다(스레드별 __SBR__ 드라이버가 발행에 재사용되지 않게 정리).
-        try:
-            if d: reset_driver()
-        except Exception: pass
+        if driver is not None:
+            try: driver.quit()
+            except Exception: pass
 
 @app.route('/api/openai/usage',methods=['GET'])
 def api_openai_usage():
@@ -14483,9 +14443,12 @@ DASH_HTML=r'''<header><div class="logo" onclick="window.scrollTo({top:0,behavior
 <div><label class="chk" style="color:var(--g)"><input type="checkbox" id="cUnlockerEn">Web Unlocker (CF·캡차 자동해결 · 약 $1.5/1000건)</label>
 <div class="f"><small>API 키</small><input type="password" id="cUnlockerKey" placeholder="변경시만"></div>
 <div class="f"><small>존 이름</small><input type="text" id="cUnlockerZone" placeholder="web_unlocker1"></div></div>
-<div><label class="chk" style="color:var(--g)"><input type="checkbox" id="cSbrEn">Scraping Browser (로그인형 Cafe24 · GB 과금)</label>
-<div class="f" style="grid-template-columns:1fr"><small>Endpoint</small><input type="password" id="cSbrEp" placeholder="brd-customer-...-zone-scraping_browser:PASS@brd.superproxy.io:9515 (변경시만)"></div>
-<div class="help"><a href="https://brightdata.com/" target="_blank" rel="noopener" style="color:var(--p)">Bright Data ↗</a> · 키·비번은 화면·API에 노출 안 됨 · 실패 시 직접연결로 폴백.</div></div>
+<div><label class="chk" style="color:var(--g)"><input type="checkbox" id="cSbrEn">Bright Data Browser API를 발행에 사용</label>
+<div class="f" style="grid-template-columns:1fr"><small>Selenium 연결 주소</small><input type="password" autocomplete="off" id="cSbrEp" placeholder="Bright Data의 Selenium 연결 주소를 붙여넣으세요"></div>
+<div class="help">Browser API → Overview → Selenium의 연결 주소를 넣고 아래 설정 저장을 누르세요. 연결 테스트는체크박스를 켜지 않아도 됩니다.</div>
+<button class="btn btn-xs" type="button" id="sbrTestBtn" onclick="testSbrConnection()">연결 테스트 (예제 페이지 1장)</button>
+<div class="help" id="sbrTestResult" role="status"></div>
+<div class="help"><a href="https://brightdata.com/cp/zones" target="_blank" rel="noopener" style="color:var(--p)">Bright Data Browser API 열기 ↗</a> · 연결 주소는 비밀번호를 포함합니다. 채팅에 보내지 마세요. 테스트도 서비스 사용량에 포함될 수 있습니다.</div></div>
 </div></details></div>
 
 </div>
@@ -14623,6 +14586,14 @@ function renderNodeStrip(){const box=$('nodeStrip');if(!box)return;
       +'</div>';}).join('');
 }
 let _editId=null;
+async function testSbrConnection(){
+const button=$('sbrTestBtn'),result=$('sbrTestResult');
+if($('cSbrEp').value.trim()){result.textContent='먼저 아래 설정 저장을 누른 뒤 연결 테스트를 눌러 주세요.';return;}
+button.disabled=true;result.textContent='Bright Data 연결 확인 중…';
+try{const r=await api('/sbr/test','POST',{});result.textContent=r?(r.message||r.error||'연결 결과를 받지 못했습니다.'):'연결 결과를 받지 못했습니다. 다시 시도해 주세요.';}
+catch(e){result.textContent='연결 결과를 받지 못했습니다. 다시 시도해 주세요.';}
+finally{button.disabled=false;}
+}
 async function runDiag(){$('diagOut').innerHTML='<p style="color:var(--d);padding:14px">🩺 진단 중... 크롬을 실제로 띄워보는 중이라 최대 60초 걸립니다.</p>';const r=await api('/diag','GET');if(!r){$('diagOut').innerHTML='<p style="color:var(--r)">진단 실패</p>';return}
 const rows=(r.steps||[]).map(s=>`<tr><td>${s.ok?'<span style="color:var(--g)">✅</span>':'<span style="color:var(--r)">❌</span>'}</td><td><b>${esc(s.name)}</b></td><td style="color:var(--d)">${esc(s.detail)}</td></tr>`).join('');
 const hdr=r.ok?'<span style="color:var(--g)">✅ 발행 가능 — 크롬 정상 작동</span>':'<span style="color:var(--r)">❌ 발행 불가 — 아래 ❌ 항목 확인</span>';

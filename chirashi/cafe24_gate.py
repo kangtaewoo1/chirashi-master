@@ -2,15 +2,40 @@
 import functools
 import re
 import threading
-from urllib.parse import parse_qs, urlsplit
-
-# Bright Data 통합
-from bright_data import bright_data_client, get_bright_data_proxy, enable_web_unlocker
+from urllib.parse import parse_qs, urlsplit, unquote, quote
 
 _context = threading.local()
 
 class AccessStopped(Exception):
     pass
+
+def normalize_browser_endpoint(endpoint):
+    """Validate Selenium credentials locally, without network calls or secret errors."""
+    raw=str(endpoint or '').strip()
+    if not raw or raw=='***설정됨***':
+        raise ValueError('Bright Data의 Selenium 연결 주소를 먼저 저장해 주세요.')
+    if '://' not in raw: raw='https://'+raw
+    try:
+        p=urlsplit(raw)
+        valid=(p.scheme=='https' and p.hostname=='brd.superproxy.io' and p.port in (None,9515)
+               and p.path in ('','/') and not p.query and not p.fragment and p.username and p.password)
+        user=unquote(p.username or '')
+        if not valid or not re.fullmatch(r'brd-customer-[A-Za-z0-9_-]+-zone-[A-Za-z0-9_-]+',user):
+            raise ValueError()
+        return 'https://'+quote(user,safe='')+':'+quote(unquote(p.password),safe='')+'@brd.superproxy.io:9515'
+    except (ValueError,TypeError):
+        raise ValueError('Browser API의 Selenium 연결 주소가 필요합니다. HTTPS 주소와 9515 포트를 확인해 주세요.') from None
+
+def browser_connection_error(error):
+    """Return useful categories; never echo exception text containing credentials."""
+    text=str(error).lower()
+    if any(k in text for k in ('401','403','407','authentication','wrong customer','invalid auth')):
+        return 'Bright Data 인증에 실패했습니다. Browser API의 연결 주소·비밀번호·계정 상태를 확인해 주세요.'
+    if any(k in text for k in ('balance','credit','billing','payment','quota')):
+        return 'Bright Data 사용 한도 또는 잔액을 확인해 주세요.'
+    if 'timeout' in text or 'timed out' in text:
+        return 'Bright Data 연결 시간이 초과됐습니다. 잠시 후 다시 테스트해 주세요.'
+    return 'Bright Data 연결에 실패했습니다. 연결 주소와 서비스 상태를 확인해 주세요.'
 
 def login_requirement_confirmed(message):
     """Only an explicit login/member notice establishes a login requirement.
