@@ -21,7 +21,7 @@ for _stream in ('stdout', 'stderr'):
 from datetime import datetime, timedelta
 from pathlib import Path
 from collections import defaultdict
-from cafe24_gate import AccessStopped, guarded_publish, stop_on_alerts, result_is_new, publishing_block, unattended_block
+from cafe24_gate import AccessStopped, guarded_publish, stop_on_alerts, result_is_new, publishing_block, unattended_block, login_requirement_confirmed
 from form_schema import measure_html, changes_between
 import urllib3; urllib3.disable_warnings()
 
@@ -10018,7 +10018,7 @@ def _publish_combo_to_site(s, kw, wname, rid, cfg, writer_name='', chrome_sem=No
             _lp=str(fresh.get('last_post_at') or '')
             _recent_ok=bool(_lp) and (datetime.now()-datetime.strptime(_lp[:19],'%Y-%m-%d %H:%M:%S')).total_seconds()<86400
         except Exception: _recent_ok=False
-        _real_login=(('로그인이 필요' in _m or '권한 alert' in _m or '게시 권한 없음' in _m or '권한이 없' in _m) and 'wr_subject' not in _m)
+        _real_login=login_requirement_confirmed(_m)
         if (not ok) and (not fresh.get('login_required')) and _real_login and not _recent_ok:
             try: set_site_flag(fresh.get('id'),login_required=True)
             except Exception: pass
@@ -11731,7 +11731,12 @@ def api_pipeline_report_site():
                 if _site and _signup_wall and not str(_site.get('mb_id') or '').strip() and not _recent_pub:
                     _sfc=int(_site.get('signup_fail_count',0) or 0)+1
                     if _sfc>=3:
-                        set_site_flag(sid,signup_fail_count=_sfc,signup_exhausted=True,login_required=True)
+                        # 가입 실패 횟수는 로그인 필요 여부의 증거가 아니다.
+                        # 기존 제한은 유지하고 명시적인 로그인 안내가 있을 때만 새로 기록한다.
+                        _signup_flags={'signup_fail_count':_sfc,'signup_exhausted':True}
+                        if login_requirement_confirmed(_msg):
+                            _signup_flags['login_required']=True
+                        set_site_flag(sid,**_signup_flags)
                         add_log(f'[가입포기] {str(_nm)[:24]} — 자동가입 {_sfc}회 실패, 이후 가입 재시도 안 함(노드 시간 절약)')
                     else:
                         set_site_flag(sid,signup_fail_count=_sfc)

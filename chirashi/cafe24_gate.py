@@ -9,6 +9,19 @@ _context = threading.local()
 class AccessStopped(Exception):
     pass
 
+def login_requirement_confirmed(message):
+    """Only an explicit login/member notice establishes a login requirement.
+
+    Missing forms, signup timeouts and generic permission denials are ambiguous.
+    They remain failures; they must not rewrite the site's access requirements.
+    """
+    text=re.sub(r'\s+', '', str(message or '')).lower()
+    if any(hint in text for hint in ('wr_subject','비표준스킨','로그인필요추정','로그인필요/')):
+        return False
+    return bool(re.search(
+        r'로그인이필요|로그인(?:을)?(?:하셔야|해야|해주세요|하십시오)|로그인후(?:에)?(?:이용|작성|접근)|'
+        r'회원만(?:글을|글쓰기|작성|이용)|loginrequired|pleaselogin|mustbeloggedin', text))
+
 def access_reason(text):
     """Normalize alert values before checking explicit administrator-only notices."""
     compact = re.sub(r'\s+', '', str(text or ''))
