@@ -66,6 +66,7 @@ class SiteGoalTests(unittest.TestCase):
                        {'unattended_audit':{'state':'result_review'}},
                        {'unattended_audit':{'state':'tls_certificate_expired'}},
                        {'last_fail_reason':'무인 발행 보류 — 사람 확인 필요, 재제출 금지'},
+                       {'last_fail_reason':'로그인이 필요한 게시판입니다 — 비회원 글쓰기 불가(권한 alert)'},
                        {'last_fail_reason':'결과 검증 대기 — 제목 불일치, 재제출 금지'},
                        {'manual_review_only':True}):
             with self.subTest(change=change):

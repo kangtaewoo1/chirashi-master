@@ -140,6 +140,8 @@ def unattended_block(site):
         return 'manual_review_only'
     # Older remote failures predate the saved CAPTCHA flag; retain their explicit stop evidence.
     previous_failure=str(site.get('last_fail_reason') or '')
+    if login_requirement_confirmed(previous_failure) and not str(site.get('mb_id') or '').strip():
+        return 'credentials_required'
     if '사람 확인 필요' in previous_failure:
         return 'human_verification_required'
     if '결과 검증 대기' in previous_failure and '재제출 금지' in previous_failure:
