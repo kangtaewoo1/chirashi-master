@@ -5641,6 +5641,7 @@ def detect_platform(url, use_cache=True):
     """사이트 URL 로 그누보드/Cafe24/KBoard 자동 판별."""
     import requests as _rq
     m=re.match(r'(https?://[^/]+)',(url or '').rstrip('/')); base=m.group(1) if m else (url or '')
+    if base == 'https://www.telpan.co.kr': return 'telpan'
     if not base: return 'gnuboard'
     if use_cache and base in _plat_cache: return _plat_cache[base]
     UA={'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36'}
@@ -5673,7 +5674,7 @@ def detect_platform(url, use_cache=True):
 def resolve_platform(site):
     """사이트의 platform 이 auto/미지정이면 감지해서 확정값 반환."""
     plat=(site.get('platform') or '').strip().lower()
-    if plat in ('gnuboard','cafe24','kboard'): return plat
+    if plat in ('gnuboard','cafe24','kboard','telpan'): return plat
     return detect_platform(site.get('site_url',''))
 
 # ==================== 감독형 자가학습 발행 (셀렉터 자동 탐색) ====================
@@ -6400,6 +6401,9 @@ def do_post(site, title, content_html, skip_login=False):
         return False,'게시 권한 없음 — 수동 검증 전용 사이트, 자동 발행 보류'
     if site.get('maintenance_hold'):
         return False,'게시 권한 없음 — 관리자 발행 보류'
+    if resolve_platform(site)=='telpan':
+        from telpan_adapter import publish
+        return publish(site,title,content_html,globals())
     # Explicit remote routing never falls back to HTTP/local submission after an uncertain result.
     if resolve_platform(site)=='gnuboard' and bool(load_config().get('sbr_enabled')):
         return _post_gnuboard_brightdata(site,title,content_html,skip_login=skip_login)
@@ -6965,7 +6969,10 @@ def worker_loop():
     while wk_active:
         # 일시정지: 큐에서 꺼내지 않고 대기 (작업 보존)
         if wk_paused: time.sleep(1); continue
-        if _pc_queue_online(): time.sleep(1); continue
+        if _pc_queue_online():
+            with post_queue.mutex:
+                _server_head=bool(post_queue.queue and post_queue.queue[0].get('site',{}).get('platform')=='telpan')
+            if not _server_head: time.sleep(1); continue
         try: job=post_queue.get(timeout=1)
         except: continue
         site=job['site']; title=job['title']; content=job['content']; cfg=load_config()
@@ -10132,7 +10139,7 @@ def _publish_one_combo(kw, wname, rid, cfg, writer_name='', nonlogin_only=False)
        (서버 DC IP는 로그인만 막힘 — 비회원 게시판은 성공). 로그인/cafe24는 노드가 전담."""
     sites=[x for x in load_sites() if is_publishable(x)]
     if nonlogin_only:
-        sites=[x for x in sites if not x.get('login_required')]
+        sites=[x for x in sites if not x.get('login_required') or x.get('platform')=='telpan']
     if not sites: return
     fan=max(1,min(12,int(cfg.get('publish_fanout',8) or 8)))   # ★2026-09-15 대표님 '사이트간 발행 최대한 병렬': 상한 6→12, 기본 4→8
     _sem=threading.Semaphore(fan)          # 이 조합의 동시 발행 수(작업실 슬롯 내)
@@ -11537,6 +11544,9 @@ def api_pc_queue_claim():
             try: job=post_queue.get_nowait()
             except queue.Empty: return jsonify({'ok':True,'job':None})
         site=next((x for x in load_sites() if x.get('id')==job.get('site',{}).get('id')),None)
+        if site and site.get('platform')=='telpan':
+            post_queue.put(job)
+            return jsonify({'ok':True,'job':None})
         if not site or not is_publishable(site) or not under_daily_limit(site,load_config()) or not under_min_interval(site)[0]:
             history_update(job['hist_id'],status='skipped',message='PC 큐 검증: 권한·보류·발행 한도 확인 필요')
             _persist_remove(job['job_id']); leases.pop(job['job_id'],None)
@@ -11653,6 +11663,7 @@ def api_pipeline_claim_sites():
             # ★노드 재시도 대상(2026-10-23 claim 0 문제 수정): is_autopostable은 '검증완료(passed)'만 통과시켜
             #   cafe24 전부(write_test failed/human_verification)가 영영 claim에서 빠졌다. 노드는 집IP+2captcha로
             #   Turnstile을 뚫어 '재검증·재발행'하는 게 목적이므로, 검증 실패여도 재시도 대상에 넣는다.
+            if s.get('platform')=='telpan': return False  # Dedicated server adapter; never generic PC publishing.
             if s.get('pc_claim_by') and float(s.get('pc_claim_expire',0) or 0) > now: return False  # 이미 claim됨
             if float(s.get('pc_last_try',0) or 0) > _retry_cool: return False   # 최근 시도 → 쿨다운
             if s.get('status')=='rejected': return False
@@ -13565,6 +13576,9 @@ def _run_write_test(sid):
     try:
         site=next((s for s in load_sites() if s.get('id')==sid),None)
         if not site: return
+        if site.get('platform')=='telpan':
+            set_site_flag(sid,last_fail_reason='무인 발행 보류 — 텔판 연결 화면에서 전용 서버 검증을 이용하세요')
+            return
         cfg=load_config()
         set_site_flag(sid,status='testing',write_test_started_at=_kst_now().strftime('%Y-%m-%d %H:%M'))
         html,title=generate_article({'지역':'테스트','서비스':'테스트'},cfg)
@@ -14401,6 +14415,7 @@ DASH_HTML=r'''<header><div class="logo" onclick="window.scrollTo({top:0,behavior
 </div>
 
 <div id="p-set" class="panel">
+<p><a href="/telpan" style="color:#60a5fa">텔판 자동발행 연결 · 계정 저장 및 서버 발행 검증</a></p>
 <!-- ★설정 탭 압축 재구성(대표님 2026-09-11 '자리 차지 많다·깔끔하게·눈에 잘 들어오게' + 'OpenAI 화면에서 제거'):
      라벨-입력 가로 배치(.f), 3열 자동 그리드, 긴 설명은 title 툴팁/한 줄로, 고급(IMAP·Bright Data·지역생성·단가)은 접힘(details.adv).
      모든 input id는 saveCfg/loadCfgUI와 1:1 — 바꾸지 말 것. OpenAI 키·모델·예산·단가 입력은 삭제됨(엔진: OpenRouter/NVIDIA). -->
@@ -15322,6 +15337,9 @@ setInterval(()=>{try{renderSites();var p=$('p-sites');if(p&&p.classList.contains
 def R(title,**kw):
     if title=='로그인': return render_template_string(HTML+LOGIN_HTML+'\n</body></html>',title=title,**kw)
     return render_template_string(HTML+DASH_HTML,title=title,**kw)
+
+from telpan_adapter import register as _register_telpan
+_register_telpan(app,globals())
 
 # ==================== Main ====================
 def main():

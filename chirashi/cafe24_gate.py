@@ -162,6 +162,9 @@ def unattended_block(site):
     # ★문제 수정: admin_only 상태인 사이트는 먼저 처리되어야 함 (platform != gnuboard 조건보다 우선)
     if site.get('has_captcha') or site.get('write_access_state') in ('admin_only', 'human_verification_required'):
         return 'human_verification_required'
+    if site.get('platform') == 'telpan':
+        from telpan_adapter import block
+        return block(site)
     if site.get('platform') != 'gnuboard' or site.get('login_required') or site.get('mb_id'):
         return 'unattended_adapter_unverified'
     if audit_state and audit_state!='ready' and not _verified_post:
