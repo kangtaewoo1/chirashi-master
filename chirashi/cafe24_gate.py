@@ -10,6 +10,7 @@ class AccessStopped(Exception):
     pass
 
 def access_reason(text):
+    """Normalize alert values before checking explicit administrator-only notices."""
     compact = re.sub(r'\s+', '', str(text or ''))
     # Match the normalized value, including empty/non-string alert input.
     if any(s in compact for s in (
