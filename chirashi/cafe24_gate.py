@@ -11,7 +11,11 @@ class AccessStopped(Exception):
 
 def access_reason(text):
     compact = re.sub(r'\s+', '', str(text or ''))
-    if any(s in compact for s in ('관리자에게만글쓰기권한', '관리자만글쓰기', '관리자만작성', '관리자에게만작성권한')):
+    # Match the normalized value, including empty/non-string alert input.
+    if any(s in compact for s in (
+        '관리자에게만글쓰기권한', '관리자만글쓰기', '관리자만작성',
+        '관리자에게만작성권한', '관리자전용게시판입니다', '[admin_only]',
+    )):
         return 'admin_only'
     return ''
 
@@ -58,6 +62,7 @@ def publishing_block(site):
         return ''
     state = site.get('write_access_state')
     if state in ('admin_only', 'human_verification_required'):
+        # Saved credentials do not prove write permission or successful verification.
         return state
     if site.get('login_required') and not (
         str(site.get('mb_id') or '').strip()

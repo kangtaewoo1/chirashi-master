@@ -1,7 +1,7 @@
 import unittest
 import ast
 from pathlib import Path
-from cafe24_gate import guarded_publish, stop_on_alerts, result_is_new, publishing_block
+from cafe24_gate import access_reason, guarded_publish, stop_on_alerts, result_is_new, publishing_block
 
 class GateTests(unittest.TestCase):
     def test_queue_requires_credentials_and_verified_board(self):
@@ -37,6 +37,18 @@ class GateTests(unittest.TestCase):
         self.assertIn('[admin_only]',message)
         self.assertEqual(reached,[])
 
+    def test_confirmed_success_without_access_denial_still_publishes(self):
+        # A successful response must remain usable when there is no denial alert.
+        reached=[]
+        @guarded_publish
+        def publish():
+            stop_on_alerts(['정상적으로 등록되었습니다.'])
+            reached.append('submit')
+            return True, 'posted'
+        ok, message = publish()
+        self.assertTrue(ok)  # 발행 성공
+        self.assertEqual(reached,['submit'])  # 함수가 실행됨
+
     def test_comment_denial_does_not_deny_new_posts(self):
         @guarded_publish
         def publish():
@@ -70,6 +82,184 @@ class GateTests(unittest.TestCase):
 
     def test_read_url_supported(self):
         self.assertTrue(result_is_new('https://brandl.co.kr/','https://brandl.co.kr/board/product/read.html?board_no=6&no=9999',6))
+
+    def test_admin_only_board_with_credentials_and_old_evidence_stays_blocked(self):
+        # Old proof and saved credentials cannot override a current access denial.
+        site = {
+            'platform': 'cafe24',
+            'login_required': True,
+            'mb_id': 'real_user',  # 실제 사용자 ID
+            'mb_pass_enc': 'encrypted_password',  # 실제 암호
+            'write_access_state': 'admin_only',  # 관리자 전용 게시판
+            'write_test_status': 'passed',
+            'site_url': 'https://example.com/board/product/list.html?board_no=6',
+            'verified_post_url': 'https://example.com/article/test/6/42/'
+        }
+        self.assertEqual(publishing_block(site), 'admin_only')
+        # After a real revalidation clears the denial, valid evidence can allow it.
+        site['write_access_state'] = 'normal'
+        self.assertEqual(publishing_block(site), '')
+
+    def test_access_reason_admin_only(self):
+        # 기존 테스트 케이스
+        self.assertEqual(access_reason('관리자에게만 글쓰기 권한이 있습니다.'), 'admin_only')
+        self.assertEqual(access_reason('관리자만 글쓰기'), 'admin_only')
+        self.assertEqual(access_reason('관리자에게만 작성 권한이 있습니다.'), 'admin_only')
+
+        # 새로운 테스트 케이스: 관리자 전용 게시판 판단을 더 정확하게
+        self.assertEqual(access_reason('관리자에게만 글쓰기 권한이 있습니다.\\n\\n'), 'admin_only')
+        self.assertEqual(access_reason('관리자에게만 글쓰기 권한이 있습니다.\\r\\n\\r\\n'), 'admin_only')
+        self.assertEqual(access_reason('[admin_only]'), 'admin_only')
+        self.assertEqual(access_reason('관리자 전용 게시판입니다.'), 'admin_only')
+        self.assertEqual(access_reason('관리자 전용 게시판입니다.\\n\\n'), 'admin_only')
+        self.assertEqual(access_reason('관리자 전용 게시판입니다.\\r\\n\\r\\n'), 'admin_only')
+        self.assertEqual(access_reason('관리자 전용\n게시판입니다.'), 'admin_only')
+        self.assertEqual(access_reason('관리자에게만\t글쓰기\n권한이 있습니다.'), 'admin_only')
+
+    def test_publishing_block_admin_only_with_credentials(self):
+        # Merely storing credentials must not skip the remaining verification.
+        site = {
+            'platform': 'cafe24',
+            'write_access_state': 'admin_only',
+            'mb_id': 'test_user',
+            'mb_pass': 'test_password'
+        }
+        self.assertEqual(publishing_block(site), 'admin_only')
+        site['write_access_state'] = 'normal'
+        self.assertEqual(publishing_block(site), 'verification_required')
+
+    def test_publishing_block_admin_only_without_credentials(self):
+        # 실제 권한이 없는 경우 관리자 전용 게시판은 발행 불가능
+        site = {
+            'platform': 'cafe24',
+            'write_access_state': 'admin_only'
+        }
+        self.assertEqual(publishing_block(site), 'admin_only')
+
+    def test_publishing_block_normal_site(self):
+        # 일반 사이트는 문제 없음
+        site = {
+            'platform': 'cafe24',
+            'write_access_state': 'normal',
+            'write_test_status': 'passed',
+            'site_url': 'https://example.com/board/product/list.html?board_no=6',
+            'bo_table': '6',
+            'verified_post_url': 'https://example.com/article/test/6/42/',
+        }
+        self.assertEqual(publishing_block(site), '')
+
+    def test_publishing_block_maintenance_hold(self):
+        # 점검 중인 경우 점검 중으로 판단
+        site = {
+            'platform': 'cafe24',
+            'maintenance_hold': True
+        }
+        self.assertEqual(publishing_block(site), 'maintenance_hold')
+
+    def test_publishing_block_login_required(self):
+        # 로그인 필요하고 인증 정보가 없는 경우
+        site = {
+            'platform': 'cafe24',
+            'login_required': True,
+            'mb_id': '',
+            'mb_pass': None
+        }
+        self.assertEqual(publishing_block(site), 'credentials_required')
+
+    def test_publishing_block_verification_required(self):
+        # 글쓰기 검증 실패
+        site = {
+            'platform': 'cafe24',
+            'write_test_status': 'failed'
+        }
+        self.assertEqual(publishing_block(site), 'verification_required')
+
+    def test_publishing_block_invalid_post_evidence(self):
+        # 게시물 증거가 유효하지 않은 경우
+        site = {
+            'platform': 'cafe24',
+            'write_test_status': 'passed',
+            'site_url': 'http://example.com',
+            'verified_post_url': 'http://invalid.com',
+            'bo_table': '1'
+        }
+        self.assertEqual(publishing_block(site), 'invalid_post_evidence')
+
+    def test_empty_and_non_string_alerts_are_not_denials(self):
+        for value in (None, '', 0, 42, False):
+            with self.subTest(value=value):
+                self.assertEqual(access_reason(value), '')
+
+    def test_whitespace_credentials_are_not_usable(self):
+        self.assertEqual(publishing_block({
+            'platform': 'cafe24', 'login_required': True,
+            'mb_id': '  ', 'mb_pass': 'dummy',
+        }), 'credentials_required')
+
+    def test_hold_applies_to_all_platforms(self):
+        for platform in ('gnuboard', 'cafe24'):
+            with self.subTest(platform=platform):
+                self.assertEqual(publishing_block({
+                    'platform': platform, 'maintenance_hold': True,
+                }), 'maintenance_hold')
+
+    def test_nested_guard_restores_outer_guard(self):
+        @guarded_publish
+        def inner():
+            return True, 'allowed'
+        @guarded_publish
+        def outer():
+            inner()
+            stop_on_alerts(['관리자만 글쓰기'])
+            self.fail('Outer guard must still be active')
+        self.assertFalse(outer()[0])
+        stop_on_alerts(['관리자만 글쓰기'])
+
+
+class QueueEngineGateTests(unittest.TestCase):
+    """The actual PC queue loads its own gate; test that path as well."""
+    @classmethod
+    def setUpClass(cls):
+        import importlib.util
+        path = Path(__file__).with_name('pc_queue_engine') / 'cafe24_gate.py'
+        spec = importlib.util.spec_from_file_location('queue_gate_under_test', path)
+        cls.gate = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.gate)
+
+    def test_normalized_alerts_match_primary_gate(self):
+        for text in (None, '', 42, '관리자 전용\n게시판입니다.',
+                     '관리자에게만\t글쓰기 권한이 있습니다.', '[admin_only]',
+                     '관리자에게만 댓글 작성 권한이 있습니다.'):
+            with self.subTest(text=text):
+                self.assertEqual(self.gate.access_reason(text), access_reason(text))
+
+    def test_credentials_do_not_override_denial(self):
+        site = {'platform': 'cafe24', 'write_access_state': 'admin_only',
+                'mb_id': 'member', 'mb_pass': 'dummy'}
+        self.assertEqual(self.gate.publishing_block(site), 'admin_only')
+
+    def test_verified_normal_board_is_allowed(self):
+        site = {'platform': 'cafe24', 'write_access_state': 'normal',
+                'write_test_status': 'passed', 'bo_table': '6',
+                'site_url': 'https://example.com/board/product/list.html?board_no=6',
+                'verified_post_url': 'https://example.com/article/test/6/42/'}
+        self.assertEqual(self.gate.publishing_block(site), '')
+        site['verified_post_url'] = 'https://other.example/article/test/6/42/'
+        self.assertEqual(self.gate.publishing_block(site), 'invalid_post_evidence')
+
+    def test_denial_stops_queue_publish(self):
+        @self.gate.guarded_publish
+        def publish():
+            self.gate.stop_on_alerts(['관리자 전용\n게시판입니다.'])
+            self.fail('Must stop before submission')
+        ok, message = publish()
+        self.assertFalse(ok)
+        self.assertIn('[admin_only]', message)
+
+    def test_unattended_policy_is_not_bypassed(self):
+        self.assertEqual(self.gate.unattended_block({
+            'platform': 'cafe24', 'write_access_state': 'admin_only',
+        }), 'human_verification_required')
 
 if __name__=='__main__':
     unittest.main()
@@ -149,9 +339,22 @@ class ServerQueueOnlyTest(unittest.TestCase):
         tree=ast.parse(Path(__file__).with_name('app.py').read_text(encoding='utf-8'))
         fn=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='api_pipeline_claim_sites')
         fn.decorator_list=[]
-        env={'jsonify':lambda value:value}
-        exec(compile(ast.Module(body=[fn],type_ignores=[]),'claim-test','exec'),env)
-        self.assertEqual(env['api_pipeline_claim_sites']()['sites'],[])
+        import threading, time
+        from types import SimpleNamespace
+        for blocked in ({'write_access_state':'admin_only'}, {'maintenance_hold':True},
+                        {'secret_forced':True}, {'signup_phone_cert':True}):
+            site=dict(id='blocked', platform='cafe24', mb_id='saved-user', **blocked)
+            env={'jsonify':lambda value:value,
+                 'request':SimpleNamespace(get_json=lambda **kw:{}), 'time':time,
+                 'load_config':lambda:{}, 'POST_LOCK':threading.RLock(),
+                 'load_sites':lambda:[site], 'is_permitted':lambda s:True,
+                 'load_json':lambda *a:[], 'WORKROOMS_FILE':Path('/unused'),
+                 'save_sites':lambda *a:self.fail('Blocked site must not be claimed'),
+                 '_decrypt_password':lambda *a:self.fail('Blocked credentials must not be read')}
+            exec(compile(ast.Module(body=[fn],type_ignores=[]),'claim-test','exec'),env)
+            with self.subTest(blocked=blocked):
+                self.assertEqual(env['api_pipeline_claim_sites']()['sites'],[])
+                self.assertNotIn('pc_claim_by',site)
 
 
 class ExplicitAuditHoldTest(unittest.TestCase):

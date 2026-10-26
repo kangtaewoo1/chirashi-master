@@ -21,7 +21,7 @@ class ReadOnlyAuditTest(unittest.TestCase):
         exec(compile(ast.Module(body=[fn],type_ignores=[]),'app.py','exec'),env)
         with patch.dict(sys.modules,{'requests':fake}):
             ok,message=env['gnuboard_post_http']({'site_url':'http://approved.example','bo_table':'free'},'Functional test','Test body')
-        self.assertFalse(ok);self.assertIn('사람 확인 필요',message);self.assertEqual(calls,['GET'])
+        self.assertIsNone(ok);self.assertIn('노드 위임',message);self.assertEqual(calls,['GET'])
     def test_uncertain_submission_and_human_wait_are_never_reposted(self):
         import threading
         tree=ast.parse(Path(__file__).with_name('app.py').read_text(encoding='utf-8'))
