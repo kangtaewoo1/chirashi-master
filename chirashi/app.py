@@ -4157,7 +4157,10 @@ def gnuboard_post(site, title, content_html, skip_login=False):
     bbs=base+'/bbs'
     bo=site.get('bo_table','m8_qna')
     mid=site.get('mb_id',''); mpw=site.get('mb_pass','')
-    d=get_driver()
+    _use_sbr=bool(load_config().get('sbr_enabled'))
+    d=get_driver(remote=_use_sbr)
+    if _use_sbr:
+        add_log('[Bright Data 그누보드] 원격 브라우저 사용 — '+str(site.get('id') or '')[:16])
 
     # 로그인 (skip_login=True면 가입 직후 세션이 이미 로그인 상태 → 재로그인 건너뜀)
     if mid and not skip_login:
@@ -4291,6 +4294,8 @@ def gnuboard_post(site, title, content_html, skip_login=False):
                 time.sleep(0.5)
     except Exception: pass
     _cap=detect_captcha(d)
+    if _use_sbr and _cap:
+        return False,'무인 발행 보류 — 사람 확인 필요, 재제출 금지'
 
     # 제목 — 일부 스킨은 wr_subject가 hidden 입력(JS 에디터 연동)이라 send_keys가
     # 'invalid element state'로 실패한다. 실패 시 JS로 value를 넣고 input/change 이벤트 발생.
@@ -6337,6 +6342,50 @@ def _strip_non_bmp(s):
     if not s: return s
     return ''.join(ch for ch in str(s) if ord(ch) <= 0xFFFF)
 
+def _post_gnuboard_brightdata(site, title, content_html, skip_login=False):
+    """One remote attempt with unchanged admission rules and a public read receipt."""
+    if (not is_autopostable(site) or publishing_block(site) or unattended_block(site)
+            or site.get('write_access_state') in ('admin_only','human_verification_required')):
+        return False,'무인 발행 보류 — 기존 권한 또는 검증 제한 유지'
+    try:
+        ok,result=gnuboard_post(site,title,content_html,skip_login=skip_login)
+        if not ok:
+            return False,'무인 발행 보류 — '+str(result)
+        import requests as rq
+        from form_schema import Parser
+        target=urllib.parse.urlsplit(str(result));origin=urllib.parse.urlsplit(site.get('site_url',''))
+        query=urllib.parse.parse_qs(target.query)
+        post_id=query.get('wr_id',[''])[0]
+        old=urllib.parse.urlsplit(str(site.get('verified_post_url') or ''))
+        old_query=urllib.parse.parse_qs(old.query)
+        old_id=old_query.get('wr_id',[''])[0]
+        if (target.scheme not in ('http','https') or target.netloc!=origin.netloc
+                or query.get('bo_table')!=[str(site.get('bo_table'))]
+                or not post_id.isdigit() or int(post_id)<=0
+                or (old.netloc==target.netloc and old_query.get('bo_table')==query.get('bo_table')
+                    and old_id.isdigit() and int(post_id)<=int(old_id))):
+            return False,'결과 검증 대기 — 새 게시글 URL 확인 실패, 재제출 금지'
+        response=rq.get(result,timeout=20)
+        response.raise_for_status();response.encoding=response.apparent_encoding
+        if urllib.parse.urlsplit(response.url).netloc!=origin.netloc:
+            return False,'결과 검증 대기 — 게시글 호스트 변경, 재제출 금지'
+        parsed=Parser();parsed.feed(response.text);parsed.close();actual=parsed.root.text()
+        parsed=Parser();parsed.feed(content_html);parsed.close();expected=parsed.root.text()
+        if not expected or ' '.join(title.split()) not in actual or expected not in actual:
+            return False,'결과 검증 대기 — 제목 또는 본문 불일치, 재제출 금지'
+        receipt={'state':'verified','transport':'brightdata_browser_api','url':result,
+                 'checked_at':datetime.now().isoformat(timespec='seconds'),
+                 'title_match':True,'body_match':True,'body_sha256':hashlib.sha256(expected.encode()).hexdigest()}
+        set_site_flag(site.get('id'),last_publish_transport='brightdata_browser_api',unattended_result=receipt)
+        if site.get('_maintenance_history_id'):
+            history_update(site['_maintenance_history_id'],verification_receipt=receipt)
+        return True,result
+    except Exception as exc:
+        return False,'결과 검증 대기 — '+browser_connection_error(exc)+' 재제출 금지'
+    finally:
+        reset_driver()
+
+
 def do_post(site, title, content_html, skip_login=False):
     """발행 라우팅(하이브리드+자가학습): 학습레시피→플랫폼기본→자동학습.
        skip_login=True: 가입 직후 이미 로그인된 세션에서 재로그인 없이 바로 글쓰기(비표준 로그인폼 구제)."""
@@ -6345,6 +6394,9 @@ def do_post(site, title, content_html, skip_login=False):
         return False,'게시 권한 없음 — 수동 검증 전용 사이트, 자동 발행 보류'
     if site.get('maintenance_hold'):
         return False,'게시 권한 없음 — 관리자 발행 보류'
+    # Explicit remote routing never falls back to HTTP/local submission after an uncertain result.
+    if resolve_platform(site)=='gnuboard' and bool(load_config().get('sbr_enabled')):
+        return _post_gnuboard_brightdata(site,title,content_html,skip_login=skip_login)
     # ★게이트 설정 스위치 + 기존 안정경로 우회(2026-10-17 '게이트 꺼' / 10-18 '이 PC에서 잘 돌게' 실측):
     #   자율AI가 추가한 '무인 발행 전용 엄격경로'(HTTP 선발행+엄격 결과검증)가 조금만 안 맞으면 '재제출 금지'로
     #   실패하고 result_review를 찍어 악순환 → 발행 0건. config unattended_gate_enabled=False이고 실게시 검증 완료
