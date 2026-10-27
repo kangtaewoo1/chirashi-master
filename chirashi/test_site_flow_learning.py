@@ -15,6 +15,23 @@ from telpan_adapter import FLOW, learned_signup_profile, resume_known_account
 
 
 class FlowKnowledgeTests(unittest.TestCase):
+    def test_server_login_block_preserves_browser_proof_without_server_success(self):
+        from flask import Flask, render_template_string
+        from telpan_adapter import KNOWLEDGE_PAGE
+        receipt={'url':FLOW['origin']+'/board/ads/88P7T1gFVnXxvjB4OjQO',
+                 'title_match':True,'body_match':True,'public_read_without_authentication':True}
+        row=merge_flow_knowledge({},FLOW,{'stage':'browser_post','state':'verified','receipt':receipt})
+        version=row['version']
+        row=merge_flow_knowledge(row,FLOW,{'stage':'login','state':'review',
+                                        'reason':'google_signin_security_block','message':'private diagnostic'})
+        self.assertEqual(row['version'],version)
+        self.assertEqual(row['evidence']['browser_post']['url'],receipt['url'])
+        self.assertFalse(row['server_publish_verified'])
+        self.assertNotIn('private diagnostic',json.dumps(row))
+        with Flask(__name__).app_context():
+            page=render_template_string(KNOWLEDGE_PAGE,rows=[row])
+        self.assertIn('Google 보안 차단으로 서버 로그인 실패',page)
+
     def test_browser_login_recipe_does_not_claim_server_connection(self):
         from flask import Flask, render_template_string
         from telpan_adapter import KNOWLEDGE_PAGE

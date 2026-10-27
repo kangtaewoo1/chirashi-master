@@ -542,7 +542,7 @@ KNOWLEDGE_PAGE='''<!doctype html><html lang="ko"><meta charset="utf-8"><meta nam
 <dt>실제 가입 결과</dt><dd>{{(r.evidence.get('signup') or {}).get('state','아직 검증되지 않음')}}</dd>
 <dt>실제 브라우저 로그인</dt><dd>{{'확인 완료' if (r.evidence.get('browser_login') or {}).get('state')=='verified' else '아직 검증되지 않음'}}</dd>
 <dt>실제 브라우저 발행·공개 제목·본문 조회</dt><dd>{% if (r.evidence.get('browser_post') or {}).get('state')=='verified' %}확인 완료 · <a href="{{r.evidence.browser_post.url}}">검증한 글 보기</a>{% else %}아직 검증되지 않음{% endif %}</dd>
-<dt>실제 서버 로그인</dt><dd>{{'확인 완료' if (r.evidence.get('login') or {}).get('state')=='verified' else '아직 검증되지 않음'}}</dd>
+<dt>실제 서버 로그인</dt><dd>{% if (r.evidence.get('login') or {}).get('reason')=='google_signin_security_block' %}Google 보안 차단으로 서버 로그인 실패 · 새 글 제출 안 함{% elif (r.evidence.get('login') or {}).get('state')=='verified' %}확인 완료{% else %}아직 검증되지 않음{% endif %}</dd>
 <dt>실제 서버 발행·공개 제목·본문 조회</dt><dd>{% if r.server_publish_verified %}확인 완료 · <a href="{{r.evidence.server_post.url}}">검증한 글 보기</a>{% else %}아직 검증되지 않음{% endif %}</dd>
 <dt>유지하는 제한</dt><dd>IP당 가입 제한·인증·게시 권한 유지. 결과 불확실 시 재제출 중지.{% if r.adapter=='telpan' %} 텔판 제목 40자·본문 500자.{% endif %}</dd></dl></article>{% endfor %}
 <a href="/telpan">텔판 연결</a> · <a href="/">운영 대시보드</a></html>'''

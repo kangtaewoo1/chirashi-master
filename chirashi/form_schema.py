@@ -40,6 +40,8 @@ def merge_flow_knowledge(previous, definition, event=None):
                    'server_post': {'verified'}, 'browser_post': {'verified'}}
         if stage not in allowed or state not in allowed[stage]: raise ValueError('Unknown evidence stage')
         item = {'state': state, 'checked_at': datetime.now(timezone.utc).isoformat()}
+        if stage == 'login' and state == 'review' and event.get('reason') == 'google_signin_security_block':
+            item['reason'] = 'google_signin_security_block'
         if stage in ('server_post', 'browser_post'):
             receipt = event.get('receipt') or {}; p = urlsplit(str(receipt.get('url') or ''))
             if (p.scheme != base.scheme or p.netloc != base.netloc or p.username or p.password or p.query
