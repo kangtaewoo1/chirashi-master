@@ -69,7 +69,7 @@ def call(method,data,post=None):
 
 def verify_public(url,title,body,api_call=call,get=None):
     import requests
-    from bs4 import BeautifulSoup
+    from form_schema import Parser
     if not valid_url(url):raise ValueError('invalid_public_url')
     page=api_call('getPage',{'path':urlsplit(url).path.lstrip('/'),'return_content':'true'})
     def flatten(node):
@@ -80,10 +80,17 @@ def verify_public(url,title,body,api_call=call,get=None):
     if page.get('title')!=title or norm(returned)!=norm(body):raise ValueError('public_api_mismatch')
     r=(get or requests.get)(url,headers={'User-Agent':'Mozilla/5.0'},timeout=25,allow_redirects=False)
     if r.status_code!=200 or not valid_url(r.url):raise ValueError('public_html_failed')
-    r.encoding='utf-8';soup=BeautifulSoup(r.text,'html.parser')
-    heading=soup.select_one('article h1');paragraphs=soup.select('article p')
-    if not heading or norm(heading.get_text(' ',strip=True))!=norm(title):raise ValueError('public_title_mismatch')
-    if norm(' '.join(p.get_text(' ',strip=True) for p in paragraphs))!=norm(body):raise ValueError('public_body_mismatch')
+    r.encoding='utf-8';parser=Parser();parser.feed(r.text);parser.close()
+    def within_article(node):
+        parent=node.parent
+        while parent:
+            if parent.tag=='article':return True
+            parent=parent.parent
+        return False
+    headings=[n.text() for n in parser.nodes if n.tag=='h1' and within_article(n)]
+    paragraphs=[n.text() for n in parser.nodes if n.tag=='p' and within_article(n)]
+    if len(headings)!=1 or norm(headings[0])!=norm(title):raise ValueError('public_title_mismatch')
+    if norm(' '.join(paragraphs))!=norm(body):raise ValueError('public_body_mismatch')
     return {'state':'verified','transport':'telegraph_server_api','url':url,'http':200,
             'title':title,'body_chars':len(body),'title_match':True,'body_match':True,
             'public_read_without_authentication':True,'public_api_match':True,
