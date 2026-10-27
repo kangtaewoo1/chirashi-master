@@ -36,7 +36,8 @@ def merge_flow_knowledge(previous, definition, event=None):
     if event:
         stage = event.get('stage'); state = event.get('state')
         allowed = {'signup': {'created', 'restricted', 'duplicate', 'human_required', 'unknown', 'rejected'},
-                   'login': {'verified', 'review'}, 'server_post': {'verified'}, 'browser_post': {'verified'}}
+                   'login': {'verified', 'review'}, 'browser_login': {'verified'},
+                   'server_post': {'verified'}, 'browser_post': {'verified'}}
         if stage not in allowed or state not in allowed[stage]: raise ValueError('Unknown evidence stage')
         item = {'state': state, 'checked_at': datetime.now(timezone.utc).isoformat()}
         if stage in ('server_post', 'browser_post'):
@@ -51,7 +52,8 @@ def merge_flow_knowledge(previous, definition, event=None):
         evidence[stage] = item
     return {**recipe, 'fingerprint': fingerprint, 'version': int(previous.get('version', 0)) + int(changed),
             'history': history[-20:], 'evidence': evidence,
-            'implementation_state': 'adapter_implemented',
+            'implementation_state': ('browser_recipe_measured' if definition.get('implementation_state') == 'browser_recipe_measured'
+                                     else 'adapter_implemented'),
             'server_publish_verified': (evidence.get('server_post') or {}).get('state') == 'verified'}
 
 class Node:

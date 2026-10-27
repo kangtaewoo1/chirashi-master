@@ -15,6 +15,21 @@ from telpan_adapter import FLOW, learned_signup_profile, resume_known_account
 
 
 class FlowKnowledgeTests(unittest.TestCase):
+    def test_browser_login_recipe_does_not_claim_server_connection(self):
+        from flask import Flask, render_template_string
+        from telpan_adapter import KNOWLEDGE_PAGE
+        flow=copy.deepcopy(FLOW)
+        flow['implementation_state']='browser_recipe_measured'
+        row=merge_flow_knowledge({},flow,{'stage':'browser_login','state':'verified'})
+        self.assertFalse(row['server_publish_verified'])
+        self.assertNotIn('login',row['evidence'])
+        with Flask(__name__).app_context():
+            page=render_template_string(KNOWLEDGE_PAGE,rows=[row])
+        self.assertIn('서버 자동발행 미연결',page)
+        self.assertNotIn('전용 가입·로그인 처리 연결됨',page)
+        self.assertIn('실제 브라우저 로그인</dt><dd>확인 완료',page)
+        self.assertIn('실제 서버 로그인</dt><dd>아직 검증되지 않음',page)
+
     def test_telpan_field_meanings_and_unknown_verification_are_explicit(self):
         profile=learned_signup_profile()
         self.assertEqual({f['name']:f['role'] for f in profile['fields']},

@@ -537,9 +537,11 @@ KNOWLEDGE_PAGE='''<!doctype html><html lang="ko"><meta charset="utf-8"><meta nam
 <h1>사이트별 가입·로그인 학습</h1><p>필수 입력값과 처리 경로를 저장해 다음 작업에 재사용합니다. 가입·로그인·발행은 각각 실제 확인된 단계만 표시합니다. 비밀번호와 연락처는 학습 기록에 저장하지 않습니다.</p>
 {% for r in rows %}<article><h2>{{r.origin}} · 학습 v{{r.version}}</h2><dl>
 <dt>필수 정보의 의미</dt><dd><ul>{% for f in r.fields %}<li>{{ {'account_nickname':'닉네임: 로그인할 계정 이름','account_password':'비밀번호: 해당 계정의 비밀번호','owner_email':'이메일: 본인이 답변·인증을 받을 주소','contact_sns':'SNS 아이디: 본인 텔레그램 또는 카카오톡 연락처'}.get(f.role,f.role) }}</li>{% endfor %}</ul></dd>
-<dt>구현 상태</dt><dd>전용 가입·로그인 처리 연결됨</dd>
+<dt>구현 상태</dt><dd>{{'브라우저에서 확인한 처리 방식 저장됨 · 서버 자동발행 미연결' if r.implementation_state=='browser_recipe_measured' else '전용 가입·로그인 처리 연결됨'}}</dd>
 <dt>실제 가입 결과</dt><dd>{{(r.evidence.get('signup') or {}).get('state','아직 검증되지 않음')}}</dd>
+<dt>실제 브라우저 로그인</dt><dd>{{'확인 완료' if (r.evidence.get('browser_login') or {}).get('state')=='verified' else '아직 검증되지 않음'}}</dd>
+<dt>실제 브라우저 발행·공개 제목·본문 조회</dt><dd>{% if (r.evidence.get('browser_post') or {}).get('state')=='verified' %}확인 완료 · <a href="{{r.evidence.browser_post.url}}">검증한 글 보기</a>{% else %}아직 검증되지 않음{% endif %}</dd>
 <dt>실제 서버 로그인</dt><dd>{{'확인 완료' if (r.evidence.get('login') or {}).get('state')=='verified' else '아직 검증되지 않음'}}</dd>
 <dt>실제 서버 발행·공개 제목·본문 조회</dt><dd>{% if r.server_publish_verified %}확인 완료 · <a href="{{r.evidence.server_post.url}}">검증한 글 보기</a>{% else %}아직 검증되지 않음{% endif %}</dd>
-<dt>유지하는 제한</dt><dd>IP당 가입 제한·인증·게시 권한 유지. 결과 불확실 시 재제출 중지. 텔판 제목 40자·본문 500자.</dd></dl></article>{% endfor %}
+<dt>유지하는 제한</dt><dd>IP당 가입 제한·인증·게시 권한 유지. 결과 불확실 시 재제출 중지.{% if r.adapter=='telpan' %} 텔판 제목 40자·본문 500자.{% endif %}</dd></dl></article>{% endfor %}
 <a href="/telpan">텔판 연결</a> · <a href="/">운영 대시보드</a></html>'''
