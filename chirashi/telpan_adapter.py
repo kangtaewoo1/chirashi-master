@@ -346,6 +346,8 @@ def publish(site, title, body_html, ctx, bootstrap=False):
 
 
 def register(app, ctx):
+    from cozit_adapter import register as register_cozit
+    register_cozit(app, ctx)
     from flask import request, jsonify, render_template_string, session
     path = Path(ctx['DATA_DIR']) / 'telpan_login_private.json'
     sid = 'telpan-ads'
@@ -539,7 +541,8 @@ KNOWLEDGE_PAGE='''<!doctype html><html lang="ko"><meta charset="utf-8"><meta nam
 <dt>필수 정보의 의미</dt><dd><ul>{% for f in r.fields %}<li>{{ {'account_nickname':'닉네임: 로그인할 계정 이름','account_password':'비밀번호: 해당 계정의 비밀번호','owner_email':'이메일: 본인이 답변·인증을 받을 주소','contact_sns':'SNS 아이디: 본인 텔레그램 또는 카카오톡 연락처','public_destination_url':'바로가기 링크: 홍보할 공개 사이트 주소','post_title':'제목: 목록에 표시할 글 제목','post_summary':'한 줄 소개: 목록에 표시할 짧은 설명','post_body':'상세 설명: 게시글 본문'}.get(f.role,f.role) }}</li>{% endfor %}</ul></dd>
 {% if r.adapter=='thehongbo' %}<dt>성공한 순서</dt><dd>Google 계정 로그인 → 자유홍보 선택 → 링크·제목·한 줄 소개·상세 설명 입력 → 기본 이미지로 등록 → 공개 글에서 제목·본문 확인. 연락처 공개는 선택하지 않았습니다.</dd>{% endif %}
 {% if r.adapter=='cozit' %}<dt>성공한 순서</dt><dd>Google 계정 가입·로그인 → 프로젝트명·한 줄 소개·본문 입력 → 사이트 기본 커버 유지 → 업무·개발 도구 분류 → 개발 중(Building) 표시 → 의견 요청(Feedback) → 프로젝트 주소 입력 → Publish project → 공개 주소에서 제목·본문 확인. 추가 댓글·추천·유료 기능은 사용하지 않았습니다.</dd>{% endif %}
-<dt>구현 상태</dt><dd>{{'브라우저에서 확인한 처리 방식 저장됨 · 서버 자동발행 미연결' if r.implementation_state=='browser_recipe_measured' else '전용 가입·로그인 처리 연결됨'}}</dd>
+<dt>구현 상태</dt><dd>{{'브라우저에서 확인한 처리 방식 저장됨 · 서버 자동발행 미연결' if r.implementation_state=='browser_recipe_measured' else ('프로젝트 개발 소식 서버 발행 연결됨' if r.adapter=='cozit' else '전용 가입·로그인 처리 연결됨')}}</dd>
+{% if r.adapter=='cozit' and r.server_publish_verified %}<dt>서버에서 성공한 순서</dt><dd>이메일·비밀번호 로그인 → 소유자 프로젝트 권한 확인 → Timeline → Post an update → 제목·본문 입력 → 1회 제출 → 로그인 없는 새 브라우저에서 공개 제목·본문 일치 확인. 일반 광고 큐에는 연결하지 않습니다. <a href="/cozit">프로젝트 소식 연결 화면</a></dd>{% endif %}
 <dt>실제 가입 결과</dt><dd>{{(r.evidence.get('signup') or {}).get('state','아직 검증되지 않음')}}</dd>
 <dt>실제 브라우저 로그인</dt><dd>{{'확인 완료' if (r.evidence.get('browser_login') or {}).get('state')=='verified' else '아직 검증되지 않음'}}</dd>
 <dt>실제 브라우저 발행·공개 제목·본문 조회</dt><dd>{% if (r.evidence.get('browser_post') or {}).get('state')=='verified' %}확인 완료 · <a href="{{r.evidence.browser_post.url}}">검증한 글 보기</a>{% else %}아직 검증되지 않음{% endif %}</dd>
