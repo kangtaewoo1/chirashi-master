@@ -48,7 +48,8 @@ def merge_flow_knowledge(previous, definition, event=None):
                     or p.fragment or not receipt.get('title_match') or not receipt.get('body_match')
                     or receipt.get('public_read_without_authentication') is not True):
                 raise ValueError('Public post receipt required')
-            if stage == 'server_post' and receipt.get('transport') != definition['adapter']+'_server_browser':
+            if stage == 'server_post' and receipt.get('transport') not in (
+                    definition['adapter']+'_server_browser', definition['adapter']+'_server_api'):
                 raise ValueError('Browser-only evidence is not server evidence')
             item.update(url=receipt['url'], title_match=True, body_match=True, public_read=True)
         evidence[stage] = item
