@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 from flask import Flask
 from site_verify_worker import database
-from verification_accounts import execute,validate_spec,blocked,enqueue,cipher,register
+from verification_accounts import execute,validate_spec,blocked,enqueue,cipher,register,terms_form
 from verification_captcha import solve_image
 
 SPEC={'mode':'login','origin':'https://a.example','write_url':'https://a.example/bbs/write.php?bo_table=free','login_url':'https://a.example/login','signup_url':'https://a.example/signup'}
@@ -30,6 +30,10 @@ class FakeBrowser:
 
 
 class AccountWorkerTests(unittest.TestCase):
+    def test_signup_terms_are_not_confused_with_footer_contact_consent(self):
+        markup='<form action="/bbs/register_form.php"><textarea>Terms</textarea><input type="checkbox" name="agree"><input type="checkbox" name="agree2"></form><form action="/form_ok.php"><input type="checkbox" name="agree1"></form>'
+        result=terms_form(markup,'https://a.example/bbs/register.php')
+        self.assertEqual(result['names'],['agree','agree2']);self.assertEqual(result['form_index'],0)
     def test_actual_login_returns_to_exact_original_board_without_post(self):
         b=FakeBrowser();journal=[]
         r=execute(SPEC,{'id':'PRIVATEID','password':'SECRET'}, {},None,b,journal.append)

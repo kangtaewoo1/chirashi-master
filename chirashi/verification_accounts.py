@@ -60,6 +60,19 @@ def validate_spec(spec):
     return result
 
 
+def terms_form(markup,url):
+    p=Parser();p.feed(markup);p.close();forms=[n for n in p.nodes if n.tag=='form'];matches=[]
+    for i,form in enumerate(forms):
+        fields=[n for n in p.nodes if n.tag=='input' and _anc(n,'form') is form]
+        boxes=[n for n in fields if n.attrs.get('type')=='checkbox' and re.search(r'agree|consent',n.attrs.get('name',''),re.I)]
+        if not boxes or any(n.attrs.get('type')=='password' for n in fields):continue
+        names=[n.attrs['name'] for n in boxes];action=urljoin(url,form.attrs.get('action',''))
+        score=100*int({'agree','agree2'}.issubset(names))+50*int(bool(re.search(r'register|signup|/join',urlsplit(action).path,re.I)))
+        if score:matches.append((score,{'form_index':i,'names':names,'fallback_text':form.text()[:60000],'url':clean_url(url),'action':clean_url(action)}))
+    matches.sort(key=lambda x:x[0],reverse=True)
+    return matches[0][1] if matches and (len(matches)==1 or matches[0][0]>matches[1][0]) else None
+
+
 def seal_profile(folder,profile):
     # Keep all supplied personal fields in the encrypted column, never results/history.
     allowed={k:str(v)[:512] for k,v in profile.items() if k in ('id','password','name','nickname','email','phone') and v}
@@ -123,19 +136,14 @@ class Browser:
         return any(e.is_displayed() for e in self.driver.find_elements(By.CSS_SELECTOR,'a[href*="logout"]'))
     def terms(self):
         from selenium.webdriver.common.by import By
-        p=Parser();p.feed(self.driver.page_source);p.close()
-        forms=[n for n in p.nodes if n.tag=='form'];matches=[]
-        for i,form in enumerate(forms):
-            boxes=[n for n in p.nodes if n.tag=='input' and n.attrs.get('type')=='checkbox' and _anc(n,'form') is form and re.search(r'agree|consent',n.attrs.get('name',''),re.I)]
-            passwords=[n for n in p.nodes if n.tag=='input' and n.attrs.get('type')=='password' and _anc(n,'form') is form]
-            if boxes and not passwords:
-                docs=[e.get_attribute('value') or e.text for e in self.driver.find_elements(By.TAG_NAME,'textarea') if e.is_displayed()]
-                text='\n\n'.join(docs)[:60000] or form.text()[:60000]
-                names=[n.attrs['name'] for n in boxes]
-                action=urljoin(self.driver.current_url,form.attrs.get('action',''))
-                matches.append({'form_index':i,'names':names,'text':text,'url':clean_url(self.driver.current_url),'action':clean_url(action),
-                                'fingerprint':hashlib.sha256(json.dumps([text,names,action],ensure_ascii=False).encode()).hexdigest()})
-        return matches[0] if len(matches)==1 else None
+        chosen=terms_form(self.driver.page_source,self.driver.current_url)
+        if not chosen:return None
+        form=self.driver.find_elements(By.TAG_NAME,'form')[chosen['form_index']]
+        docs=[e.get_attribute('value') or e.text for e in form.find_elements(By.TAG_NAME,'textarea') if e.is_displayed()]
+        chosen['text']='\n\n'.join(docs)[:60000] or chosen.pop('fallback_text')
+        chosen.pop('fallback_text',None)
+        chosen['fingerprint']=hashlib.sha256(json.dumps([chosen['text'],chosen['names'],chosen['action']],ensure_ascii=False).encode()).hexdigest()
+        return chosen
     def submit_terms(self,terms,origin):
         from selenium.webdriver.common.by import By
         if not same_origin(terms['action'],origin):raise ValueError('origin_hold')
