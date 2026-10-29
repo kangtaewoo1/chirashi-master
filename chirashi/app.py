@@ -4016,6 +4016,7 @@ def gnuboard_post_http(site, title, content_html):
     # ── 캡차 ──
     capm=re.search(r'g5_captcha_url\s*=\s*["\']([^"\']+)["\']',html)
     needs_cap=human_challenge_present(html)
+    if needs_cap: return False,'사람 확인 필요 — 자동 제출 중단'
     # ★kcaptcha는 자동 OCR로 풀므로 '사람 확인 제외'에서 뺀다(2026-10-18 대표님 '서버 워커 깔끔하게' 실측:
     #   자율AI가 human_challenge_present True면 무조건 return False로 막아, 전용 OCR로 풀 수 있는 그누보드 kcaptcha
     #   55건이 '사람 확인 필요'로 전부 버려짐). 진짜 사람 확인(recaptcha·turnstile·hcaptcha·veritas-hub·'사람인지
@@ -6441,7 +6442,7 @@ def do_post(site, title, content_html, skip_login=False):
     try: _gate_on=bool(load_config().get('unattended_gate_enabled',True))
     except Exception: _gate_on=True
     # 게이트 OFF면 자율AI 엄격경로(_unattended_job)를 통째로 건너뛰고 아래 기존 안정경로로 발행(노드 승격 포함).
-    if not site.get('_manual_review_job') and _gate_on:
+    if not site.get('_manual_review_job') and (_gate_on or site.get('_unattended_job') or site.get('_maintenance_job_id')):
         if publishing_block(site) or unattended_block(site):
             return False,'무인 발행 보류 — 사람 확인 없는 양식 검증 필요'
         ok,result=gnuboard_post_http(dict(site, _unattended_job=True),title,content_html)
@@ -6995,7 +6996,9 @@ def worker_loop():
     while wk_active:
         # 일시정지: 큐에서 꺼내지 않고 대기 (작업 보존)
         if wk_paused: time.sleep(1); continue
-        if _pc_queue_online():
+        with post_queue.mutex:
+            _pc_pending=bool(post_queue.queue and post_queue.queue[0].get('queue_source')=='scheduled_unattended' and not _server_queue_site(post_queue.queue[0].get('site',{})))
+        if _pc_queue_online() or _pc_pending:
             with post_queue.mutex:
                 _server_head=bool(post_queue.queue and _server_queue_site(post_queue.queue[0].get('site',{})))
             if not _server_head: time.sleep(1); continue
@@ -11563,10 +11566,11 @@ def api_pc_queue_audit():
 @app.route('/api/pipeline/pc-queue/claim',methods=['POST'])
 def api_pc_queue_claim():
     d=request.get_json(silent=True) or {}
-    if d.get('protocol')!=1: return jsonify({'ok':False,'error':'protocol required'}),400
+    if d.get('protocol')!=2 or not {'charset_preflight','job_journal'}.issubset(set(d.get('capabilities') or [])):
+        return jsonify({'ok':True,'job':None,'upgrade_required':True,'reason':'charset_and_journal_required'})
     node=str(d.get('node_id',''))[:80]
     if not node: return jsonify({'ok':False}),400
-    save_json(DATA_DIR/'pc_queue_state.json',{'protocol':1,'node_id':node,'last_seen':time.time()})
+    save_json(DATA_DIR/'pc_queue_state.json',{'protocol':2,'node_id':node,'last_seen':time.time()})
     _node_beat(node,action='검증된 실제 큐 대기')
     with _PC_QUEUE_LOCK:
         leases=load_json(DATA_DIR/'pc_queue_leases.json',{})

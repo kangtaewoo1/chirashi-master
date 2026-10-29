@@ -73,7 +73,7 @@ class PcQueueLeaseTest(unittest.TestCase):
              'hashlib':__import__('hashlib'),'urllib':__import__('urllib')}
         exec(compile(ast.Module(body=functions,type_ignores=[]),'pc-queue-test','exec'),env)
         job={'job_id':'job','hist_id':'job','site':site,'title':'Exact title','content':'<p>Exact body</p>'}
-        q.put(job);payload.update(protocol=1,node_id='pc')
+        q.put(job);payload.update(protocol=2,capabilities=['charset_preflight','job_journal'],node_id='pc')
         return env,payload,store,history,removed,finalized
 
     def test_claim_honors_limits_and_does_not_send_saved_passwords(self):
