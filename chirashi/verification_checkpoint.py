@@ -23,6 +23,13 @@ def save(c,entry,result,overwrite=True):
     import json
     record=plan(entry,result)
     if overwrite:
+        old=c.execute('SELECT record FROM review_checkpoints WHERE domain=?',(entry['domain'],)).fetchone()
+        if old:
+            prior=json.loads(old[0])
+            for key in ('saved_urls','original_write_urls'):
+                record[key]=list(dict.fromkeys(record[key]+prior.get(key,[])))
+            record['return_to_write']['urls']=record['original_write_urls']
+            record['source_category']=record['source_category'] or prior.get('source_category')
         c.execute('INSERT INTO review_checkpoints VALUES(?,?,?) ON CONFLICT(domain) DO UPDATE SET record=excluded.record,updated_at=excluded.updated_at',
                   (entry['domain'],json.dumps(record,ensure_ascii=False),record['updated_at']))
     else:
