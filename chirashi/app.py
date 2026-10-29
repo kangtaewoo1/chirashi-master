@@ -14593,8 +14593,10 @@ function histRowC(h){const stc=h.status==='done'?'ok':(h.status==='failed'?'f':(
   const ttl=esc(h.title||'(제목없음)');
   const cell=h.result_url?`<a href="${esc(h.result_url)}" target="_blank" rel="noopener" title="${esc(h.result_url)}" style="color:var(--p);text-decoration:none">🔗 ${ttl}</a>`:ttl;
   const av=h.alive==='no'?' <span style="color:var(--r)">✕삭제</span>':'';
-  return `<tr><td style="color:var(--d);white-space:nowrap;font-size:11px">${esc((h.time||'').slice(5,16))}</td><td style="white-space:nowrap"><span class="st st-${stc}">${esc(stt)}</span>${av}</td><td style="max-width:0;width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${ttl}">${cell}</td></tr>`}
-function _histTable(rows){return '<table style="table-layout:fixed;width:100%"><thead><tr><th style="width:78px">시간</th><th style="width:66px">상태</th><th>제목(클릭시 글로 이동)</th></tr></thead><tbody>'+rows.map(histRowC).join('')+'</tbody></table>';}
+  const site=esc(h.site_name||h.site_url||'—');
+  const detail=esc(h.fail_reason_ko||h.message||(h.status==='done'?'발행 완료':stt));
+  return `<tr><td style="color:var(--d);white-space:nowrap;font-size:11px">${esc((h.time||'').slice(5,16))}</td><td style="white-space:nowrap"><span class="st st-${stc}">${esc(stt)}</span>${av}</td><td style="overflow-wrap:anywhere;line-height:1.5" title="${ttl}">${cell}</td><td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${site}">${site}</td><td style="overflow-wrap:anywhere;font-size:12px;color:var(--d);line-height:1.5">${detail}</td></tr>`}
+function _histTable(rows){return '<table style="table-layout:fixed;width:100%;min-width:680px"><thead style="position:sticky;top:0;background:var(--bg,#0b1018);z-index:1"><tr><th style="width:86px">시간</th><th style="width:72px">상태</th><th>제목 · 클릭하면 발행 글 열기</th><th style="width:17%">발행 사이트</th><th style="width:25%">처리 결과 · 실패 사유</th></tr></thead><tbody>'+rows.map(histRowC).join('')+'</tbody></table>';}
 async function renderHistory(force){const h=await api('/history','GET');if(!Array.isArray(h))return;$('histCount').textContent=h.length+'건';
 if(!h.length){$('histList').innerHTML='<p style="color:var(--d);padding:30px;text-align:center">아직 발행 이력이 없습니다</p>';return}
 // ★날짜별 보기(대표님 지시 2026-09-10): 날짜 드롭다운 채우고, 선택 날짜만 필터. force일 때만 옵션 갱신.
@@ -14611,9 +14613,9 @@ hf.forEach(x=>{const wn=x.workroom_name||'직접 입력';if(!(wn in groups)){gro
 // 반응형: 넓으면 다열, 좁으면(모바일) 1열.
 let cells='';
 for(const wn of order){const rows=groups[wn];
-  cells+=`<div style="border:1px solid #33425f;border-radius:8px;overflow:hidden"><div style="font-weight:700;color:var(--p);padding:6px 10px;background:#0f1830;border-bottom:1px solid #33425f">📂 ${esc(wn)} <span style="color:var(--d);font-weight:400;font-size:11px">${rows.length}건</span></div><div data-wn="${esc(wn)}" style="max-height:360px;overflow:auto">`+_histTable(rows)+'</div></div>';
+  cells+=`<div style="border:1px solid #33425f;border-radius:8px;overflow:hidden"><div style="font-weight:700;color:var(--p);padding:6px 10px;background:#0f1830;border-bottom:1px solid #33425f">📂 ${esc(wn)} <span style="color:var(--d);font-weight:400;font-size:11px">${rows.length}건</span></div><div data-wn="${esc(wn)}" style="max-height:460px;overflow:auto">`+_histTable(rows)+'</div></div>';
 }
-$('histList').innerHTML=`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:10px">${cells}</div>`;
+$('histList').innerHTML=`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,620px),1fr));gap:12px">${cells}</div>`;
 // 스크롤 위치 복원(자동 갱신 시 보던 위치 유지)
 document.querySelectorAll('#histList [data-wn]').forEach(el=>{const s=scroll[el.getAttribute('data-wn')];if(s)el.scrollTop=s})}
 async function submitCaptcha(id){const el=$('cap_'+id);const value=(el&&el.value||'').trim();if(!value){toast('CAPTCHA 값을 입력하세요','er');return}const r=await api('/manual-checks/'+id+'/submit','POST',{value});if(r&&r.ok){toast('입력 완료 · 자동 발행을 계속합니다');renderCaptchaTasks()}else toast((r&&r.error)||'전달 실패','er')}
