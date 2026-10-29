@@ -4,7 +4,7 @@ from urllib.parse import urlsplit,parse_qs,urlunsplit,urlencode
 from form_schema import Parser,_hidden,_anc,measure_html
 from site_reaudit import purpose_assessment
 
-ANALYSIS_VERSION=2
+ANALYSIS_VERSION=3
 RECOVERY=re.compile(r'password[_/-]?(?:lost|reset|find)|find[_/-]?(?:id|password)|forgot|비밀번호\s*(?:찾기|재설정)|아이디\s*찾기',re.I)
 
 
@@ -18,7 +18,7 @@ def human_evidence(markup,page,parser=None):
     signals=[]
     for n in p.nodes:
         a=n.attrs;marker=' '.join(str(a.get(k) or '') for k in ('name','id','class','src'))
-        if n.tag=='script' and re.search(r'captcha|turnstile',marker,re.I):
+        if n.tag=='script' and re.search(r'captcha|turnstile|veritas-hub|challenge-platform',marker,re.I):
             signals.append({'kind':'integration_script','active_control':False});continue
         if n.tag not in ('input','textarea','iframe','img','div','span') or _hidden(n) or 'disabled' in a:continue
         if n.tag=='input' and (a.get('type') or 'text') in ('hidden','submit','button'):continue
@@ -35,7 +35,13 @@ def human_evidence(markup,page,parser=None):
                             'active_control':True,'tag':n.tag,'name':a.get('name') or a.get('id') or '',
                             'belongs_to_target_form':belongs})
     text=p.root.text()
-    wall=bool(re.search(r'veritas-hub|cf-chl-|challenge-platform',markup,re.I) or re.search(r'사람인지\s*확인|간단한\s*확인이\s*필요|verify you are human',text,re.I))
+    marker_only=bool(re.search(r'veritas-hub|cf-chl-|challenge-platform',markup,re.I))
+    notice_pattern=r'사람인지\s*확인|간단한\s*확인이\s*필요|verify you are human'
+    notice=bool(re.search(notice_pattern,text,re.I))
+    heading=any(n.tag in ('h1','h2') and not _hidden(n) and re.search(notice_pattern,n.text(),re.I) for n in p.nodes)
+    title_gate=bool(re.search(r'just a moment|attention required|checking your browser|보안\s*확인|사람인지\s*확인',page.get('title',''),re.I))
+    wall=bool((notice and (len(text)<1200 or heading)) or (marker_only and title_gate))
+    if marker_only and not wall and not signals:signals.append({'kind':'security_integration_code','active_control':False})
     if recovery_path(page['url']):scope='account_recovery_unrelated'
     elif wall:scope='page_access'
     elif any(x['active_control'] for x in signals):
@@ -43,7 +49,7 @@ def human_evidence(markup,page,parser=None):
         scope=actual if actual in ('write','signup','login') and any(x.get('belongs_to_target_form') for x in signals) else 'comment_or_embedded_unconfirmed'
     elif signals:scope='integration_only_unconfirmed'
     else:scope='not_observed'
-    return {'scope':scope,'signals':signals,'required_step_confirmed':scope in ('page_access','write','signup','login'),
+    return {'scope':scope,'signals':signals,'page_gate_evidence':{'integration_code':marker_only,'notice_text':notice,'notice_heading':bool(heading),'challenge_title':title_gate,'confirmed':wall},'required_step_confirmed':scope in ('page_access','write','signup','login'),
             'solved':False,'interpretation':'보안 절차의 위치만 기록합니다. 사이트 전체 글쓰기 불가 판정이 아닙니다.'}
 
 

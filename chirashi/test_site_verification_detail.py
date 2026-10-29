@@ -61,3 +61,8 @@ class StageDetailTests(unittest.TestCase):
         p=annotate({'url':'https://a.example/write','stage':'write','http':200,'form_state':'measured','fields':[{'name':'wr_subject','role':'title','type':'text'},{'name':'wr_content','role':'content','type':'textarea'}]},html)
         self.assertEqual(p['human_check']['scope'],'comment_or_embedded_unconfirmed')
         self.assertEqual(summarize([p])['state'],'write_form_observed')
+    def test_security_integration_code_on_normal_homepage_is_not_an_access_wall(self):
+        p=annotate({'url':'https://a.example/','stage':'entry','http':200,'title':'정상 회사 홈페이지'},'<h1>회사 소개</h1><script src="/veritas-hub/integration.js"></script>')
+        self.assertEqual(p['human_check']['scope'],'integration_only_unconfirmed')
+        self.assertFalse(p['human_check']['page_gate_evidence']['confirmed'])
+        self.assertNotEqual(summarize([p])['state'],'page_access_human_required')
