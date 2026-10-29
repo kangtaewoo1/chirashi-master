@@ -361,7 +361,7 @@ if __name__=='__main__':
 
 AUDIT_PAGE='''<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>전체 사이트 재측정</title><style>
 body{margin:0;background:#0b1018;color:#e4eaf5;font:15px/1.6 system-ui,sans-serif}main{max-width:1500px;margin:auto;padding:28px}a{color:#7eafff}h1{font-size:25px;margin:10px 0}.note{color:#aab7cc}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:20px 0}.card,section{background:#111a28;border:1px solid #29384c;border-radius:12px;padding:18px}.number{font-size:30px;font-weight:750}progress{width:100%;height:14px;accent-color:#518dff}input,select,button{background:#142136;color:#e4eaf5;border:1px solid #354860;padding:10px;border-radius:7px;font:inherit}input{min-width:260px}.tools{display:flex;gap:10px;flex-wrap:wrap;margin:18px 0}table{border-collapse:collapse;width:100%;font-size:13px}th,td{padding:12px;text-align:left;border-bottom:1px solid #29384c;vertical-align:top}th{color:#aab7cc}small{color:#9badc5}summary{cursor:pointer;color:#83b1ff}.wrap{overflow:auto}pre{white-space:pre-wrap;overflow-wrap:anywhere}#categories{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}.chip{background:#182841;padding:5px 10px;border-radius:7px}button{cursor:pointer}</style><main>
-<a href="/">← 운영 화면</a><h1>전체 사이트 재측정</h1><div class="note">등록·후보·탈락 목록을 합쳐 다시 확인합니다. 현재 단계는 접속과 양식 검사입니다. 가입·로그인·글 제출은 하지 않으며 권한이나 탈락 상태를 자동 변경하지 않습니다.</div>
+<a href="/">← 운영 화면</a> · <a href="/site-verification-worker">검증 전용 워커 1개</a><h1>전체 사이트 재측정</h1><div class="note">등록·후보·탈락 목록을 합쳐 다시 확인합니다. 현재 단계는 접속과 양식 검사입니다. 가입·로그인·글 제출은 하지 않으며 권한이나 탈락 상태를 자동 변경하지 않습니다.</div>
 <div class="cards"><div class="card">전체 도메인<div class="number" id="total">—</div></div><div class="card">검사 완료<div class="number" id="done">—</div></div><div class="card">검사 중 · 대기<div class="number" id="pending">—</div></div><div class="card">유료 API 호출<div class="number">0</div><small>별도 유료 검색·브라우저 사용 안 함</small></div></div>
 <progress id="bar" value="0" max="100"></progress><div id="updated" class="note"></div><div id="categories"></div>
 <section><div class="tools"><input id="q" placeholder="도메인 검색"><select id="category"><option value="">전체 결과</option></select><button onclick="offset=0;load()">조회</button><a href="/api/site-reaudit/export">검사 결과 다운로드</a> · <a href="/api/site-reaudit/report">완료 보고서</a></div><div class="wrap"><table><thead><tr><th>사이트</th><th>이전 상태</th><th>이번 실측</th><th>다음 조치 · 세부 내역</th></tr></thead><tbody id="rows"></tbody></table></div><div class="tools"><button onclick="offset=Math.max(0,offset-30);load()">이전</button><span id="paging"></span><button onclick="offset+=30;load()">다음</button></div></section></main>
@@ -376,6 +376,8 @@ load();setInterval(load,10000);
 
 
 def register(app,ctx):
+    from site_verify_worker import register as register_verification_worker
+    register_verification_worker(app,ctx)
     from flask import jsonify,request,Response
     folder=Path(ctx['DATA_DIR'])/'site_reaudit_20261030'
     @app.route('/site-reaudit',methods=['GET'])

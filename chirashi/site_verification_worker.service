@@ -1,0 +1,25 @@
+[Unit]
+Description=One read-only site navigation verification worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/chirashi
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=TZ=Asia/Seoul
+ExecStart=/opt/chirashi/venv/bin/python /opt/chirashi/site_verify_worker.py --data /opt/chirashi/data
+Restart=always
+RestartSec=10
+CPUQuota=35%
+MemoryMax=500M
+TasksMax=32
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/opt/chirashi/data/site_verification_worker
+
+[Install]
+WantedBy=multi-user.target
