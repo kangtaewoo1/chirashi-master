@@ -113,6 +113,25 @@ def render_public(entry,pages,heartbeat=lambda **kw:None,limit=2):
     return {'state':'anonymous_render_completed','pages':results,'authenticated':False,'credentials_entered':False,'submitted_forms':0}
 
 
+def summarize_deep(pages):
+    # A rendered redirect/consent screen supersedes the earlier static template
+    # for that exact route. Keep both raw observations, never count stale markup.
+    rendered={(p.get('requested_url',p['url']),p.get('stage')):p for p in pages if p.get('rendered_browser_checked')}
+    effective=[];seen=set()
+    for page in pages:
+        key=(page.get('requested_url',page['url']),page.get('stage'))
+        if key in seen:continue
+        seen.add(key);effective.append(rendered.get(key,page))
+    result=summarize(effective)
+    if result['state']=='network_review' and rendered:
+        result.update(state='navigation_review_required',next_action='익명 브라우저 화면은 열렸습니다. 작성·동의 조건을 추가 확인해야 합니다.')
+    gates=[p.get('requested_url',p['url']) for p in effective if p.get('stage')=='write' and p.get('form_state')=='agreement_required']
+    result['write_agreement_gate_urls']=gates
+    if gates and result['state'] in ('navigation_review_required','write_form_observed','purpose_review_required'):
+        result.update(state='agreement_review_required',next_action='작성 화면의 동의 조건을 확인해야 합니다. 동의·제출은 수행하지 않았습니다.')
+    return result
+
+
 def enrich(result,entry,heartbeat=lambda **kw:None):
     result['pages']=board_context(result['pages'])
     blocked=any(p.get('human_check',{}).get('scope') in ('page_access','write') or p.get('access_reason') or p.get('restricted_membership_hint') for p in result['pages'])
@@ -120,7 +139,7 @@ def enrich(result,entry,heartbeat=lambda **kw:None):
     result['browser_check']=browser
     if browser.get('pages'):result['pages']+=browser['pages']
     result['pages']=board_context(result['pages'])
-    result.update(summarize(result['pages']))
+    result.update(summarize_deep(result['pages']))
     result.update(inspection_depth='public_board_context_and_anonymous_browser',batch_id=entry.get('batch_id'),
                   browser_authenticated=False,credentials_entered=False,actual_signup_verified=False,actual_login_verified=False)
     return result

@@ -21,6 +21,7 @@ LABELS = {'pending':'대기', 'running':'검사 중', 'human_review_required':'�
           'login_profile_observed':'로그인 화면 확인·로그인 미실행', 'navigation_review_required':'추가 화면 탐색 필요',
           'network_review':'접속 상태 추가 확인', 'worker_error':'검사 오류·추가 확인'}
 LABELS.update(account_verification_pending='계정 검증 대기 · 로그인 후 글쓰기 재확인 필요',
+              agreement_review_required='작성 화면 동의 조건 검토 · 미제출',
               page_access_human_required='페이지 접근 단계 · 사람 확인 필요',write_human_required='글쓰기 단계 · 사람 확인 필요',
               purpose_review_required='게시판 용도·홍보 허용 검토',signup_route_observed='가입 경로 확인 · 실제 가입 미실행',human_scope_review='보안 신호 위치 추가 확인 · 글쓰기 불가 판정 아님')
 

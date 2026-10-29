@@ -3,11 +3,24 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
-from site_deep_measure import followup_urls,board_context,enrich,render_public
+from site_deep_measure import followup_urls,board_context,enrich,render_public,summarize_deep
 from site_verify_worker import add_job,database,inspect
 
 
 class DeepMeasurementTests(unittest.TestCase):
+    def test_rendered_consent_gate_supersedes_static_form(self):
+        base={'url':'https://a.example/write','stage':'write','form_state':'measured','fields':[],'write_mode':'new_post_requested'}
+        rendered=dict(base,form_state='agreement_required',rendered_browser_checked=True)
+        r=summarize_deep([base,rendered])
+        self.assertEqual(r['state'],'agreement_review_required')
+        self.assertEqual(len(r['flow_profile']['write']['boards']),1)
+        self.assertFalse(r['publication_verified'])
+
+    def test_rendered_login_redirect_supersedes_static_guest_form(self):
+        base={'url':'https://a.example/write','stage':'write','form_state':'measured','fields':[],'write_mode':'new_post_requested'}
+        rendered=dict(base,url='https://a.example/login',requested_url=base['url'],form_state='login_required',rendered_browser_checked=True)
+        self.assertEqual(summarize_deep([base,rendered])['state'],'account_verification_pending')
+
     def test_board_list_rechecked_but_existing_post_not_used_as_new_write(self):
         r={'flow_profile':{'write':{'boards':[
             {'url':'https://a.example/bbs/write.php?bo_table=qa','write_mode':'new_post_requested'},
