@@ -9876,6 +9876,7 @@ def collect_all_keywords():
     return pool
 
 _WR_CURSOR={}   # workroom_id -> 다음 발행할 조합 '순열 위치'(메모리). 재시작 시 0부터.
+_WR_SIGNATURE={}  # Reset shuffled order when keyword content changes.
 _WR_ORDER={}    # workroom_id -> 섞은 조합 인덱스 순열(지역 편중 방지). 한 바퀴 소진 시 재셔플.
 _WR_RR=[0]      # 작업실 라운드로빈 포인터(모든 작업실을 번갈아 동시 진행)
 _WR_PICK_LOCK=threading.Lock()  # ★워크스틸링: 여러 워커가 '다음 조합'을 겹치지 않게 뽑도록 보호(대표님 '하이브리드')
@@ -9941,50 +9942,56 @@ def _rand_real_combo(combos):
     pool=real if real else combos
     return pool[random.randrange(len(pool))]
 
+def _take_room_combo(room):
+    """Called under _WR_PICK_LOCK: each valid distinct combo once per shuffled cycle."""
+    combos=_workroom_combos(room)
+    if len(combos)>=20:
+        combos=[c for c in combos if _combo_region_ok(c)]
+    unique={tuple(sorted(c.items())):c for c in combos}
+    combos=list(unique.values())
+    if not combos: return None
+    rid=room.get('id','')
+    signature=tuple(unique)
+    order=_WR_ORDER.get(rid)
+    if not order or _WR_SIGNATURE.get(rid)!=signature:
+        order=list(range(len(combos))); random.shuffle(order)
+        _WR_ORDER[rid]=order; _WR_SIGNATURE[rid]=signature; _WR_CURSOR[rid]=0
+    cur=int(_WR_CURSOR.get(rid,0) or 0)
+    if cur>=len(order):
+        cur=0; random.shuffle(order)
+    idx=order[cur]; _WR_CURSOR[rid]=cur+1
+    return room,combos[idx],cur+1,len(combos)
+
+
 def _pick_next_combo(rooms):
-    """★공유풀 워크스틸링(대표님 지시 2026-09-09): 고정 담당 없이, 모든 워커가 이 함수로
-       '다음 발행할 (작업실, 조합)'을 잠금 하에 하나씩 꺼낸다 → 놀지 않고 서로 도와 발행.
-       - 작업실은 _WR_RR로 라운드로빈(전 작업실 골고루), 조합은 _WR_ORDER 셔플순열로 순회(지역 편중 방지).
-       - 반환: (room, kw, cur1based, total) 또는 None(발행할 조합 없음)."""
     if not rooms: return None
     with _WR_PICK_LOCK:
-        room=rooms[_WR_RR[0]%len(rooms)]; _WR_RR[0]=(_WR_RR[0]+1)%max(1,len(rooms))
-        combos=_workroom_combos(room); rid=room.get('id','')
-        if not combos: return None
-        # ★전국 랜덤 분산 + 쓸모없는 지역 제외(2026-09-25): 조합 많으면 매번 '실존 지역' 무작위 1개.
-        if len(combos)>=20:
-            return (room, _rand_real_combo(combos), 0, len(combos))
-        order=_WR_ORDER.get(rid)
-        if not order or len(order)!=len(combos):
-            order=list(range(len(combos))); random.shuffle(order); _WR_ORDER[rid]=order
-        cur=int(_WR_CURSOR.get(rid,0) or 0)
-        if cur>=len(order):
-            cur=0; random.shuffle(order); _WR_ORDER[rid]=order   # 새 바퀴: 다시 섞기
-        idx=order[cur]; _WR_CURSOR[rid]=cur+1
-        return (room, combos[idx], cur+1, len(combos))
+        for _ in rooms:
+            room=rooms[_WR_RR[0]%len(rooms)]
+            _WR_RR[0]=(_WR_RR[0]+1)%len(rooms)
+            picked=_take_room_combo(room)
+            if picked: return picked
+    return None
+
 
 def _pick_combo_for_room(room):
-    """★작업실 고정배정(2026-09-18 대표님 '워커를 작업실에 고정 = 강제 균등'): 지정 작업실 하나에서만
-       다음 조합을 꺼낸다(_pick_next_combo는 전 작업실 라운드로빈이라 조합수 많은 방이 편중됨).
-       슬롯별로 자기 작업실만 발행 → 노래방·마사지·동탄·인천 균등 발행. 반환: (room,kw,cur,total) or None."""
     if not room: return None
     with _WR_PICK_LOCK:
-        combos=_workroom_combos(room); rid=room.get('id','')
-        if not combos: return None
-        # ★전국 랜덤 분산(2026-09-25 대표님 '싹 다 연속나열 — 전국 랜덤 분산'): 예전엔 셔플순열을 커서로
-        #   순차 소진(cur,cur+1,…)해 6워커가 인접 위치를 동시에 집어 같은 지역이 몇 분간 몰렸음(봉동·녹번동
-        #   반복). → 조합이 많으면(20개+) 매 발행마다 '전체에서 무작위 1개'를 뽑아 연속 몰림을 원천 제거.
-        #   조합이 적으면(<20) 기존 순열소진 유지(적은 풀에서 랜덤은 중복 잦음).
-        if len(combos)>=20:
-            return (room, _rand_real_combo(combos), 0, len(combos))
-        order=_WR_ORDER.get(rid)
-        if not order or len(order)!=len(combos):
-            order=list(range(len(combos))); random.shuffle(order); _WR_ORDER[rid]=order
-        cur=int(_WR_CURSOR.get(rid,0) or 0)
-        if cur>=len(order):
-            cur=0; random.shuffle(order); _WR_ORDER[rid]=order
-        idx=order[cur]; _WR_CURSOR[rid]=cur+1
-        return (room, combos[idx], cur+1, len(combos))
+        return _take_room_combo(room)
+
+
+def _scheduled_ready_sites(cfg, nonlogin_only=False):
+    """Readiness only; submission still rechecks permission and limits under site lock."""
+    ready=[]
+    for site in load_sites():
+        if not is_publishable(site): continue
+        if nonlogin_only and site.get('login_required') and site.get('platform')!='telpan': continue
+        if not under_daily_limit(site,cfg) or not under_min_interval(site)[0]: continue
+        if _manual_queue_pending(site.get('id')): continue
+        if _site_lock(site.get('id')).locked(): continue
+        ready.append(site)
+    return ready
+
 
 def _workroom_combos(room):
     """작업실 keyword_csv → [{'지역','서비스','브랜드'}, ...] (한 줄=한 조합=한 글).
@@ -10146,9 +10153,7 @@ def _publish_one_combo(kw, wname, rid, cfg, writer_name='', nonlogin_only=False)
        → publish_fanout(기본4)개씩 스레드로 동시 발행. 각 스레드=자기 크롬. 같은사이트는 _site_lock.
        ★nonlogin_only=True(하이브리드, node_publish_all일 때 서버워커): 로그인 불필요 사이트만 발행
        (서버 DC IP는 로그인만 막힘 — 비회원 게시판은 성공). 로그인/cafe24는 노드가 전담."""
-    sites=[x for x in load_sites() if is_publishable(x)]
-    if nonlogin_only:
-        sites=[x for x in sites if not x.get('login_required') or x.get('platform')=='telpan']
+    sites=_scheduled_ready_sites(cfg,nonlogin_only)
     if not sites: return
     fan=max(1,min(12,int(cfg.get('publish_fanout',8) or 8)))   # ★2026-09-15 대표님 '사이트간 발행 최대한 병렬': 상한 6→12, 기본 4→8
     _sem=threading.Semaphore(fan)          # 이 조합의 동시 발행 수(작업실 슬롯 내)
@@ -10205,7 +10210,7 @@ def workroom_worker(slot):
                 else:
                     time.sleep(30)   # 다른 슬롯은 통합풀 중복 발행 방지 위해 대기
                 continue
-            if not any(is_publishable(s) and (not _nonlogin_only or not s.get('login_required')) for s in load_sites()):
+            if not _scheduled_ready_sites(cfg,_nonlogin_only):
                 time.sleep(30); continue
             # ★작업실 고정배정(2026-09-18 대표님 '워커를 작업실에 고정=강제 균등'): 슬롯을 작업실에 1:1 매핑
             #   (slot % 작업실수). 슬롯0→노래방, 1→마사지, 2→동탄, 3→인천… 워커가 더 많으면 순환(한 작업실을
@@ -10224,6 +10229,7 @@ def workroom_worker(slot):
             _kwlabel=(kw.get('_main') or f"{kw.get('지역','')}{kw.get('서비스','')}")
             add_log(f"[작업실:{room.get('name','')}] 조합 {cur}/{total} ({_kwlabel}) 발행 시작 (슬롯 {slot+1}{' · 비회원사이트만' if _nonlogin_only else ''})")
             _publish_one_combo(kw,room.get('name',''),room.get('id',''),cfg,writer_name=str(room.get('writer_name') or '').strip(),nonlogin_only=_nonlogin_only)
+            time.sleep(5)  # Back off even if eligibility changed after selection.
         except Exception as e:
             add_log(f"[작업실워커 오류 슬롯{slot+1}] {str(e)[:70]}")
             time.sleep(10)
