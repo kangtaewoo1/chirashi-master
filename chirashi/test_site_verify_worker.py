@@ -39,8 +39,9 @@ class NavigationWorkerTests(unittest.TestCase):
     def test_queue_deduplicates_and_does_not_store_account_credentials(self):
         with tempfile.TemporaryDirectory() as f:
             c=database(Path(f));entry={'domain':'a.example','urls':['https://a.example/'],'mb_password':'SECRET'}
-            add_job(c,entry);add_job(c,entry);c.commit()
+            add_job(c,entry);add_job(c,entry,100);c.commit()
             self.assertEqual(c.execute('SELECT COUNT(*) FROM jobs').fetchone()[0],1)
+            self.assertEqual(c.execute('SELECT priority FROM jobs').fetchone()[0],100)
             self.assertNotIn('SECRET',c.execute('SELECT input FROM jobs').fetchone()[0]);c.close()
     def test_status_and_routes_are_readonly(self):
         with tempfile.TemporaryDirectory() as f:

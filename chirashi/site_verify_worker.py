@@ -37,6 +37,7 @@ def add_job(c, entry, priority=0):
     safe = {'domain':entry['domain'], 'urls':urls[:100], 'source':entry.get('source','candidate')}
     old=c.execute('SELECT input,state,result FROM jobs WHERE domain=?',(safe['domain'],)).fetchone()
     if old:
+        c.execute('UPDATE jobs SET priority=MAX(priority,?) WHERE domain=?',(priority,safe['domain']))
         previous=json.loads(old[0]);fresh=set(safe['urls'])-set(previous['urls'])
         if fresh and len(previous['urls'])<100:
             safe['urls']=list(dict.fromkeys(safe['urls']+previous['urls']))[:100]
@@ -154,6 +155,7 @@ def run(data):
     folder=data/'site_verification_worker';c=database(folder)
     lock=(folder/'worker.lock').open('a');fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
     c.execute("UPDATE jobs SET state='pending' WHERE state='running'");c.commit();last_seed=0
+    write_status(c,folder,phase='loading_candidate_queue')
     while True:
         if time.monotonic()-last_seed>300:seed(c,data);last_seed=time.monotonic()
         item=c.execute("SELECT domain,input FROM jobs WHERE state='pending' ORDER BY priority DESC,domain LIMIT 1").fetchone()
@@ -163,7 +165,7 @@ def run(data):
         except Exception as exc:result={'domain':domain,'state':'worker_error','error_type':type(exc).__name__,'checked_at':now(),'new_posts_submitted':0}
         c.execute('INSERT INTO observations VALUES(?,?,?)',(domain,json.dumps(result,ensure_ascii=False),now()))
         c.execute("UPDATE jobs SET state='done',result=?,finished=? WHERE domain=?",(json.dumps(result,ensure_ascii=False),now(),domain));c.commit()
-        write_status(c,folder,phase='between_candidates',last_domain=domain,last_result=result['state']);time.sleep(2)
+        write_status(c,folder,phase='between_candidates',last_domain=domain,last_result=result['state'],pages=len(result.get('pages',[])));time.sleep(2)
 
 
 PAGE='''<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>사이트 검증 전용 워커</title><style>body{background:#0b1018;color:#e6ecf6;font:16px/1.6 system-ui;margin:28px}main{max-width:1400px;margin:auto}a{color:#8bb7ff}section{background:#121d2c;border:1px solid #2d4057;border-radius:12px;padding:20px;margin:16px 0}table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:12px;border-bottom:1px solid #2d4057;vertical-align:top}small{color:#a8bad1}pre{white-space:pre-wrap;overflow-wrap:anywhere}summary{cursor:pointer;color:#8bb7ff}</style><main><a href="/">운영 화면</a> · <a href="/site-reaudit">전수검사 기록</a><h1>사이트 검증 전용 워커 1개</h1><p>발행 작업실 5개와 분리해 메뉴·글쓰기·가입·로그인 화면을 확인합니다. 계정 입력·가입·로그인 제출·글 발행은 하지 않으며 권한·CAPTCHA 제한을 유지합니다.</p><section id="status">상태 읽는 중</section><section><table><thead><tr><th>사이트</th><th>검사 결과</th><th>학습 증거</th></tr></thead><tbody id="rows"></tbody></table></section></main><script>const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));async function load(){const r=await fetch('/api/site-verification-worker');if(!r.ok)return;const d=await r.json(),s=d.status;document.getElementById('status').innerHTML='<b>검증 워커 '+(d.alive?'실행 중':'응답 확인 필요')+'</b> · 완료 '+(s.completed||0)+'곳 · 대기 '+(s.pending||0)+'곳<br>현재 사이트: '+esc(s.domain||s.last_domain||'후보 대기')+' · 읽은 화면 '+(s.pages||0)+'개<br><small>최근 상태 저장 '+esc(s.heartbeat_at?new Date(s.heartbeat_at).toLocaleString('ko-KR'):'아직 없음')+' · 유료 API 호출 0 · 이 워커의 신규 발행 0</small>';document.getElementById('rows').innerHTML=d.items.map(x=>'<tr><td>'+esc(x.domain)+'<br><small>'+esc(x.finished?new Date(x.finished).toLocaleString('ko-KR'):'검사 중')+'</small></td><td>'+esc(d.labels[x.result?.state||x.state]||x.state)+'<br><small>'+esc(x.result?.next_action||'')+'</small></td><td><details><summary>화면 '+(x.result?.pages?.length||0)+'개 · 상세 증거</summary><pre>'+esc(JSON.stringify(x.result,null,2))+'</pre></details></td></tr>').join('')}load();setInterval(load,10000);</script></html>'''
