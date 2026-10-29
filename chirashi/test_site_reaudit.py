@@ -125,3 +125,10 @@ class LegacyEvidenceReclassificationTests(unittest.TestCase):
         for field,expected in [({'label':'조합원 코드 필수','type':'password','role':'password'},'membership_code_required'),({'label':'SPAM 방지','type':'text','role':'unknown'},'human_verification_required'),({'label':'성별','type':'radio','role':'title'},'contact_or_application_form')]:
             row={'category':'write_form_observed_not_publish_verified','pages':[{'stage':'write','form_state':'measured','url':'https://a.example/bbs/write.php?bo_table=free','fields':[field]}]}
             self.assertEqual(refine_result(row)['category'],expected)
+
+class BareHtmlAttributeTests(unittest.TestCase):
+    def test_empty_style_and_class_attributes_do_not_abort_a_site_measurement(self):
+        from form_schema import human_challenge_present
+        self.assertFalse(human_challenge_present('<input style class type name autocomplete placeholder>'))
+        out=view_page({'html':'<form style class><input name="wr_subject" style class required><textarea name="wr_content" required></textarea></form>','url':'https://a.example/write','http':200,'state':'http_response'})
+        self.assertEqual(out['form_state'],'measured')

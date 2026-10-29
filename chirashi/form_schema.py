@@ -84,8 +84,8 @@ class Parser(HTMLParser):
 
 def role_for(field):
     if field.get('type') in {'email','tel','file'}: return {'email':'email','tel':'phone','file':'attachment'}[field['type']]
-    key=(field.get('name','')+' '+field.get('id','')+' '+field.get('autocomplete','')).lower()
-    label=field.get('label','')+' '+field.get('placeholder','')
+    key=((field.get('name') or '')+' '+(field.get('id') or '')+' '+(field.get('autocomplete') or '')).lower()
+    label=(field.get('label') or '')+' '+(field.get('placeholder') or '')
     # Custom Gnuboard skins reuse canonical names for unrelated contact fields.
     # Visible labels and control types can contradict those names.
     if re.search(r'조합원\s*코드|회원\s*전용\s*코드|초대\s*코드',label): return 'access_code'
@@ -114,7 +114,7 @@ def _anc(node,tag):
 def _hidden(node):
     while node:
         a=node.attrs
-        if 'hidden' in a or a.get('aria-hidden')=='true' or set(a.get('class','').split()) & {'displaynone','d-none','hidden'} or re.search(r'(?:display\s*:\s*none|visibility\s*:\s*hidden)',a.get('style',''),re.I): return True
+        if 'hidden' in a or a.get('aria-hidden')=='true' or set((a.get('class') or '').split()) & {'displaynone','d-none','hidden'} or re.search(r'(?:display\s*:\s*none|visibility\s*:\s*hidden)',(a.get('style') or ''),re.I): return True
         node=node.parent
     return False
 
@@ -137,7 +137,7 @@ def measure_html(markup,url,kind):
         for n in p.nodes:
             if n.tag not in {'input','select','textarea','button','iframe'}: continue
             if _anc(n,'form') is not form and not (n.attrs.get('form') and n.attrs['form']==form.attrs.get('id')): continue
-            a=n.attrs; typ=a.get('type','text' if n.tag=='input' else n.tag).lower()
+            a=n.attrs; typ=(a.get('type') or ('text' if n.tag=='input' else n.tag)).lower()
             if typ in {'submit','reset','button','image'} or n.tag=='button': continue
             f={k:a[k] for k in ('name','id','minlength','maxlength','pattern','autocomplete','placeholder','accept','multiple') if k in a}
             f.update(tag=n.tag,type=typ,disabled='disabled' in a,readonly='readonly' in a,hidden=(typ=='hidden' or _hidden(n)))
@@ -154,7 +154,7 @@ def measure_html(markup,url,kind):
             if not label and row:
                 label=' '.join(x.text() for x in row.children if x.tag=='th')
             f['label']=label[:240]
-            native='required' in a or a.get('aria-required')=='true' or 'required' in a.get('class','').split() or a.get('data-required')=='true'
+            native='required' in a or a.get('aria-required')=='true' or 'required' in (a.get('class') or '').split() or a.get('data-required')=='true'
             # A label marked required is evidence; lack of a marker is not evidence of optionality.
             marked=bool(re.search(r'필수|\brequired\b',label,re.I))
             if row:
