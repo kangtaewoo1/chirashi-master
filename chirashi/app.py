@@ -7490,54 +7490,8 @@ NO_VERIFY_FRAGMENTS=[
 ]
 
 def _board_finder_queries(provider):
-    """플랫폼(그누보드/카페24) 홍보·자유 게시판을 '찾기 위한' 검색어.
-       사용자의 지역×업종 목록(=경쟁사 검색)과 무관하게 항상 앞에 실행한다.
-       ★무인증(비회원/기본가입) 게시판 조각을 맨 앞에 배치해 쿼리 한도 안에서 최우선 실행."""
-    qs=[]
-    if provider=='brave':
-        # ★0순위(Brave 실측 100% 적중, 대표님 지시 2026-09-11 '타율 좋게'): Cafe24 게시판명×업종×010
-        #   = rapigencare식 /article/상품-qa/ 황금게시판. Brave 토큰(비용) 최우선 소비 대상.
-        qs.extend(_cafe24_boardname_queries())
-        # 1) 무인증 — 실측상 유일 전환 유형(비회원/이메일인증 없는 가입)
-        for frag in NO_VERIFY_FRAGMENTS:
-            qs.append(frag)
-            for i in INTENT[:2]:
-                qs.append(f'{frag} {i}')
-        # 그누보드: 평문 URL조각 + 홍보의도 (라이브 검증: 실제 홍보게시판 10/10 적중)
-        for frag in BRAVE_URL_FRAGMENTS:
-            qs.append(frag)
-            for i in INTENT[:3]:
-                qs.append(f'{frag} {i}')
-        for bo in GNU_BO_TABLES:
-            qs.append(f'bbs/board.php bo_table={bo} 홍보')
-        for i in INTENT:
-            qs.append(f'{i} bbs board.php 글쓰기')
-            qs.append(f'{i} 그누보드 게시판')
-        # 카페24: 게시판 경로 조각 + 홍보/비회원 신호(그누보드와 동등하게 강화 — 카페24 사이트 대량 커버)
-        for frag in CAFE24_FRAGMENTS:
-            qs.append(frag)
-            for i in INTENT[:2]:
-                qs.append(f'{frag} {i}')
-        # (Cafe24 게시판명×업종 쿼리는 위 0순위에서 이미 최우선 추가됨)
-    else:
-        # Google: inurl: 연산자가 강력 — 무인증(비회원 글쓰기) 신호를 맨 앞에.
-        qs.append('inurl:bbs/write.php 비회원 글쓰기')
-        qs.append('inurl:bbs/board.php 회원가입 없이 글쓰기')
-        qs.append('inurl:bbs/board.php 비회원 홍보 글쓰기')
-        qs.append('inurl:bbs/board.php 누구나 글쓰기 홍보')
-        for p in GNU_PATTERNS+CAFE_PATTERNS:
-            qs.append(p)
-            for i in INTENT[:4]:
-                qs.append(f'{p} {i}')
-        for i in INTENT:
-            qs.append(f'{i} inurl:bbs')
-            qs.append(f'{i} inurl:board')
-        # ★Cafe24 게시판명 × 업종 (대표님 지시)
-        qs.extend(_cafe24_boardname_queries())
-    # ★검색어 대폭 확장(대표님 지시 '무제한'): 지역 × 업종 × 게시판신호 조합을 뒤에 붙여 수천 개로.
-    #   앞쪽(무인증·플랫폼조각)이 최우선이고, PC 커서 로테이션이 뒤쪽까지 순회하며 신규 발굴 지속.
-    qs.extend(_region_service_queries())
-    return list(dict.fromkeys(qs))   # 중복 제거(순서 유지)
+    from discovery_quality import finder_queries
+    return finder_queries(provider)   # 중복 제거(순서 유지)
 
 # 전국 지역(시·구 단위 대표) × 유흥/마사지 업종 — 게시판 홍보글 역발굴용 대량 조합.
 _FINDER_REGIONS=['서울','강남','강북','수원','인천','부천','성남','안양','부평','일산','분당','천안','아산',
@@ -8194,7 +8148,7 @@ def precheck_search_result(url):
 #   ② 그 글 URL을 '글 목록(=글쓰기 가능한 게시판)' URL로 잘라서 후보로 등록한다.
 # 개별 글(wr_id=12345)이 아니라 게시판(bo_table=free)을 후보로 잡아야 screen_candidate가
 # 글쓰기 폼을 찾고 auto_pipeline이 발행을 시도할 수 있다.
-_POST_ID_KEYS=('wr_id','document_srl','no','idx','uid','id','num','board_no','p','articleno','bbsidx')
+_POST_ID_KEYS=('wr_id','document_srl','no','idx','uid','id','num','p','articleno','bbsidx')
 
 def _is_url_pattern_query(q):
     """직접 검색어가 게시판 URL 조각인지 판별.
@@ -8232,6 +8186,11 @@ def _board_url_from_result(url):
 def add_candidates_from(items, cfg, source='search'):
     """검색 결과 → 접근·title 숫자·글쓰기 폼까지 확인 → 후보 등록.
        source='urlpattern'이면 각 결과 URL을 게시판(글목록) URL로 축약해서 등록한다."""
+    if source!='manual':
+        from discovery_quality import prepare_results
+        items,_early_skipped=prepare_results(items)
+    else:
+        _early_skipped=0
     if source=='urlpattern':
         # 글 URL → 게시판 URL 축약 후, 같은 게시판 중복 제거
         seen=set(); reduced=[]
@@ -8250,6 +8209,10 @@ def add_candidates_from(items, cfg, source='search'):
         source='search'   # 이후 로직은 일반 검색과 동일하게 검수·등록
     with _cand_lock:
         cands=load_cands()
+        _quality_cache_file=DATA_DIR/'discovery_no_form_cache.json'
+        _quality_cache=load_json(_quality_cache_file,{}) or {}
+        _quality_cache={k:v for k,v in _quality_cache.items() if float(v.get('retry_after',0))>time.time()}
+        _cached_skipped=0
         known_dom={c.get('domain') for c in cands}
         site_dom={_domain_of(s.get('site_url','')) for s in load_sites()}
         rejected_dom=load_rejected_domains()   # 영구 탈락: 재수집 안 함
@@ -8278,6 +8241,8 @@ def add_candidates_from(items, cfg, source='search'):
                 if dom in known_dom or dom in site_dom: continue
                 if dom.replace('www.','') in rejected_dom:   # 이전에 탈락한 도메인은 건너뜀
                     blocked_rejected+=1; continue
+            if source!='manual' and url in _quality_cache:
+                _cached_skipped+=1; continue
             # 접속 가능 여부만 확인. '제목 숫자 8개' 규칙은 정상 게시판도 대량 오탈락시켜 제거함
             # (대표님 지시 2026-09-06). 주차/스팸은 뒤의 screen_candidate가 parked/illegal로 거른다.
             check=precheck_search_result(url) if source!='manual' else {'reachable':True,'title':'','digits':8}
@@ -8295,7 +8260,10 @@ def add_candidates_from(items, cfg, source='search'):
             _is_board_login=bool(form_check.get('login_required')) and (
                 form_check.get('platform') in ('gnuboard','cafe24','kboard') or url_is_board)
             if source!='manual' and not form_check.get('write_form') and not _is_board_login:
-                blocked_write+=1; continue
+                blocked_write+=1
+                if form_check.get('reachable') and not form_check.get('captcha') and not form_check.get('cafe24_challenge'):
+                    _quality_cache[url]={'reason':'no_write_form','retry_after':time.time()+6*3600}
+                continue
             if source!='manual':
                 form_check['screened']=True
                 form_check['score']=score_candidate(form_check)
@@ -8314,6 +8282,9 @@ def add_candidates_from(items, cfg, source='search'):
             cands.append(rec)
             added+=1
         save_cands(cands)
+        if source!='manual': save_json(_quality_cache_file,_quality_cache)
+    if source!='manual' and (_early_skipped or _cached_skipped):
+        add_log(f'[검색 선별] 일반페이지 {_early_skipped}개 접속 전 제외 · 양식없음 재검사 대기 {_cached_skipped}개 · 후보 추가 {added}개','발굴')
     # 사전필터 로그는 제외 합계가 클 때(5건 이상)만 남긴다 — 발굴 배치마다 자잘한 제외가
     # 화면을 도배하던 문제(대표님 지시). 소수 제외는 정상이라 굳이 안 남김.
     _blk=blocked_unreachable+blocked_write+blocked_rejected+blocked_errpage
