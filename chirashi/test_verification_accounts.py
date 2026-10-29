@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 from flask import Flask
 from site_verify_worker import database
-from verification_accounts import execute,validate_spec,blocked,enqueue,cipher,register,terms_form,generate_missing_account
+from verification_accounts import execute,validate_spec,blocked,enqueue,cipher,register,terms_form,generate_missing_account,alert_diagnosis
 from verification_captcha import solve_image
 
 SPEC={'mode':'login','origin':'https://a.example','write_url':'https://a.example/bbs/write.php?bo_table=free','login_url':'https://a.example/login','signup_url':'https://a.example/signup'}
@@ -30,6 +30,11 @@ class FakeBrowser:
 
 
 class AccountWorkerTests(unittest.TestCase):
+    def test_site_alerts_classified_without_retaining_private_echoes(self):
+        r=alert_diagnosis('회원아이디 또는 비밀번호가 일치하지 않습니다. PRIVATEPASSWORD')
+        self.assertEqual(r['state'],'login_rejected');self.assertNotIn('PRIVATEPASSWORD',json.dumps(r))
+        self.assertEqual(alert_diagnosis('로그인 시도 횟수를 초과했습니다')['state'],'account_locked')
+        self.assertEqual(alert_diagnosis('자동등록방지 확인이 필요합니다')['state'],'waiting_human')
     def test_generated_account_obeys_measured_lengths_and_is_persisted_before_submission(self):
         profile={'_auto_credentials':True};saved=[]
         schema={'state':'measured','form':{'fields':[{'role':'id','minlength':'4','maxlength':'8'},{'role':'password','minlength':'12','maxlength':'20'}]}}
