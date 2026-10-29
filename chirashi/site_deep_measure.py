@@ -127,7 +127,7 @@ def summarize_deep(pages):
         result.update(state='navigation_review_required',next_action='익명 브라우저 화면은 열렸습니다. 작성·동의 조건을 추가 확인해야 합니다.')
     gates=[p.get('requested_url',p['url']) for p in effective if p.get('stage')=='write' and p.get('form_state')=='agreement_required']
     result['write_agreement_gate_urls']=gates
-    if gates and result['state'] in ('navigation_review_required','write_form_observed','purpose_review_required'):
+    if gates and result['state'] in ('navigation_review_required','write_form_observed','purpose_review_required','login_profile_observed','signup_route_observed'):
         result.update(state='agreement_review_required',next_action='작성 화면의 동의 조건을 확인해야 합니다. 동의·제출은 수행하지 않았습니다.')
     return result
 

@@ -11,7 +11,8 @@ class DeepMeasurementTests(unittest.TestCase):
     def test_rendered_consent_gate_supersedes_static_form(self):
         base={'url':'https://a.example/write','stage':'write','form_state':'measured','fields':[],'write_mode':'new_post_requested'}
         rendered=dict(base,form_state='agreement_required',rendered_browser_checked=True)
-        r=summarize_deep([base,rendered])
+        ancillary_login={'url':'https://a.example/login','stage':'login','form_state':'measured','fields':[]}
+        r=summarize_deep([base,rendered,ancillary_login])
         self.assertEqual(r['state'],'agreement_review_required')
         self.assertEqual(len(r['flow_profile']['write']['boards']),1)
         self.assertFalse(r['publication_verified'])
