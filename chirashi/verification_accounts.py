@@ -165,7 +165,7 @@ class Browser:
         for name in terms['names']:
             if not re.fullmatch(r'[A-Za-z0-9_\[\]-]+',name):raise ValueError('form_review')
             element=form.find_element(By.NAME,name)
-            if not element.is_selected():element.click()
+            if not element.is_selected():self.click_visible(element)
         self.click_submit(form,origin)
     def fill(self,schema,profile,kind):
         from selenium.webdriver.common.by import By
@@ -206,13 +206,18 @@ class Browser:
         matches=[x for x in forms if (f.get('id') and x.get_attribute('id')==f['id']) or (not f.get('id') and clean_url(x.get_attribute('action'))==f['action'])]
         if len(matches)!=1:raise ValueError('form_review')
         self.click_submit(matches[0],origin)
+    def click_visible(self,element):
+        # Keep controls clear of sticky headers/footers; retain native hit testing.
+        self.driver.execute_script("arguments[0].scrollIntoView({block:'center',inline:'nearest',behavior:'instant'});",element)
+        time.sleep(.2)
+        element.click()
     def click_submit(self,form,origin):
         from selenium.webdriver.common.by import By
         action=form.get_attribute('action')
         if not same_origin(action,origin) or form.get_attribute('method').lower()!='post':raise ValueError('unsafe_form_action')
         buttons=[x for x in form.find_elements(By.CSS_SELECTOR,'button[type="submit"],input[type="submit"],button:not([type])') if x.is_displayed() and x.is_enabled()]
         if len(buttons)!=1:raise ValueError('form_review')
-        buttons[0].click();time.sleep(1)
+        self.click_visible(buttons[0]);time.sleep(1)
         if not same_origin(self.driver.current_url,origin):raise ValueError('origin_hold')
     def signup_success(self):
         from selenium.webdriver.common.by import By
