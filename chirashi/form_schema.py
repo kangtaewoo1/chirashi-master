@@ -123,7 +123,7 @@ def safe_url(url):
     return urlunsplit((p.scheme,host,p.path,query,''))
 
 def measure_html(markup,url,kind):
-    if kind not in {'signup','write'}: raise ValueError('kind must be signup or write')
+    if kind not in {'signup','write','login'}: raise ValueError('kind must be signup, write or login')
     p=Parser(); p.feed(markup); p.close()
     labels={n.attrs.get('for'):n.text() for n in p.nodes if n.tag=='label' and n.attrs.get('for')}
     forms=[]
@@ -175,6 +175,9 @@ def measure_html(markup,url,kind):
     def score(form):
         roles=[f['role'] for f in form['fields'] if not f['hidden'] and not f['disabled']]
         action=form['action'].lower()
+        if kind=='login':
+            if 'password' not in roles or 'password_confirm' in roles: return -1
+            return 10*roles.count('password')+5*roles.count('id')+bool(re.search(r'login|signin',action))
         if kind=='signup':
             if re.search(r'login|signin',action) and not re.search(r'join|register',action): return -1
             return 10*roles.count('password_confirm')+5*roles.count('password')+3*roles.count('id')+bool(re.search(r'join|register',action))

@@ -111,7 +111,7 @@ def view_page(response,kind='write'):
     html=response.get('html','')
     if not html:return result
     parser=Parser();parser.feed(html);parser.close()
-    schema=measure_html(html,response['url'],'signup' if kind=='signup' else 'write')
+    schema=measure_html(html,response['url'],kind if kind in ('signup','login') else 'write')
     fields=(schema.get('form') or {}).get('fields',[])
     result.update(form_state=schema['state'],fingerprint=schema['fingerprint'],human_verification=human_challenge_present(html),
         access_reason=access_reason(html),title=next((n.text()[:160] for n in parser.nodes if n.tag=='title'),''),
@@ -202,6 +202,19 @@ def audit(entry):
         'write_form_observed':measured,'old_rejected':entry.get('rejected',False),'new_posts_submitted':0,'login_submitted':False,
         'signup_submitted':False,'permission_changed':False,'paid_api_calls':0,'existing_post_is_new_publish_proof':False,'public_promotion_permission_verified':False,'account_and_post_stages_pending':True}
 
+def purpose_assessment(row):
+    pages=[p for p in row.get('pages',[]) if p.get('stage') in ('entry','write') and p.get('form_state')=='measured']
+    for p in pages:
+        text=p.get('title','')+' '+p.get('url','')
+        if re.search(r'문의|상담|견적|신청|제휴|이력서|고객의.?소리|의회에.?바란다|대관|장애접수|무엇이든.?물어|\bInquiry\b|/contact|/maintenance|/customer/inquiry|(?:bo_table|mid)=(?:consult|counsel|estimate|inquiry|contact|request|recruit|apply|form0)',text,re.I):
+            return {'kind':'contact_or_application_form','reason':'문의·상담·신청 목적 신호가 있어 공개 홍보 게시판으로 집계할 수 없습니다.','url':p.get('url'),'title':p.get('title'),'permission_decision':False}
+        if re.search(r'후기|리뷰|입학|공지사항|주변관광|질문답변|방명록|(?:bo_table|mid)=(?:review|notice|tour|bo_resume)|/board/product/|[?&]bo_table=.*_qa(?:&|$)',text,re.I):
+            return {'kind':'purpose_specific_board','reason':'후기·공지·질문 등 특정 용도 게시판입니다. 홍보 허용은 별도로 확인해야 합니다.','url':p.get('url'),'title':p.get('title'),'permission_decision':False}
+    if pages and not any(p.get('stage')=='write' and re.search(r'/write[^/]*|mod=editor|dispBoardWrite',p.get('url',''),re.I) and not re.search(r'오류안내|오류.?페이지|error',p.get('title',''),re.I) for p in pages):
+        return {'kind':'embedded_form_requires_review','reason':'홈·기존 글·오류 화면에서 양식이 감지되었습니다. 실제 새 글 작성 화면인지 추가 검토해야 합니다.','permission_decision':False}
+    return {'kind':'purpose_not_verified','reason':'양식 존재만으로 홍보 허용이나 발행 성공을 판단하지 않습니다.','permission_decision':False}
+
+
 def refine_result(row):
     # A site's login page is expected to contain login controls. It does not
     # establish that the independently fetched writing page requires an account.
@@ -220,6 +233,10 @@ def refine_result(row):
         if any(re.search(r'(?:bo_table|mid)=(?:consult|counsel|estimate|inquiry|contact|request|recruit|apply|form0)',p.get('url',''),re.I) for p in row.get('pages',[]) if p.get('stage') in ('entry','write')):
             row['category']='contact_or_application_form'
             row['next_action']='상담·신청 양식의 목적을 확인하세요. 공개 홍보 게시판으로 집계하지 않습니다.'
+    if row.get('category') in ('write_form_observed_not_publish_verified','contact_or_application_form'):
+        assessment=purpose_assessment(row);row['board_purpose_hint']=assessment
+        if assessment['kind']!='purpose_not_verified':
+            row['category']=assessment['kind'];row['next_action']=assessment['reason']
     return row
 
 
@@ -310,7 +327,7 @@ def run(folder,workers):
             done,_=concurrent.futures.wait(active,timeout=5,return_when=concurrent.futures.FIRST_COMPLETED)
             for future in done:
                 domain=active.pop(future)
-                try:result=future.result()
+                try:result=refine_result(future.result())
                 except Exception as exc:result={'domain':domain,'checked_at':now(),'category':'worker_error','error_type':type(exc).__name__,'requests':0,'pages':[]}
                 c.execute("UPDATE jobs SET state='done',result=?,finished=? WHERE domain=?",(json.dumps(result,ensure_ascii=False),now(),domain));c.commit()
             fill();progress()
@@ -330,9 +347,9 @@ body{margin:0;background:#0b1018;color:#e4eaf5;font:15px/1.6 system-ui,sans-seri
 <progress id="bar" value="0" max="100"></progress><div id="updated" class="note"></div><div id="categories"></div>
 <section><div class="tools"><input id="q" placeholder="도메인 검색"><select id="category"><option value="">전체 결과</option></select><button onclick="offset=0;load()">조회</button><a href="/api/site-reaudit/export">검사 결과 다운로드</a> · <a href="/api/site-reaudit/report">완료 보고서</a></div><div class="wrap"><table><thead><tr><th>사이트</th><th>이전 상태</th><th>이번 실측</th><th>다음 조치 · 세부 내역</th></tr></thead><tbody id="rows"></tbody></table></div><div class="tools"><button onclick="offset=Math.max(0,offset-30);load()">이전</button><span id="paging"></span><button onclick="offset+=30;load()">다음</button></div></section></main>
 <script>
-const names={contact_or_application_form:'상담·신청 양식 · 홍보 대상 미확인',saved_address_requires_review:'저장 주소 수정 필요',write_form_observed_not_publish_verified:'글쓰기 양식 확인 · 발행 미검증',human_verification_required:'사람 확인 필요',login_required:'로그인 필요',http_error:'사이트 응답 오류',tls_validation_failed:'인증서 확인 실패',different_domain_redirect:'다른 도메인으로 이동',connection_failed:'접속 실패',connect_timeout:'접속 시간 초과',read_timeout:'응답 시간 초과',write_route_not_observed:'글쓰기 주소 추가 확인',write_form_not_observed:'글쓰기 양식 추가 확인',policy_or_access_review:'이용 규칙·권한 검토',address_or_parse_error:'주소·이름 해석 확인',response_too_large:'큰 페이지 · 추가 확인',worker_error:'검사 실행 오류'};
+const names={purpose_specific_board:'특정 용도 게시판 · 홍보 허용 미확인',embedded_form_requires_review:'내장 양식 · 새 글 화면 추가 확인',contact_or_application_form:'상담·신청 양식 · 홍보 대상 미확인',saved_address_requires_review:'저장 주소 수정 필요',write_form_observed_not_publish_verified:'글쓰기 양식 확인 · 발행 미검증',human_verification_required:'사람 확인 필요',login_required:'로그인 필요',http_error:'사이트 응답 오류',tls_validation_failed:'인증서 확인 실패',different_domain_redirect:'다른 도메인으로 이동',connection_failed:'접속 실패',connect_timeout:'접속 시간 초과',read_timeout:'응답 시간 초과',write_route_not_observed:'글쓰기 주소 추가 확인',write_form_not_observed:'글쓰기 양식 추가 확인',policy_or_access_review:'이용 규칙·권한 검토',address_or_parse_error:'주소·이름 해석 확인',response_too_large:'큰 페이지 · 추가 확인',worker_error:'검사 실행 오류',measurement_error:'화면 해석 추가 확인',redirect_limit:'연속 이동 · 추가 확인',http_response:'응답 내용 추가 확인'};
 const stages={entry:'기본 접속',write:'글쓰기 화면',login:'로그인 화면',signup:'가입 화면',existing_post:'기존 글 조회'};const forms={measured:'양식 확인',form_unavailable:'양식 미확인',login_required:'로그인 필요',access_denied:'접근 제한',site_database_error:'사이트 DB 오류',http_response:'응답 받음'};
-const actions={contact_or_application_form:'상담·신청 양식은 공개 홍보 게시판과 구분해 검토',write_form_observed_not_publish_verified:'홍보 허용과 필수 항목을 검토한 후 1건 발행 검증',human_verification_required:'해당 사이트에서 사람이 확인해야 합니다.',login_required:'허용된 계정으로 정상 로그인 확인',tls_validation_failed:'인증서 문제 해결 후 재검사',write_route_not_observed:'메뉴·동적 화면에서 실제 글쓰기 주소 확인',write_form_not_observed:'동적 화면 또는 게시판 구조 추가 확인',policy_or_access_review:'운영 규칙과 접근 권한을 먼저 확인'};
+const actions={purpose_specific_board:'후기·공지·질문 등 게시판 용도와 홍보 허용을 확인',embedded_form_requires_review:'댓글·내장 양식과 실제 새 글 화면을 구분해 확인',contact_or_application_form:'상담·신청 양식은 공개 홍보 게시판과 구분해 검토',write_form_observed_not_publish_verified:'홍보 허용과 필수 항목을 검토한 후 1건 발행 검증',human_verification_required:'해당 사이트에서 사람이 확인해야 합니다.',login_required:'허용된 계정으로 정상 로그인 확인',tls_validation_failed:'인증서 문제 해결 후 재검사',write_route_not_observed:'메뉴·동적 화면에서 실제 글쓰기 주소 확인',write_form_not_observed:'동적 화면 또는 게시판 구조 추가 확인',policy_or_access_review:'운영 규칙과 접근 권한을 먼저 확인'};
 const esc=s=>String(s??'').replace(/[&<>"']/g,x=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[x]));let offset=0;
 async function load(){const q=document.getElementById('q').value,category=document.getElementById('category').value;const r=await fetch('/api/site-reaudit?q='+encodeURIComponent(q)+'&category='+encodeURIComponent(category)+'&offset='+offset);if(!r.ok)return;const d=await r.json(),s=d.progress||{};document.getElementById('total').textContent=s.total??0;document.getElementById('done').textContent=s.completed??0;document.getElementById('pending').textContent=(s.running||0)+'개 · '+(s.pending||0)+'개';document.getElementById('bar').value=s.total?100*s.completed/s.total:0;document.getElementById('updated').textContent=(s.state==='complete'?'전체 접속·양식 검사 완료':'검사 진행 중')+' · 마지막 저장 '+(s.updated_at?new Date(s.updated_at).toLocaleString('ko-KR'):'준비 중')+' · 실제 발행 성공 수와 별도 집계';document.getElementById('categories').innerHTML=Object.entries(s.categories||{}).map(([k,v])=>'<span class="chip">'+esc(names[k]||k)+' '+v+'</span>').join('');const sel=document.getElementById('category');Object.keys(s.categories||{}).forEach(k=>{if(!Array.from(sel.options).some(o=>o.value===k)){const o=new Option(names[k]||k,k);sel.add(o)}});document.getElementById('paging').textContent=(offset+1)+'–'+Math.min(offset+d.items.length,d.filtered_total)+' / '+d.filtered_total;document.getElementById('rows').innerHTML=d.items.map(x=>{const z=x.result||{},e=x.input||{};return '<tr><td><b>'+esc(x.domain)+'</b><br><small>'+esc(e.records?.map(r=>r.source==='registered'?'등록':r.status).filter((v,i,a)=>a.indexOf(v)===i).join(' · ')||'도메인 탈락 목록')+'</small></td><td>'+esc(e.rejected?'도메인 탈락 기록 있음':'도메인 탈락 기록 없음')+'<br><small>'+esc(e.old_domain_reject_reason||e.records?.map(r=>r.old_audit_state||r.old_reject_reason||'').filter(Boolean).join(' · ')||'이유 기록 없음')+'</small></td><td>'+esc(names[z.category]||({'pending':'검사 대기','running':'검사 중'}[x.state])||z.category||x.state)+'<br><small>'+esc(z.checked_at?new Date(z.checked_at).toLocaleString('ko-KR'):'')+' · '+(z.requests||0)+'회 요청</small></td><td>'+esc(actions[z.category]||'접속·양식 증거를 검토한 뒤 다음 검사 결정')+'<details><summary>단계별 증거 '+(z.pages?.length||0)+'개</summary>'+((z.pages||[]).map(p=>'<p><b>'+esc(stages[p.stage]||p.stage)+'</b> · HTTP '+esc(p.http||'—')+' · '+esc(forms[p.form_state||p.state]||p.form_state||p.state)+'<br><a href="'+esc(p.url)+'" target="_blank" rel="noopener">'+esc(p.url)+'</a><br><small>필수 항목: '+esc((p.fields||[]).filter(f=>f.required).map(f=>f.name+' ('+f.role+')').join(', ')||'미확인')+' · 사람 확인: '+(p.human_verification?'감지':'미감지')+'</small></p>').join(''))+'</details></td></tr>'}).join('')}
 load();setInterval(load,10000);

@@ -76,3 +76,27 @@ class LoginEvidenceTests(unittest.TestCase):
         self.assertEqual(row['category'],'write_form_not_observed')
         pages[0]['form_state']='login_required'
         self.assertEqual(refine_result({'category':'login_required','pages':pages})['category'],'login_required')
+
+class PurposeEvidenceTests(unittest.TestCase):
+    def test_private_inquiry_and_review_are_not_public_ad_boards(self):
+        from site_reaudit import refine_result
+        for title,expected in [('견적문의 글쓰기','contact_or_application_form'),('이용후기 글쓰기','purpose_specific_board'),('자유게시판 글쓰기','write_form_observed_not_publish_verified')]:
+            row={'category':'write_form_observed_not_publish_verified','pages':[{'stage':'write','url':'https://a.example/bbs/write.php?bo_table=free','title':title,'form_state':'measured'}]}
+            self.assertEqual(refine_result(row)['category'],expected)
+            self.assertFalse(row['board_purpose_hint']['permission_decision'])
+    def test_article_embedded_form_is_not_a_verified_new_posting_route(self):
+        from site_reaudit import refine_result
+        row={'category':'write_form_observed_not_publish_verified','pages':[{'stage':'entry','url':'https://a.example/post/12','title':'기존 글','form_state':'measured'}]}
+        self.assertEqual(refine_result(row)['category'],'embedded_form_requires_review')
+
+class LoginSchemaTests(unittest.TestCase):
+    def test_login_fields_are_learned_without_field_values(self):
+        r={'html':'<form action="/login"><input name="mb_id" required value="private-id"><input name="mb_password" type="password" required value="private-password"></form>','url':'https://a.example/login','http':200,'state':'http_response'}
+        out=view_page(r,'login')
+        self.assertEqual(out['form_state'],'measured')
+        self.assertEqual({f['role'] for f in out['fields']},{'id','password'})
+        self.assertNotIn('private-id',json.dumps(out))
+        self.assertNotIn('private-password',json.dumps(out))
+    def test_signup_form_is_not_a_login_recipe(self):
+        r={'html':'<form action="/signup"><input name="mb_id"><input name="mb_password" type="password"><input name="mb_password_re" type="password"></form>','url':'https://a.example/signup','http':200,'state':'http_response'}
+        self.assertNotEqual(view_page(r,'login')['form_state'],'measured')
