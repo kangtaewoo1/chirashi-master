@@ -14663,7 +14663,7 @@ function renderActivity(){
 // ★기기별 실시간 현황판(대표님 지시 2026-09-11): PC/노트북 각각 마지막활동·발행·상태 카드.
 function _nodeLabel(id){id=(id||'').toLowerCase();
   if(id.indexOf('kang')>=0)return '🖥️ 내 PC';
-  if(id.indexOf('desktop')>=0||id.indexOf('note')>=0||id.indexOf('laptop')>=0)return '💻 노트북';
+  if(id.indexOf('note')>=0||id.indexOf('laptop')>=0)return '💻 노트북 ('+id+')';
   return '🖥️ '+id;}
 function _ago(sec){sec=Math.max(0,Math.round(sec));
   if(sec<60)return sec+'초 전';
