@@ -42,3 +42,37 @@ class ReauditStatusTests(unittest.TestCase):
             self.assertEqual(client.post('/api/site-reaudit').status_code,405)
     def test_known_nonstandard_port_is_not_a_scan_or_tls_bypass(self):
         self.assertEqual(clean_url('https://a.example:8443/bbs/write.php?bo_table=free'),'https://a.example:8443/bbs/write.php?bo_table=free')
+
+class ReauditSummaryTests(unittest.TestCase):
+    def test_contact_form_is_not_a_verified_public_board(self):
+        from site_reaudit import refine_result
+        row={'category':'write_form_observed_not_publish_verified','pages':[{'stage':'write','url':'https://a.example/bbs/write.php?bo_table=consult'}]}
+        self.assertEqual(refine_result(row)['category'],'contact_or_application_form')
+        row={'category':'write_form_observed_not_publish_verified','pages':[{'stage':'write','url':'https://a.example/bbs/write.php?bo_table=freeboard'}]}
+        self.assertEqual(refine_result(row)['category'],'write_form_observed_not_publish_verified')
+    def test_final_summary_preserves_actual_verification_boundary(self):
+        from site_reaudit import database,write_summary
+        with tempfile.TemporaryDirectory() as f:
+            folder=Path(f);(folder/'manifest.json').write_text(json.dumps({'created_at':'2026-10-29T15:00:00+00:00'}))
+            c=database(folder/'audit.sqlite3')
+            for i,category in enumerate(['write_form_observed_not_publish_verified','login_required']):
+                domain=str(i)+'.example';row={'domain':domain,'category':category,'requests':2,'pages':[]}
+                inp={'records':[{'source':'registered'}],'rejected':True}
+                c.execute('INSERT INTO jobs VALUES(?,?,?,?,?,?,?)',(domain,i,json.dumps(inp),'done',json.dumps(row),'now','now'))
+            c.commit();result=write_summary(c,folder);c.close()
+            self.assertEqual(result['domains_measured'],2)
+            self.assertEqual(result['previously_rejected_domains_measured'],2)
+            self.assertEqual(result['write_forms_pending_publication_verification'],1)
+            for field in ['paid_api_calls','new_posts_submitted','signup_submissions','login_submissions','permissions_changed']:
+                self.assertEqual(result[field],0)
+            self.assertTrue((folder/'form-families.json').exists())
+            self.assertTrue((folder/'report.txt').exists())
+
+class LoginEvidenceTests(unittest.TestCase):
+    def test_login_page_alone_does_not_block_independent_writing_page(self):
+        from site_reaudit import refine_result
+        pages=[{'stage':'write','form_state':'form_unavailable','http':200},{'stage':'login','form_state':'login_required','login_controls':True,'http':200}]
+        row=refine_result({'category':'login_required','pages':pages})
+        self.assertEqual(row['category'],'write_form_not_observed')
+        pages[0]['form_state']='login_required'
+        self.assertEqual(refine_result({'category':'login_required','pages':pages})['category'],'login_required')

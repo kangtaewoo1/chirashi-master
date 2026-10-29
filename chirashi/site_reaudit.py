@@ -14,6 +14,7 @@ from pathlib import Path
 import re
 import socket
 import sqlite3
+import statistics
 import threading
 import time
 from datetime import datetime,timezone
@@ -177,7 +178,7 @@ def audit(entry):
     if any(p.get('access_reason') for p in access_pages):signals.append('access_restriction_observed')
     if any(p.get('promotion_banned_hint') for p in pages):signals.append('promotion_policy_review')
     measured=any(p.get('form_state')=='measured' and p.get('http',0)<400 for p in writes)
-    login=any(p.get('form_state')=='login_required' or (p.get('login_controls') and p['stage']=='write') for p in pages)
+    login=any(p.get('form_state')=='login_required' or (p.get('login_controls') and p['stage']=='write') for p in access_pages)
     if measured and not signals:category='write_form_observed_not_publish_verified'
     elif 'human_verification_required' in signals:category='human_verification_required'
     elif login:category='login_required'
@@ -187,7 +188,10 @@ def audit(entry):
     elif signals:category='policy_or_access_review'
     elif not write_urls:category='write_route_not_observed'
     else:category='write_form_not_observed'
-    next_action={'write_form_observed_not_publish_verified':'Review permission and missing fields before any single live publishing test.',
+    contact=any(re.search(r'(?:bo_table|mid)=(?:consult|counsel|estimate|inquiry|contact|request|recruit|apply|form0)',p.get('url',''),re.I) for p in writes)
+    if category=='write_form_observed_not_publish_verified' and contact:
+        category='contact_or_application_form'
+    next_action={'contact_or_application_form':'Contact or application form is not proof of a public promotion board; verify purpose first.','write_form_observed_not_publish_verified':'Review permission and missing fields before any single live publishing test.',
                  'human_verification_required':'Owner must complete site challenge; no automatic solving.',
                  'login_required':'Check approved account and normal login flow.',
                  'tls_validation_failed':'Repair site certificate or wait; do not bypass TLS.',
@@ -196,7 +200,71 @@ def audit(entry):
     return {'domain':domain,'checked_at':now(),'category':category,'signals':signals,'next_action':next_action,'pages':pages,
         'elapsed_ms':int((time.monotonic()-started)*1000),'requests':request_count,'url_checks':len(visited),'bytes':sum(p.get('bytes',0) for p in pages),
         'write_form_observed':measured,'old_rejected':entry.get('rejected',False),'new_posts_submitted':0,'login_submitted':False,
-        'signup_submitted':False,'permission_changed':False,'paid_api_calls':0,'existing_post_is_new_publish_proof':False}
+        'signup_submitted':False,'permission_changed':False,'paid_api_calls':0,'existing_post_is_new_publish_proof':False,'public_promotion_permission_verified':False,'account_and_post_stages_pending':True}
+
+def refine_result(row):
+    # A site's login page is expected to contain login controls. It does not
+    # establish that the independently fetched writing page requires an account.
+    if row.get('category')=='login_required':
+        pages=row.get('pages',[])
+        writes=[p for p in pages if p.get('stage')=='write' or (p.get('stage')=='entry' and p.get('form_state')=='measured')]
+        access_pages=writes or [p for p in pages if p.get('stage')=='entry']
+        if not any(p.get('form_state')=='login_required' or (p.get('login_controls') and p.get('stage')=='write') for p in access_pages):
+            if any(p.get('http',0)>=400 for p in pages):row['category']='http_error'
+            elif any(p.get('state')=='tls_validation_failed' for p in pages):row['category']='tls_validation_failed'
+            elif row.get('signals'):row['category']='policy_or_access_review'
+            elif writes:row['category']='write_form_not_observed'
+            else:row['category']='write_route_not_observed'
+            row['next_action']='Inspect the writing route itself; login navigation alone is not proof of a login requirement.'
+    if row.get('category')=='write_form_observed_not_publish_verified':
+        if any(re.search(r'(?:bo_table|mid)=(?:consult|counsel|estimate|inquiry|contact|request|recruit|apply|form0)',p.get('url',''),re.I) for p in row.get('pages',[]) if p.get('stage') in ('entry','write')):
+            row['category']='contact_or_application_form'
+            row['next_action']='상담·신청 양식의 목적을 확인하세요. 공개 홍보 게시판으로 집계하지 않습니다.'
+    return row
+
+
+def write_summary(c,folder):
+    rows=[];inputs={}
+    for domain,raw,inp in c.execute("SELECT domain,result,input FROM jobs WHERE state='done'").fetchall():
+        row=refine_result(json.loads(raw));rows.append(row);inputs[domain]=json.loads(inp)
+        c.execute('UPDATE jobs SET result=? WHERE domain=?',(json.dumps(row,ensure_ascii=False),domain))
+    c.commit();categories={};templates={};priority=[]
+    for row in rows:
+        key=row['category'];categories[key]=categories.get(key,0)+1
+        for page in row.get('pages',[]):
+            fields=page.get('fields') or []
+            if not fields:continue
+            shape=[{k:f.get(k) for k in ('name','role','type','required')} for f in fields]
+            signature=hashlib.sha256(json.dumps(shape,sort_keys=True,ensure_ascii=False).encode()).hexdigest()[:16]
+            t=templates.setdefault(signature,{'fingerprint':signature,'domains':set(),'fields':shape})
+            t['domains'].add(row['domain'])
+        if key=='write_form_observed_not_publish_verified':
+            priority.append({'domain':row['domain'],'previously_rejected':inputs[row['domain']].get('rejected',False),
+                'saved_permission':any(x.get('permission_saved') for x in inputs[row['domain']]['records']),
+                'has_saved_account':any(x.get('has_saved_account') for x in inputs[row['domain']]['records']),
+                'write_pages':[{'url':p['url'],'fields':p.get('fields',[]),'unresolved':p.get('unresolved',[])} for p in row.get('pages',[]) if p.get('stage') in ('write','entry') and p.get('form_state')=='measured'],
+                'next_action':'먼저 게시판 목적·홍보 허용·필수 입력칸을 검토한 뒤, 허용된 곳만 1건씩 등록·공개조회 검증'})
+    manifest=json.loads((folder/'manifest.json').read_text())
+    result={'completed_at':now(),'started_at':manifest.get('created_at'),'domains_measured':len(rows),'registered_domain_records':sum(any(x['source']=='registered' for x in e['records']) for e in inputs.values()),
+        'previously_rejected_domains_measured':sum(e.get('rejected',False) for e in inputs.values()),'categories':categories,
+        'http_requests':sum(r.get('requests',0) for r in rows),'response_bytes':sum(r.get('bytes',0) for r in rows),
+        'median_domain_elapsed_ms':round(statistics.median([r.get('elapsed_ms',0) for r in rows])) if rows else 0,
+        'paid_api_calls':0,'new_posts_submitted':0,'signup_submissions':0,'login_submissions':0,'permissions_changed':0,
+        'write_forms_pending_publication_verification':len(priority),'rejected_domains_with_write_form_to_review':sum(x['previously_rejected'] for x in priority),
+        'scope':'Vultr GET-only live connectivity and form measurements; no signup/login/publishing success inferred',
+        'next_priority':'정상 공개 게시판과 상담·신청 양식을 구분하고, 허용된 게시판의 양식 매핑·계정 검증을 먼저 처리',
+        'capacity_note':'워커 수 증가는 권한·계정·사람 확인 차단을 해소하지 않습니다. 실제 발행 검증 후 큐 대기·메모리·건당 비용을 보고 증설합니다.'}
+    template_rows=[dict(v,domains=sorted(v['domains']),domain_count=len(v['domains'])) for v in templates.values()]
+    template_rows.sort(key=lambda x:x['domain_count'],reverse=True)
+    for name,value in [('summary.json',result),('review-priority.json',priority),('form-families.json',template_rows)]:
+        (folder/name).write_text(json.dumps(value,ensure_ascii=False,indent=2))
+    report='전체 사이트 재측정 결과\n\n완료: '+result['completed_at']+'\n검사 도메인: '+str(len(rows))+'개\n이전 도메인 탈락 기록 포함: '+str(result['previously_rejected_domains_measured'])+'개\n\n'
+    report+='이번 검사는 접속·글쓰기·가입·로그인 화면을 읽어서 구조와 차단 이유를 기록한 것입니다. 실제 신규 가입·로그인·글 등록은 0건이며, 발행 성공 수를 늘리지 않았습니다.\n\n'
+    report+='분류별 결과\n'+''.join('- '+k+': '+str(v)+'개\n' for k,v in categories.items())
+    report+='\n양식 확인 후 추가 검토 대상: '+str(len(priority))+'개\n유료 API 호출: 0회\nHTTP 요청: '+str(result['http_requests'])+'회\n\n'+result['next_priority']+'\n'+result['capacity_note']+'\n'
+    (folder/'report.txt').write_text(report)
+    return result
+
 
 def database(path):
     c=sqlite3.connect(path);c.execute('PRAGMA journal_mode=WAL');c.execute('CREATE TABLE IF NOT EXISTS jobs(domain TEXT PRIMARY KEY, position INTEGER, input TEXT, state TEXT, result TEXT, started TEXT, finished TEXT)');return c
@@ -217,6 +285,9 @@ def run(folder,workers):
             c.execute('UPDATE jobs SET input=? WHERE domain=?',(json.dumps(e,ensure_ascii=False),e['domain']))
         else:c.execute("INSERT INTO jobs VALUES(?,?,?,'pending',NULL,NULL,NULL)",(e['domain'],i,json.dumps(e,ensure_ascii=False)))
     c.commit()
+    for domain,raw in c.execute("SELECT domain,result FROM jobs WHERE state='done'").fetchall():
+        row=refine_result(json.loads(raw))
+        c.execute('UPDATE jobs SET result=? WHERE domain=?',(json.dumps(row,ensure_ascii=False),domain))
     c.execute("UPDATE jobs SET state='pending' WHERE state='running'");c.commit();started=time.monotonic();last_write=0
     def progress(force=False):
         nonlocal last_write
@@ -224,7 +295,7 @@ def run(folder,workers):
         counts=dict(c.execute('SELECT state,COUNT(*) FROM jobs GROUP BY state'));categories={};requests_count=0
         for raw, in c.execute("SELECT result FROM jobs WHERE state='done'"):
             row=json.loads(raw);categories[row['category']]=categories.get(row['category'],0)+1;requests_count+=row['requests']
-        result={'updated_at':now(),'total':sum(counts.values()),'completed':counts.get('done',0),'running':counts.get('running',0),'pending':counts.get('pending',0),'categories':categories,'requests':requests_count,'paid_api_calls':0,'new_posts_submitted':0,'elapsed_seconds':round(time.monotonic()-started),'state':'complete' if counts.get('done',0)==sum(counts.values()) else 'running'}
+        result={'updated_at':now(),'total':sum(counts.values()),'completed':counts.get('done',0),'running':counts.get('running',0),'pending':counts.get('pending',0),'categories':categories,'requests':requests_count,'paid_api_calls':0,'new_posts_submitted':0,'elapsed_seconds':round((datetime.now(timezone.utc)-datetime.fromisoformat(json.loads((folder/'manifest.json').read_text())['created_at'])).total_seconds()),'state':'complete' if counts.get('done',0)==sum(counts.values()) else 'running'}
         temp=folder/'progress.tmp';temp.write_text(json.dumps(result,ensure_ascii=False,indent=2));temp.replace(folder/'progress.json');last_write=time.monotonic()
     pending=c.execute("SELECT domain,input FROM jobs WHERE state='pending' ORDER BY position").fetchall()
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
@@ -243,6 +314,7 @@ def run(folder,workers):
                 except Exception as exc:result={'domain':domain,'checked_at':now(),'category':'worker_error','error_type':type(exc).__name__,'requests':0,'pages':[]}
                 c.execute("UPDATE jobs SET state='done',result=?,finished=? WHERE domain=?",(json.dumps(result,ensure_ascii=False),now(),domain));c.commit()
             fill();progress()
+    write_summary(c,folder)
     progress(True)
     with (folder/'results.jsonl').open('w') as f:
         for row, in c.execute('SELECT result FROM jobs ORDER BY position'):f.write(row+'\n')
@@ -256,11 +328,11 @@ body{margin:0;background:#0b1018;color:#e4eaf5;font:15px/1.6 system-ui,sans-seri
 <a href="/">← 운영 화면</a><h1>전체 사이트 재측정</h1><div class="note">등록·후보·탈락 목록을 합쳐 다시 확인합니다. 현재 단계는 접속과 양식 검사입니다. 가입·로그인·글 제출은 하지 않으며 권한이나 탈락 상태를 자동 변경하지 않습니다.</div>
 <div class="cards"><div class="card">전체 도메인<div class="number" id="total">—</div></div><div class="card">검사 완료<div class="number" id="done">—</div></div><div class="card">검사 중 · 대기<div class="number" id="pending">—</div></div><div class="card">유료 API 호출<div class="number">0</div><small>별도 유료 검색·브라우저 사용 안 함</small></div></div>
 <progress id="bar" value="0" max="100"></progress><div id="updated" class="note"></div><div id="categories"></div>
-<section><div class="tools"><input id="q" placeholder="도메인 검색"><select id="category"><option value="">전체 결과</option></select><button onclick="offset=0;load()">조회</button><a href="/api/site-reaudit/export">검사 결과 다운로드</a></div><div class="wrap"><table><thead><tr><th>사이트</th><th>이전 상태</th><th>이번 실측</th><th>다음 조치 · 세부 내역</th></tr></thead><tbody id="rows"></tbody></table></div><div class="tools"><button onclick="offset=Math.max(0,offset-30);load()">이전</button><span id="paging"></span><button onclick="offset+=30;load()">다음</button></div></section></main>
+<section><div class="tools"><input id="q" placeholder="도메인 검색"><select id="category"><option value="">전체 결과</option></select><button onclick="offset=0;load()">조회</button><a href="/api/site-reaudit/export">검사 결과 다운로드</a> · <a href="/api/site-reaudit/report">완료 보고서</a></div><div class="wrap"><table><thead><tr><th>사이트</th><th>이전 상태</th><th>이번 실측</th><th>다음 조치 · 세부 내역</th></tr></thead><tbody id="rows"></tbody></table></div><div class="tools"><button onclick="offset=Math.max(0,offset-30);load()">이전</button><span id="paging"></span><button onclick="offset+=30;load()">다음</button></div></section></main>
 <script>
-const names={saved_address_requires_review:'저장 주소 수정 필요',write_form_observed_not_publish_verified:'글쓰기 양식 확인 · 발행 미검증',human_verification_required:'사람 확인 필요',login_required:'로그인 필요',http_error:'사이트 응답 오류',tls_validation_failed:'인증서 확인 실패',different_domain_redirect:'다른 도메인으로 이동',connection_failed:'접속 실패',connect_timeout:'접속 시간 초과',read_timeout:'응답 시간 초과',write_route_not_observed:'글쓰기 주소 추가 확인',write_form_not_observed:'글쓰기 양식 추가 확인',policy_or_access_review:'이용 규칙·권한 검토',address_or_parse_error:'주소·이름 해석 확인',response_too_large:'큰 페이지 · 추가 확인',worker_error:'검사 실행 오류'};
+const names={contact_or_application_form:'상담·신청 양식 · 홍보 대상 미확인',saved_address_requires_review:'저장 주소 수정 필요',write_form_observed_not_publish_verified:'글쓰기 양식 확인 · 발행 미검증',human_verification_required:'사람 확인 필요',login_required:'로그인 필요',http_error:'사이트 응답 오류',tls_validation_failed:'인증서 확인 실패',different_domain_redirect:'다른 도메인으로 이동',connection_failed:'접속 실패',connect_timeout:'접속 시간 초과',read_timeout:'응답 시간 초과',write_route_not_observed:'글쓰기 주소 추가 확인',write_form_not_observed:'글쓰기 양식 추가 확인',policy_or_access_review:'이용 규칙·권한 검토',address_or_parse_error:'주소·이름 해석 확인',response_too_large:'큰 페이지 · 추가 확인',worker_error:'검사 실행 오류'};
 const stages={entry:'기본 접속',write:'글쓰기 화면',login:'로그인 화면',signup:'가입 화면',existing_post:'기존 글 조회'};const forms={measured:'양식 확인',form_unavailable:'양식 미확인',login_required:'로그인 필요',access_denied:'접근 제한',site_database_error:'사이트 DB 오류',http_response:'응답 받음'};
-const actions={write_form_observed_not_publish_verified:'홍보 허용과 필수 항목을 검토한 후 1건 발행 검증',human_verification_required:'해당 사이트에서 사람이 확인해야 합니다.',login_required:'허용된 계정으로 정상 로그인 확인',tls_validation_failed:'인증서 문제 해결 후 재검사',write_route_not_observed:'메뉴·동적 화면에서 실제 글쓰기 주소 확인',write_form_not_observed:'동적 화면 또는 게시판 구조 추가 확인',policy_or_access_review:'운영 규칙과 접근 권한을 먼저 확인'};
+const actions={contact_or_application_form:'상담·신청 양식은 공개 홍보 게시판과 구분해 검토',write_form_observed_not_publish_verified:'홍보 허용과 필수 항목을 검토한 후 1건 발행 검증',human_verification_required:'해당 사이트에서 사람이 확인해야 합니다.',login_required:'허용된 계정으로 정상 로그인 확인',tls_validation_failed:'인증서 문제 해결 후 재검사',write_route_not_observed:'메뉴·동적 화면에서 실제 글쓰기 주소 확인',write_form_not_observed:'동적 화면 또는 게시판 구조 추가 확인',policy_or_access_review:'운영 규칙과 접근 권한을 먼저 확인'};
 const esc=s=>String(s??'').replace(/[&<>"']/g,x=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[x]));let offset=0;
 async function load(){const q=document.getElementById('q').value,category=document.getElementById('category').value;const r=await fetch('/api/site-reaudit?q='+encodeURIComponent(q)+'&category='+encodeURIComponent(category)+'&offset='+offset);if(!r.ok)return;const d=await r.json(),s=d.progress||{};document.getElementById('total').textContent=s.total??0;document.getElementById('done').textContent=s.completed??0;document.getElementById('pending').textContent=(s.running||0)+'개 · '+(s.pending||0)+'개';document.getElementById('bar').value=s.total?100*s.completed/s.total:0;document.getElementById('updated').textContent=(s.state==='complete'?'전체 접속·양식 검사 완료':'검사 진행 중')+' · 마지막 저장 '+(s.updated_at?new Date(s.updated_at).toLocaleString('ko-KR'):'준비 중')+' · 실제 발행 성공 수와 별도 집계';document.getElementById('categories').innerHTML=Object.entries(s.categories||{}).map(([k,v])=>'<span class="chip">'+esc(names[k]||k)+' '+v+'</span>').join('');const sel=document.getElementById('category');Object.keys(s.categories||{}).forEach(k=>{if(!Array.from(sel.options).some(o=>o.value===k)){const o=new Option(names[k]||k,k);sel.add(o)}});document.getElementById('paging').textContent=(offset+1)+'–'+Math.min(offset+d.items.length,d.filtered_total)+' / '+d.filtered_total;document.getElementById('rows').innerHTML=d.items.map(x=>{const z=x.result||{},e=x.input||{};return '<tr><td><b>'+esc(x.domain)+'</b><br><small>'+esc(e.records?.map(r=>r.source==='registered'?'등록':r.status).filter((v,i,a)=>a.indexOf(v)===i).join(' · ')||'도메인 탈락 목록')+'</small></td><td>'+esc(e.rejected?'도메인 탈락 기록 있음':'도메인 탈락 기록 없음')+'<br><small>'+esc(e.old_domain_reject_reason||e.records?.map(r=>r.old_audit_state||r.old_reject_reason||'').filter(Boolean).join(' · ')||'이유 기록 없음')+'</small></td><td>'+esc(names[z.category]||({'pending':'검사 대기','running':'검사 중'}[x.state])||z.category||x.state)+'<br><small>'+esc(z.checked_at?new Date(z.checked_at).toLocaleString('ko-KR'):'')+' · '+(z.requests||0)+'회 요청</small></td><td>'+esc(actions[z.category]||'접속·양식 증거를 검토한 뒤 다음 검사 결정')+'<details><summary>단계별 증거 '+(z.pages?.length||0)+'개</summary>'+((z.pages||[]).map(p=>'<p><b>'+esc(stages[p.stage]||p.stage)+'</b> · HTTP '+esc(p.http||'—')+' · '+esc(forms[p.form_state||p.state]||p.form_state||p.state)+'<br><a href="'+esc(p.url)+'" target="_blank" rel="noopener">'+esc(p.url)+'</a><br><small>필수 항목: '+esc((p.fields||[]).filter(f=>f.required).map(f=>f.name+' ('+f.role+')').join(', ')||'미확인')+' · 사람 확인: '+(p.human_verification?'감지':'미감지')+'</small></p>').join(''))+'</details></td></tr>'}).join('')}
 load();setInterval(load,10000);
@@ -285,11 +357,18 @@ def register(app,ctx):
         with closing(sqlite3.connect('file:'+str(path)+'?mode=ro',uri=True)) as c:
             total=c.execute('SELECT COUNT(*) FROM jobs'+sql,args).fetchone()[0]
             rows=c.execute('SELECT domain,input,state,result FROM jobs'+sql+' ORDER BY position LIMIT 30 OFFSET ?',args+[offset]).fetchall()
+        summary=json.loads((folder/'summary.json').read_text()) if (folder/'summary.json').exists() else None
         items=[{'domain':r[0],'input':json.loads(r[1]),'state':r[2],'result':json.loads(r[3]) if r[3] else None} for r in rows]
-        return jsonify({'progress':progress,'items':items,'filtered_total':total})
+        return jsonify({'progress':progress,'items':items,'filtered_total':total,'summary':summary})
     @app.route('/api/site-reaudit/export',methods=['GET'])
     def site_reaudit_export():
         path=folder/'audit.sqlite3'
         if not path.exists():return jsonify({'error':'아직 검사 기록이 없습니다.'}),404
         with closing(sqlite3.connect('file:'+str(path)+'?mode=ro',uri=True)) as c:rows=c.execute("SELECT result FROM jobs WHERE state='done' ORDER BY position").fetchall()
         return Response('\n'.join(r[0] for r in rows),mimetype='application/x-ndjson',headers={'Content-Disposition':'attachment; filename=site-reaudit-20261030.jsonl'})
+
+    @app.route('/api/site-reaudit/report',methods=['GET'])
+    def site_reaudit_report():
+        path=folder/'report.txt'
+        if not path.exists():return Response('전체 재측정이 진행 중입니다. 완료되면 이 주소에 종합 결과를 저장합니다.',status=202,mimetype='text/plain')
+        return Response(path.read_text(encoding='utf-8'),mimetype='text/plain',headers={'Content-Disposition':'inline; filename=site-reaudit-report.txt'})
