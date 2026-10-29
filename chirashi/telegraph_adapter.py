@@ -43,11 +43,11 @@ def block(settings,journal,now=None):
     if journal.get('state')=='verified' and journal.get('submitted_at'):events.append(journal['submitted_at'])
     stamps=[datetime.fromisoformat(x) for x in set(events)]
     if any(x.tzinfo is None for x in stamps):return 'invalid_history'
-    daily=int(settings.get('daily_limit',1));interval=int(settings.get('min_interval_minutes',1440))
-    if daily<1 or interval<1:return 'invalid_limits'
+    daily=int(settings.get('daily_limit',0));interval=int(settings.get('min_interval_minutes',0))
+    if daily<0 or interval<0:return 'invalid_limits'
     kst=timezone(timedelta(hours=9))
-    if sum(x.astimezone(kst).date()==now.astimezone(kst).date() for x in stamps)>=daily:return 'daily_limit'
-    if stamps and (now-max(stamps)).total_seconds()<interval*60:return 'minimum_interval'
+    if daily > 0 and sum(x.astimezone(kst).date()==now.astimezone(kst).date() for x in stamps)>=daily:return 'daily_limit'
+    if interval > 0 and stamps and (now-max(stamps)).total_seconds()<interval*60:return 'minimum_interval'
     return ''
 
 

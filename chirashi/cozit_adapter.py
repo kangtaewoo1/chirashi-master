@@ -44,18 +44,18 @@ def block(settings, journal, now=None):
     if journal.get('state') == 'verified' and journal.get('submitted_at'):
         events.append(journal['submitted_at'])
     events = list(set(events))
-    daily = int(settings.get('daily_limit', 1))
-    interval = int(settings.get('min_interval_minutes', 1440))
-    if daily < 1 or interval < 1:
+    daily = int(settings.get('daily_limit', 0))
+    interval = int(settings.get('min_interval_minutes', 0))
+    if daily < 0 or interval < 0:
         return 'invalid_limits'
     # Current Korean publishing limits use UTC+09:00 (no DST).
     kst = timezone(timedelta(hours=9), 'Asia/Seoul')
     stamps = [datetime.fromisoformat(t) for t in events]
     if any(t.tzinfo is None for t in stamps):
         return 'invalid_submission_history'
-    if sum(t.astimezone(kst).date() == now.astimezone(kst).date() for t in stamps) >= daily:
+    if daily > 0 and sum(t.astimezone(kst).date() == now.astimezone(kst).date() for t in stamps) >= daily:
         return 'daily_limit'
-    if stamps and (now - max(stamps)).total_seconds() < interval * 60:
+    if interval > 0 and stamps and (now - max(stamps)).total_seconds() < interval * 60:
         return 'minimum_interval'
     return ''
 

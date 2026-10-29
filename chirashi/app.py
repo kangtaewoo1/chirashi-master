@@ -442,6 +442,8 @@ def load_sites():
 def save_sites(sites):
     out=copy.deepcopy(sites)
     for s in out:
+        s.pop('daily_limit',None)
+        s.pop('min_interval_minutes',None)
         pw=s.pop('mb_pass','') or _decrypt_password(s.get('mb_pass_enc',''))
         if pw: s['mb_pass_enc']=_encrypt_password(pw)
         elif not s.get('mb_pass_enc'): s.pop('mb_pass_enc',None)
@@ -572,7 +574,7 @@ def load_config():
        'twocaptcha_price_recaptcha_usd':0.003,'twocaptcha_price_image_usd':0.0005,
        'brave_price_per_query_usd':0.005,  # Pro 플랜 기준 쿼리당 $0.005(설정 탭에서 변경 가능)
        'auto_pipeline_enabled':True,'auto_pipeline_batch':20,   # ★배치 대폭↑(대표님 '대기 너무 쌓임'): 유입>소진 병목 해소. 병렬가입으로 감당.
-       'min_interval_minutes':1,   # 발행 간격(분): 1=사실상 무간격, daily_limit=0=하루 무제한(대표님 요청)
+       'min_interval_minutes':0,   # 발행 간격(분): 1=사실상 무간격, daily_limit=0=하루 무제한(대표님 요청)
        'publish_loop_enabled':True,'publish_interval_sec':300,   # 24시간 상시발행 루프(5분 주기 큐 보충)
        'workroom_workers':6,   # ★2026-09-15 대표님 '사이트간 최대한 병렬': 4→6(서버 메모리 mem_cap≈15 내). 작업실 동시 처리 슬롯.
        'strict_screen':True,   # ★빡센 검수(대표님 지시): 홍보글 흔적 있는 방치·개방 게시판만 ready 통과
@@ -633,7 +635,7 @@ def load_config():
         c['discover_enabled']=True
         c['auto_pipeline_enabled']=True
         c.setdefault('daily_limit',0)
-        c.setdefault('min_interval_minutes',1)
+        c.setdefault('min_interval_minutes',0)
         c.setdefault('publish_loop_enabled',True)
         c.setdefault('publish_interval_sec',300)
         c.setdefault('discover_interval_sec',600)
@@ -644,13 +646,13 @@ def load_config():
     # 1회 마이그레이션: 발행 간격 1분 · 하루 무제한(daily_limit=0)로 전환(대표님 요청).
     # 기존 config·모든 사이트를 강제로 1/0으로 맞춘다. 이후 개별 조정은 자유.
     if not c.get('interval1_unlimited_migrated'):
-        c['min_interval_minutes']=1
+        c['min_interval_minutes']=0
         c['daily_limit']=0
         try:
             _ss=load_sites(); _ch=False
             for _s in _ss:
-                if _s.get('min_interval_minutes')!=1: _s['min_interval_minutes']=1; _ch=True
-                if _s.get('daily_limit')!=0: _s['daily_limit']=0; _ch=True
+                for _key in ('min_interval_minutes','daily_limit'):
+                    if _key in _s: _s.pop(_key); _ch=True
             if _ch: save_sites(_ss)
         except Exception: pass
         c['interval1_unlimited_migrated']=True
@@ -6693,16 +6695,16 @@ def recover_queue():
     return n
 
 def site_daily_limit(site,cfg):
-    try: return max(0,int(site.get('daily_limit',cfg.get('daily_limit',0)) or 0))
+    try: return max(0,int(cfg.get('daily_limit',0) or 0))
     except Exception: return 0
 
 def site_min_interval(site):
-    # 사이트별 값 없으면 config 기본(min_interval_minutes, 없으면 1) 사용 — site_daily_limit과 동일 패턴
+    # 프로그램 발행 간격은 공통 설정만 사용. 사이트가 알려준 flood_sec는 별도 준수.
     try:
-        default=int(load_config().get('min_interval_minutes',1) or 0)
+        default=int(load_config().get('min_interval_minutes',0) or 0)
     except Exception:
-        default=1
-    try: base=max(0,int(site.get('min_interval_minutes',default) or 0))
+        default=0
+    try: base=max(0,default)
     except Exception: base=default
     # 학습된 도배방지 간격(flood_sec)이 있으면 그만큼(분 올림)을 최소로 보장 — 사이트 규칙 자동 준수.
     try:

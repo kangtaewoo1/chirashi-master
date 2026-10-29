@@ -69,3 +69,23 @@ class ComboSchedulerTests(unittest.TestCase):
         self.assertEqual([s['id'] for s in env['_scheduled_ready_sites']({},True)],['ready'])
 
 if __name__=='__main__':unittest.main()
+
+
+class CommonLimitTests(unittest.TestCase):
+    def test_zero_common_limits_ignore_legacy_overrides_but_keep_site_flood(self):
+        env={'load_config':lambda:{'daily_limit':0,'min_interval_minutes':0}}
+        functions({'site_daily_limit','site_min_interval'},env)
+        site={'daily_limit':1,'min_interval_minutes':1440}
+        self.assertEqual(env['site_daily_limit'](site,{}),0)
+        self.assertEqual(env['site_min_interval'](site),0)
+        site['flood_sec']=90
+        self.assertEqual(env['site_min_interval'](site),2)
+
+    def test_save_removes_individual_limits_without_removing_permission(self):
+        import copy
+        saved=[]
+        env={'copy':copy,'_decrypt_password':lambda x:x,'_encrypt_password':lambda x:x,
+             'save_json':lambda path,rows:saved.extend(rows),'SITES_FILE':'unused'}
+        functions({'save_sites'},env)
+        env['save_sites']([{'id':'s','permission':True,'daily_limit':1,'min_interval_minutes':1440}])
+        self.assertEqual(saved,[{'id':'s','permission':True}])

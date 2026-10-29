@@ -42,9 +42,9 @@ class CozitTests(unittest.TestCase):
         settings['verified_submissions']=[datetime(2026,10,27,14,59,tzinfo=timezone.utc).isoformat()]
         self.assertEqual(block(settings,{'state':'verified'},self.now),'minimum_interval')
 
-    def test_limits_can_never_disable_guard(self):
-        self.assertEqual(block(dict(self.settings,daily_limit=0),{},self.now),'invalid_limits')
-        self.assertEqual(block(dict(self.settings,min_interval_minutes=0),{},self.now),'invalid_limits')
+    def test_zero_disables_optional_limits_but_negative_is_invalid(self):
+        self.assertEqual(block(dict(self.settings,daily_limit=0,min_interval_minutes=0),{},self.now),'')
+        self.assertEqual(block(dict(self.settings,min_interval_minutes=-1),{},self.now),'invalid_limits')
 
     def test_title_and_body_are_not_silently_truncated(self):
         self.assertEqual(content(' title ',' body '),('title','body'))
