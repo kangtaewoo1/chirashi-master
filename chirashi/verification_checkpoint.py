@@ -26,6 +26,7 @@ def save(c,entry,result,overwrite=True):
         old=c.execute('SELECT record FROM review_checkpoints WHERE domain=?',(entry['domain'],)).fetchone()
         if old:
             prior=json.loads(old[0])
+            if prior.get('account_verification'):record['account_verification']=prior['account_verification']
             for key in ('saved_urls','original_write_urls'):
                 record[key]=list(dict.fromkeys(record[key]+prior.get(key,[])))
             record['return_to_write']['urls']=record['original_write_urls']
