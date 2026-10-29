@@ -31,6 +31,11 @@ def qualify_result(row):
     if host in {'google.com','search.naver.com','search.daum.net','bing.com','search.brave.com'}:
         return {'accepted':False,'reason':'search_page'}
     q=parse_qs(p.query);path=p.path;platform='unknown';params={}
+    title=str(row.get('title') or '')
+    # Live re-audit found inquiry/donation/review forms that reused board fields.
+    # Skip this search result only; never blacklist the whole domain or grant permission.
+    if re.search(r'(?:견적\s*문의|상담\s*(?:문의|신청|예약|실)|후원\s*신청|입학\s*상담|광고\s*[/·]\s*제휴\s*문의|조합원\s*전용|제품\s*사용후기|Cooperation\s+inquir)',title,re.I):
+        return {'accepted':False,'reason':'specific_purpose_form'}
     if re.search(r'/(?:board|write)\.php$',path,re.I) and q.get('bo_table'):
         path=re.sub(r'write\.php$','board.php',path,flags=re.I);params={'bo_table':q['bo_table'][0]};platform='gnuboard'
     elif q.get('board_no') and re.search(r'/board/(?:list|read|write)\.html$',path,re.I):

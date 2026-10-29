@@ -46,3 +46,15 @@ class DiscoveryQualityTests(unittest.TestCase):
         self.assertEqual(env['add_candidates_from']([item],{}),0);screen.assert_called_once()
         cache.clear();screen.return_value={'reachable':True,'write_form':False,'login_required':True,'platform':'gnuboard'}
         self.assertEqual(env['add_candidates_from']([item],{}),1);self.assertEqual(cache,{})
+
+class LearnedPurposeSelectionTests(unittest.TestCase):
+    def test_contact_hit_is_skipped_without_rejecting_domain_or_promotional_board(self):
+        from discovery_quality import qualify_result
+        url='https://a.example/bbs/board.php?bo_table=online'
+        for title in ['견적문의 글쓰기','후원 신청','광고/제휴문의','제품 사용후기']:
+            result=qualify_result({'url':url,'title':title})
+            self.assertFalse(result['accepted'])
+            self.assertEqual(result['reason'],'specific_purpose_form')
+        result=qualify_result({'url':'https://a.example/bbs/board.php?bo_table=promotion','title':'무료 홍보게시판 글쓰기'})
+        self.assertTrue(result['accepted'])
+        self.assertFalse(result['permission_proven'])
