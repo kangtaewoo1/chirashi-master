@@ -61,7 +61,7 @@ class PcQueueLeaseTest(unittest.TestCase):
         q=queue.Queue()
         site={'id':'s','site_url':'https://example.com','bo_table':'free','platform':'gnuboard','mb_pass':'private','permission':True,'unattended_audit':{'state':'ready'}}
         env={'threading':threading,'time':time,'secrets':secrets,'queue':queue,'post_queue':q,'DATA_DIR':Path('/fake'),
-             '_PC_QUEUE_LOCK':threading.RLock(),'_PC_SITE_LOCKS':{},'jsonify':lambda x:x,
+             '_server_queue_site':lambda s:False,'_PC_QUEUE_LOCK':threading.RLock(),'_PC_SITE_LOCKS':{},'jsonify':lambda x:x,
              'request':SimpleNamespace(get_json=lambda **k:payload),'load_sites':lambda:[site],
              'load_json':lambda p,d:copy.deepcopy(store.get(str(p),d)),
              'save_json':lambda p,d:store.update({str(p):copy.deepcopy(d)}),

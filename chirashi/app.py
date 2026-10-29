@@ -3953,7 +3953,12 @@ def gnuboard_post_http(site, title, content_html):
         return None,f'폼 GET 실패({str(e)[:40]}) — 폴백'
     if r.status_code>=400:
         return None,f'폼 GET {r.status_code} — 폴백'
-    r.encoding=r.apparent_encoding or r.encoding
+    if site.get('_vultr_direct'):
+        from charset_guard import form_encoding
+        try: r.encoding=form_encoding(r)
+        except (ValueError,LookupError): return False,'제출 전 문자셋 선언 확인 실패'
+    else:
+        r.encoding=r.apparent_encoding or r.encoding
     html=r.text or ''
     from form_schema import measure_html
     measured=measure_html(html,r.url,'write')
@@ -4091,7 +4096,12 @@ def gnuboard_post_http(site, title, content_html):
             payload=data
             if site.get('_unattended_job'):
                 set_site_flag(site.get('id'),unattended_audit={'state':'result_review','checked_at':datetime.now().isoformat(timespec='seconds')})
-                payload=urllib.parse.urlencode(data,encoding=r.encoding or 'utf-8').encode('ascii')
+                if site.get('_vultr_direct'):
+                    from charset_guard import checked_payload
+                    try: payload=checked_payload(data,title,content_html,r.encoding)
+                    except (ValueError,UnicodeError,LookupError): return False,'제출 전 문자셋 손실 감지'
+                else:
+                    payload=urllib.parse.urlencode(data,encoding=r.encoding or 'utf-8').encode('ascii')
             pr=s.post(f'{bbs}/write_update.php',data=payload,timeout=20,verify=bool(site.get('_unattended_job')),
                       headers={'Referer':f'{bbs}/write.php?bo_table={bo}','Content-Type':'application/x-www-form-urlencoded'},allow_redirects=True)
         except Exception as e:
@@ -6412,6 +6422,9 @@ def do_post(site, title, content_html, skip_login=False):
     if resolve_platform(site)=='telpan':
         from telpan_adapter import publish
         return publish(site,title,content_html,globals())
+    if site.get('publish_executor')=='vultr_server':
+        from vultr_gnu_adapter import publish
+        return publish(site,title,content_html,globals())
     # Explicit remote routing never falls back to HTTP/local submission after an uncertain result.
     if resolve_platform(site)=='gnuboard' and bool(load_config().get('sbr_enabled')):
         return _post_gnuboard_brightdata(site,title,content_html,skip_login=skip_login)
@@ -6973,13 +6986,18 @@ def pause_workers():
 def resume_workers():
     global wk_paused; wk_paused=False; add_log('[워커] 재개')
 
+def _server_queue_site(site):
+    current=next((s for s in load_sites() if s.get('id')==site.get('id')),site)
+    return current.get('publish_executor')=='vultr_server' or current.get('platform')=='telpan'
+
+
 def worker_loop():
     while wk_active:
         # 일시정지: 큐에서 꺼내지 않고 대기 (작업 보존)
         if wk_paused: time.sleep(1); continue
         if _pc_queue_online():
             with post_queue.mutex:
-                _server_head=bool(post_queue.queue and post_queue.queue[0].get('site',{}).get('platform')=='telpan')
+                _server_head=bool(post_queue.queue and _server_queue_site(post_queue.queue[0].get('site',{})))
             if not _server_head: time.sleep(1); continue
         try: job=post_queue.get(timeout=1)
         except: continue
@@ -11561,6 +11579,9 @@ def api_pc_queue_claim():
             try: job=post_queue.get_nowait()
             except queue.Empty: return jsonify({'ok':True,'job':None})
         site=next((x for x in load_sites() if x.get('id')==job.get('site',{}).get('id')),None)
+        if site and _server_queue_site(site):
+            post_queue.put(job)
+            return jsonify({'ok':True,'job':None})
         if site and site.get('platform')=='telpan':
             post_queue.put(job)
             return jsonify({'ok':True,'job':None})
@@ -11591,7 +11612,7 @@ def api_pc_queue_start():
         if not item or item.get('state')!='leased' or item.get('expires_at',0)<time.time():
             return jsonify({'ok':False,'error':'lease unavailable; do not submit'}),409
         site=next((x for x in load_sites() if x.get('id')==item['job']['site']['id']),None)
-        if not site or not is_publishable(site) or not under_daily_limit(site,load_config()) or not under_min_interval(site)[0]:
+        if not site or _server_queue_site(site) or not is_publishable(site) or not under_daily_limit(site,load_config()) or not under_min_interval(site)[0]:
             return jsonify({'ok':False,'error':'publishing hold; do not submit'}),409
         item['state']='submitting'; item['started_at']=datetime.now().isoformat(timespec='seconds')
         save_json(DATA_DIR/'pc_queue_leases.json',leases)
