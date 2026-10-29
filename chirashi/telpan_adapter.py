@@ -346,6 +346,8 @@ def publish(site, title, body_html, ctx, bootstrap=False):
 
 
 def register(app, ctx):
+    from site_reaudit import register as register_reaudit
+    register_reaudit(app,ctx)
     from cozit_adapter import register as register_cozit
     register_cozit(app, ctx)
     from flask import request, jsonify, render_template_string, session

@@ -14297,7 +14297,7 @@ DASH_HTML=r'''<header><div class="logo" onclick="window.scrollTo({top:0,behavior
 <div id="formAuditResults" style="margin-bottom:12px"></div>
 <div id="dcSummary" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px"></div>
 
-<div class="card"><div class="row" style="align-items:center"><h3 style="margin:0">📋 사이트 목록</h3>
+<div class="card"><div class="row" style="align-items:center"><h3 style="margin:0">📋 사이트 목록</h3><a class="btn btn-d btn-xs" href="/site-reaudit" target="_blank" rel="noopener">전체 재측정 · 탈락 이유 보기</a>
 <span style="font-size:11px;color:var(--g);font-weight:400">🟢 완전자동 — 발굴·검수·가입·발행이 24시간 자동으로 돕니다</span>
 <span style="flex:1"></span>
 <select id="boardFilter" style="width:auto" onchange="renderBoard()"><option value="">전체</option><option value="publishing">🟢 발행중</option><option value="registered">🔵 등록됨</option><option value="preparing">🟡 준비중</option><option value="waiting">⚪ 대기</option><option value="rejected">🔴 탈락</option></select>
