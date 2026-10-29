@@ -100,3 +100,28 @@ class LoginSchemaTests(unittest.TestCase):
     def test_signup_form_is_not_a_login_recipe(self):
         r={'html':'<form action="/signup"><input name="mb_id"><input name="mb_password" type="password"><input name="mb_password_re" type="password"></form>','url':'https://a.example/signup','http':200,'state':'http_response'}
         self.assertNotEqual(view_page(r,'login')['form_state'],'measured')
+
+class MeasuredCustomSkinTests(unittest.TestCase):
+    def test_donation_gender_and_address_are_not_post_title_and_body(self):
+        from form_schema import measure_html
+        html='<form><label>성별<input type="radio" name="wr_subject"></label><label>주소<input name="wr_content" required></label></form>'
+        self.assertEqual(measure_html(html,'https://a.example/write','write')['state'],'form_unavailable')
+    def test_member_code_is_a_restriction_not_an_ordinary_post_password(self):
+        from form_schema import measure_html
+        html='<form><label>조합원 코드<input name="nado_code" type="password" required></label><input name="wr_subject" required><textarea name="wr_content" required></textarea></form>'
+        result=measure_html(html,'https://a.example/write','write')
+        self.assertIn('access_code',{f['role'] for f in result['form']['fields']})
+        self.assertFalse(result['auto_ready'])
+    def test_legacy_spam_control_is_a_human_challenge_not_an_auto_fill_field(self):
+        from form_schema import measure_html,human_challenge_present
+        html='<form><input name="wr_subject" required><textarea name="wr_content" required></textarea><table><tr><td>SPAM 방지</td><td><input type="hidden" name="spams"><input name="sFullString1" required></td></tr></table></form>'
+        self.assertTrue(human_challenge_present(html))
+        self.assertFalse(measure_html(html,'https://a.example/write','write')['auto_ready'])
+        self.assertFalse(human_challenge_present('<p>SPAM 방지 안내</p><input type="hidden" name="spams">'))
+
+class LegacyEvidenceReclassificationTests(unittest.TestCase):
+    def test_saved_measurements_can_be_refined_without_more_site_requests(self):
+        from site_reaudit import refine_result
+        for field,expected in [({'label':'조합원 코드 필수','type':'password','role':'password'},'membership_code_required'),({'label':'SPAM 방지','type':'text','role':'unknown'},'human_verification_required'),({'label':'성별','type':'radio','role':'title'},'contact_or_application_form')]:
+            row={'category':'write_form_observed_not_publish_verified','pages':[{'stage':'write','form_state':'measured','url':'https://a.example/bbs/write.php?bo_table=free','fields':[field]}]}
+            self.assertEqual(refine_result(row)['category'],expected)

@@ -86,10 +86,15 @@ def role_for(field):
     if field.get('type') in {'email','tel','file'}: return {'email':'email','tel':'phone','file':'attachment'}[field['type']]
     key=(field.get('name','')+' '+field.get('id','')+' '+field.get('autocomplete','')).lower()
     label=field.get('label','')+' '+field.get('placeholder','')
+    # Custom Gnuboard skins reuse canonical names for unrelated contact fields.
+    # Visible labels and control types can contradict those names.
+    if re.search(r'조합원\s*코드|회원\s*전용\s*코드|초대\s*코드',label): return 'access_code'
+    if re.search(r'wr_subject|subject',key) and field.get('type') in {'radio','checkbox','select'}: return 'unknown'
+    if re.search(r'wr_content|content',key) and re.search(r'주소|\baddress\b',label,re.I) and field.get('tag')!='textarea': return 'address'
     if field.get('type')=='password':
         return 'password_confirm' if re.search(r'confirm|check|(?:password|passwd|pw)_?re\b|확인',key+' '+label) else 'password'
     for role,pattern in [
-        ('captcha',r'captcha|recaptcha|turnstile|자동등록방지'),
+        ('captcha',r'captcha|recaptcha|turnstile|자동등록방지|spam\s*방지'),
         ('title',r'wr_subject|subject|제목'),('content',r'wr_content|content|본문|내용'),
         ('email',r'email|e_mail|이메일|전자우편'),('nickname',r'mb_nick|nickname|닉네임|별명'),
         ('id',r'mb_id|member_id|login_id|user_?id|아이디'),
@@ -192,7 +197,7 @@ def measure_html(markup,url,kind):
     if selected and kind=='write' and not {'title','content'}.issubset({f['role'] for f in selected['fields'] if not f['hidden'] and not f['disabled']}):
         state='form_unavailable'; selected=None
     evidence=(selected or {}).get('fields',[])
-    challenge=bool(re.search(r'cf-turnstile|g-recaptcha|kcaptcha|veritas-hub|사람인지 확인|자동등록방지',markup,re.I))
+    challenge=bool(re.search(r'cf-turnstile|g-recaptcha|kcaptcha|veritas-hub|사람인지 확인|자동등록방지',markup,re.I)) or human_challenge_present(markup)
     if not selected and kind=='write' and any(re.search(r'login|signin',f['action'],re.I) for f in forms): state='login_required'
     if not selected and challenge: state='human_verification_required'
     if not selected and re.search(r'약관|이용약관|동의',p.root.text()): state='agreement_required' if not challenge else state
@@ -213,7 +218,7 @@ def measure_html(markup,url,kind):
     canonical={'kind':kind,'form':selected,'challenge':challenge,'state':state}
     signature=hashlib.sha256(json.dumps(canonical,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
     return {**canonical,'fingerprint':signature,'measured_at':datetime.now(timezone.utc).isoformat(timespec='seconds'),
-            'source_url':safe_url(url),'unresolved':unresolved,'auto_ready':state=='measured' and not challenge and not unresolved,
+            'source_url':safe_url(url),'unresolved':unresolved,'auto_ready':state=='measured' and not challenge and not unresolved and not any(f.get('role')=='access_code' for f in evidence),
             'schema_version':2,'measurement_source':'static_html'}
 
 def changes_between(old,new):
@@ -230,6 +235,9 @@ def human_challenge_present(markup):
     for node in parser.nodes:
         attrs=node.attrs
         marker=' '.join(str(attrs.get(k,'')) for k in ('name','id','class','src'))
+        if node.tag=='input' and attrs.get('type','text') not in ('hidden','submit','button') and not _hidden(node) and 'disabled' not in attrs:
+            row=_anc(node,'tr') or _anc(node,'label') or node.parent
+            if re.search(r'SPAM\s*방지',row.text(),re.I): return True
         if 'data-sitekey' in attrs or (node.tag=='script' and re.search(r'recaptcha|hcaptcha|turnstile',marker,re.I)):
             return True
         if node.tag in {'input','textarea','img','iframe','div','span'} and re.search(r'captcha|turnstile|veritas-hub|(?:^|\s)wr_key(?:\s|$)',marker,re.I):
