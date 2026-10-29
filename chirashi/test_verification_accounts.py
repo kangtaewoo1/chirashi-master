@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 from flask import Flask
 from site_verify_worker import database
-from verification_accounts import execute,validate_spec,blocked,enqueue,cipher,register,terms_form
+from verification_accounts import execute,validate_spec,blocked,enqueue,cipher,register,terms_form,generate_missing_account
 from verification_captcha import solve_image
 
 SPEC={'mode':'login','origin':'https://a.example','write_url':'https://a.example/bbs/write.php?bo_table=free','login_url':'https://a.example/login','signup_url':'https://a.example/signup'}
@@ -30,6 +30,24 @@ class FakeBrowser:
 
 
 class AccountWorkerTests(unittest.TestCase):
+    def test_generated_account_obeys_measured_lengths_and_is_persisted_before_submission(self):
+        profile={'_auto_credentials':True};saved=[]
+        schema={'state':'measured','form':{'fields':[{'role':'id','minlength':'4','maxlength':'8'},{'role':'password','minlength':'12','maxlength':'20'}]}}
+        generate_missing_account(schema,profile,lambda p:saved.append(dict(p)))
+        self.assertEqual(len(profile['id']),8);self.assertTrue(12<=len(profile['password'])<=20)
+        self.assertEqual(saved[0]['password'],profile['password'])
+        original=dict(profile);generate_missing_account(schema,profile,lambda p:saved.append(dict(p)))
+        self.assertEqual(profile,original);self.assertEqual(len(saved),1)
+
+    def test_different_board_redirect_never_counts_as_original_board_verification(self):
+        b=FakeBrowser();read=b.read
+        def redirected(stage,url):
+            page,schema=read(stage,url)
+            if stage=='write':page['url']='https://a.example/bbs/write.php?bo_table=other'
+            return page,schema
+        b.read=redirected
+        r=execute(SPEC,{'id':'a','password':'b'}, {},None,b,lambda r:None)
+        self.assertTrue(r['login_verified']);self.assertFalse(r['authenticated_write_verified'])
     def test_signup_terms_are_not_confused_with_footer_contact_consent(self):
         markup='<form action="/bbs/register_form.php"><textarea>Terms</textarea><input type="checkbox" name="agree"><input type="checkbox" name="agree2"></form><form action="/form_ok.php"><input type="checkbox" name="agree1"></form>'
         result=terms_form(markup,'https://a.example/bbs/register.php')
