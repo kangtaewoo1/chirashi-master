@@ -26,9 +26,9 @@ class NavigationWorkerTests(unittest.TestCase):
     def test_challenge_stops_navigation_without_reading_other_paths(self):
         calls=[]
         def reader(url,*args):
-            calls.append(url);return {'url':url,'http':200,'state':'http_response','html':'<input name="captcha_key"><a href="/write">글쓰기</a>'}
+            calls.append(url);return {'url':url,'http':200,'state':'http_response','html':'<p>사람인지 확인</p><input name="captcha_key"><a href="/write">글쓰기</a>'}
         result=inspect({'domain':'a.example','urls':['https://a.example/']},reader=reader)
-        self.assertEqual(len(calls),1);self.assertEqual(result['state'],'human_review_required')
+        self.assertEqual(len(calls),1);self.assertEqual(result['state'],'page_access_human_required')
     def test_navigation_rejects_mutation_and_external_links(self):
         links=menu_links('<a href="/write_update.php">글쓰기</a><a href="https://b.example/write">글쓰기</a><a href="/bbs/write.php?bo_table=free">글쓰기</a>', 'https://a.example/','a.example')
         self.assertEqual([x[1] for x in links],['https://a.example/bbs/write.php?bo_table=free'])
