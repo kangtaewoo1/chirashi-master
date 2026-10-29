@@ -39,7 +39,7 @@ def board_context(pages):
         key=tuple((k,q[k][0]) for k in ('bo_table','board_no','mid','kboard_id') if q.get(k))
         p['board_context_titles']=list(dict.fromkeys(contexts.get(key,[])))[:8] if key else []
         if p['board_context_titles']:
-            candidate=dict(p,title=' '.join(p['board_context_titles'])+' '+p.get('title',''),form_state='measured')
+            candidate=dict(p,url=p.get('requested_url',p['url']),title=' '.join(p['board_context_titles'])+' '+p.get('title',''),form_state='measured')
             p['purpose_hint']=purpose_assessment({'pages':[candidate]})
     return pages
 
