@@ -62,6 +62,7 @@ class PcQueueLeaseTest(unittest.TestCase):
         site={'id':'s','site_url':'https://example.com','bo_table':'free','platform':'gnuboard','mb_pass':'private','permission':True,'unattended_audit':{'state':'ready'}}
         env={'threading':threading,'time':time,'secrets':secrets,'queue':queue,'post_queue':q,'DATA_DIR':Path('/fake'),
              '_server_queue_site':lambda s:False,'_PC_QUEUE_LOCK':threading.RLock(),'_PC_SITE_LOCKS':{},'jsonify':lambda x:x,
+             '_pc_nodes_enabled':lambda:True,
              'request':SimpleNamespace(get_json=lambda **k:payload),'load_sites':lambda:[site],
              'load_json':lambda p,d:copy.deepcopy(store.get(str(p),d)),
              'save_json':lambda p,d:store.update({str(p):copy.deepcopy(d)}),
@@ -77,6 +78,10 @@ class PcQueueLeaseTest(unittest.TestCase):
         return env,payload,store,history,removed,finalized
 
     def test_claim_honors_limits_and_does_not_send_saved_passwords(self):
+        env,d,store,h,removed,finalized=self.environment()
+        env['_pc_nodes_enabled']=lambda:False
+        self.assertIsNone(env['api_pc_queue_claim']()['job'])
+        self.assertEqual(env['post_queue'].qsize(),1)
         env,d,store,h,removed,finalized=self.environment()
         env['under_daily_limit']=lambda *a:False
         self.assertIsNone(env['api_pc_queue_claim']()['job'])

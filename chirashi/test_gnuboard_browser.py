@@ -16,7 +16,7 @@ class GnuboardBrowserTest(unittest.TestCase):
         cls.tree=ast.parse(Path(__file__).with_name('app.py').read_text(encoding='utf-8'))
 
     def site(self,**changes):
-        return dict({'id':'approved','permission':True,'platform':'gnuboard','site_url':'https://approved.example',
+        return dict({'id':'approved','permission':True,'posting_authorized':True,'platform':'gnuboard','site_url':'https://approved.example',
                      'bo_table':'free','write_test_status':'passed','unattended_audit':{'state':'ready'},
                      'verified_post_url':'https://approved.example/bbs/board.php?bo_table=free&wr_id=10'},**changes)
 

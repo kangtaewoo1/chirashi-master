@@ -17,7 +17,7 @@ jobs:
         with:
           python-version: '3.13'
       - name: Install test dependencies
-        run: python -m pip install requests beautifulsoup4 flask
+        run: python -m pip install requests beautifulsoup4 flask python-dotenv cryptography
       - name: Check backend syntax
         run: python -m py_compile chirashi/app.py chirashi/cafe24_gate.py chirashi/form_schema.py chirashi/hub_guard.py chirashi/hub_report.py chirashi/telpan_adapter.py
       - name: Run regression tests
