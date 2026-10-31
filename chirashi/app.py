@@ -568,6 +568,7 @@ def load_config():
        'cafe24_max_per_claim':1,     # ★대표님 지시 2026-09-13 'cafe24 동시처리 줄이기': 한 claim 배치당 cafe24 최대 개수(Turnstile로 무겁고 hang 잦아 슬롯 독점 방지). 나머지 슬롯은 그누보드 등으로 채움.
        'signup_max_per_claim':2,     # ★대표님 지시 2026-09-18 'A1: 될 사이트 우선 claim': 한 claim 배치당 '가입필요(login_required)' 후보 최대 개수. 실측상 이들 대부분 자동가입 60초 타임아웃으로 죽어(빡센검수 표본 0% 성공) 슬롯 독점 시 처리량 낭비. 나머지 슬롯은 비회원 바로발행으로 채움(될 확률 높음). 0 불가(최소 1).
        'node_publish_all':True,      # ★2026-09-15 v5: 노드 전담 발행(실측: gnuboard도 서버 DC IP는 '로그인 실패'로 막히고 노드 집IP는 성공). claim-sites가 작업실 라운드로빈 배정+report-site가 workroom_name 기록해 작업실별 이력 유지. recaptcha 사이트만 여전히 실패. False면 서버가 gnuboard 발행(DC IP 실패 많음).
+       'server_only_mode':True,      # True면 PC 노드 claim을 막고 서버 워커만 사용.
        'node_site_cooldown_sec':90,  # 노드가 같은 등록 사이트를 다시 claim하기까지 최소 간격(초). 짧게=발행량↑(노드 전담이라 서버 경합 없음).
        'cand_cooldown_sec':600,      # ★대표님 지시 2026-09-18 '비회원 후보 쿨다운 단축': 후보를 다시 claim하기까지 최소 간격(초). 1200→600. 짧게=될 후보 회전율↑(claim 배치가 idle로 빠지는 것 감소). 승격된 사이트는 node_site_cooldown_sec 지배라 무관.
        'public_base_url':'https://google.twseo.kr',  # 업로드 이미지 절대 URL 기준 도메인(외부 게시판 로드용)
@@ -695,7 +696,7 @@ def load_config():
     #   '로그인 실패 716건'의 주범. 노드가 전 사이트 발행하되, claim-sites가 작업실을 라운드로빈 배정+report-site가
     #   workroom_name 기록 → 작업실별 이력 유지(대표님 '노드 발행+작업실 이력 유지'). recaptcha 3개는 여전히 못 풂.
     if not c.get('node_publish_all_on_v5'):
-        c['node_publish_all']=True
+        c['node_publish_all']=not bool(c.get('server_only_mode'))
         c['node_publish_all_on_v5']=True
         try: save_json(CONFIG_FILE,c)
         except Exception: pass
@@ -706,6 +707,10 @@ def load_config():
     if not c.get('unattended_gate_off_v1'):
         c['unattended_gate_enabled']=False
         c['unattended_gate_off_v1']=True
+        try: save_json(CONFIG_FILE,c)
+        except Exception: pass
+    if c.get('server_only_mode') and c.get('node_publish_all') is not False:
+        c['node_publish_all']=False
         try: save_json(CONFIG_FILE,c)
         except Exception: pass
     # 1회 마이그레이션: sbr_country='kr' 제거 — endpoint customer name 깨서 'Wrong customer name'
@@ -3344,6 +3349,8 @@ def check_post_alive(url):
 
 def verify_once(limit=40):
     """이력의 성공 발행글 URL 을 재확인해 생존여부(alive)를 기록. 처리 건수 반환."""
+    if not _pc_nodes_enabled():
+        return jsonify({'ok':False,'error':'서버 전용 모드에서는 PC 노드 발굴을 사용하지 않습니다'}),403
     cfg=load_config()
     with JOB_LOCK:
         h=load_json(HISTORY_FILE,[])
@@ -6416,6 +6423,8 @@ def do_post(site, title, content_html, skip_login=False):
     """발행 라우팅(하이브리드+자가학습): 학습레시피→플랫폼기본→자동학습.
        skip_login=True: 가입 직후 이미 로그인된 세션에서 재로그인 없이 바로 글쓰기(비표준 로그인폼 구제)."""
     # 비BMP(이모지 등) 제거 — ChromeDriver send_keys가 못 다뤄 발행 전체가 실패하던 문제 방지.
+    if site.get('posting_authorized') is not True:
+        return False,'발행 보류 — 사이트별 O 승인 필요'
     if site.get('manual_review_only') and not site.get('_manual_review_job'):
         return False,'게시 권한 없음 — 수동 검증 전용 사이트, 자동 발행 보류'
     if site.get('maintenance_hold'):
@@ -7120,7 +7129,8 @@ def _do_publish_job(job,site,cfg,name,job_id,hid):
 
 def is_permitted(site):
     """사이트 관리에서 등록 상태로 전환된 사이트만 발행."""
-    return bool(site.get('permission')) and site.get('registration_source') in ('manual_admin','admin_bulk','legacy_admin','candidate_registered','verified_test')
+    return (site.get('posting_authorized') is True and bool(site.get('permission'))
+            and site.get('registration_source') in ('manual_admin','admin_bulk','legacy_admin','candidate_registered','verified_test'))
 
 def is_autopostable(site):
     """자동발행 대상 = 허용 + 실제 게시 성공 URL 검증 완료.
@@ -9450,6 +9460,10 @@ def _promote_candidate_to_site(cand, result_url, write_url='', bo='', permission
                          'permission_date':_kst_now().strftime('%Y-%m-%d')})
         else:
             site.setdefault('permission',False)
+        if cand.get('posting_authorized') is True:
+            site['posting_authorized']=True
+        else:
+            site.setdefault('posting_authorized',False)
         save_sites(sites)
     with _cand_lock:
         cands=load_cands()
@@ -9482,6 +9496,9 @@ def _pc_node_alive(within=600):
         return (now-_BOOT_EPOCH) < 180
     except Exception:
         return False
+
+def _pc_nodes_enabled():
+    return not bool(load_config().get('server_only_mode'))
 
 def _llm_for_nodes():
     """PC 노드가 글 생성에 쓸 LLM 설정(대표님 2026-09-11 '비용 절감'): 서버 설정탭이 3대의 단일 기준.
@@ -9591,6 +9608,7 @@ def auto_pipeline_once(limit=5):
     _block_illegal=not cfg.get('allow_illegal_boards')   # 대표님 지시: 허용 시 도박판도 발행 대상에 포함
     pend=[c for c in cands
           if c.get('screened') and c.get('status') in ('ready','approved')
+          and c.get('posting_authorized') is True
           and not c.get('parked') and (not c.get('illegal') or not _block_illegal) and not c.get('ad_banned')
           and (c.get('domain') or '').lower() not in site_domains
           and c.get('reachable') and _has_write_path(c)
@@ -9643,6 +9661,7 @@ def auto_pipeline_once(limit=5):
         _curl=c.get('url','')
         m=re.match(r'(https?://[^/]+)',_curl); base=m.group(1) if m else _curl
         tmp={'id':'cand_'+c.get('id',''),'site_url':base,'platform':c.get('platform','gnuboard'),
+             'posting_authorized':c.get('posting_authorized') is True,
              'bo_table':c.get('bo_table') or 'free','name':name,'mb_id':'','mb_pass':''}
         # ★Cafe24: 처음 발굴한 URL(글목록 /article|/board/{명}/{no}/)을 진입점으로(대표님 지시 2026-09-11
         #   '처음 발굴한 사이트로 접속→로그인→진짜 글쓰기 링크'). 이게 없으면 write.html 추측→404.
@@ -10841,6 +10860,8 @@ def _wr_save_image_urls(wid,urls):
 
 def _req_wid():
     """요청에서 workroom_id 추출(JSON body·query·form 순). 없으면 ''(전역)."""
+    if not _pc_nodes_enabled():
+        return jsonify({'ok':False,'error':'서버 전용 모드에서는 PC 노드를 사용하지 않습니다'}),403
     d=request.get_json(silent=True) or {}
     return _sanitize_wid(d.get('workroom_id') or request.args.get('workroom_id') or request.form.get('workroom_id') or '')
 
@@ -10983,6 +11004,8 @@ def api_cand_ingest():
        토큰으로 전송 → 서버가 후보 등록 + 검수 + 발행테스트까지 자동 처리.
        (수동탭 addManual과 달리 토큰 접근 가능 — 로그인 없이 PC가 POST. source='manual'로
         auto_pipeline 최우선 처리.) body: {urls:[...] 또는 "줄바꿈 문자열", note?} """
+    if not _pc_nodes_enabled():
+        return jsonify({'ok':False,'error':'서버 전용 모드에서는 PC 노드 발굴을 받지 않습니다'}),403
     d=request.get_json(silent=True) or {}; cfg=load_config()
     node_id=str(d.get('node_id') or '').strip()   # 발굴 노드(선택) — 관제실 기기별 현황용
     raw=d.get('urls','')
@@ -11322,6 +11345,8 @@ def api_pipeline_claim():
     except Exception: _ver=0
     _cfg_claim=load_config()
     ttl=max(120,min(1800,int(_cfg_claim.get('pc_claim_ttl',600) or 600)))
+    if not _pc_nodes_enabled():
+        return jsonify({'ok':True,'candidates':[],'ttl':ttl})
     now=time.time()
     site_domains={_domain_of(s.get('site_url','')) for s in load_sites()}
     _cool=now-max(120,int(_cfg_claim.get('cand_cooldown_sec',600) or 600))   # 후보 재claim 최소간격(대표님 2026-09-18 단축)
@@ -11345,6 +11370,7 @@ def api_pipeline_claim():
             return any(w in _t for w in _MEDIA_T)
         elig=[c for c in cands
               if c.get('screened') and c.get('status') in ('ready','approved')
+              and c.get('posting_authorized') is True
               and not c.get('parked') and (not c.get('illegal') or _allow_ill) and not c.get('ad_banned')
               and not _looks_media(c)
               and (c.get('domain') or '').lower() not in site_domains
@@ -11437,6 +11463,7 @@ def api_pipeline_report():
             for x in load_cands():
                 if x.get('id')==cid: c=x; break
         if not c: continue
+        if c.get('posting_authorized') is not True: continue
         if c.get('claimed_by') and c.get('claimed_by')!=node_id:
             continue   # 다른 노드/서버로 이미 넘어간 claim — 무시
         ok=bool(r.get('ok')); result_url=str(r.get('result_url') or '')
@@ -11537,6 +11564,8 @@ def api_pc_queue_audit():
 @app.route('/api/pipeline/pc-queue/claim',methods=['POST'])
 def api_pc_queue_claim():
     d=request.get_json(silent=True) or {}
+    if not _pc_nodes_enabled():
+        return jsonify({'ok':True,'job':None})
     if d.get('protocol')!=2 or not {'charset_preflight','job_journal'}.issubset(set(d.get('capabilities') or [])):
         return jsonify({'ok':True,'job':None,'upgrade_required':True,'reason':'charset_and_journal_required'})
     node=str(d.get('node_id',''))[:80]
@@ -11582,6 +11611,8 @@ def api_pc_queue_claim():
 @app.route('/api/pipeline/pc-queue/start',methods=['POST'])
 def api_pc_queue_start():
     d=request.get_json(silent=True) or {}
+    if not _pc_nodes_enabled():
+        return jsonify({'ok':False,'error':'서버 전용 모드에서는 PC 노드 작업을 시작할 수 없습니다'}),409
     with _PC_QUEUE_LOCK:
         leases=load_json(DATA_DIR/'pc_queue_leases.json',{}); item=_pc_queue_authorized(leases,d)
         if not item or item.get('state')!='leased' or item.get('expires_at',0)<time.time():
@@ -11663,6 +11694,8 @@ def api_pipeline_claim_sites():
     n=max(1,min(10,int(d.get('n',4) or 4)))
     _cfg=load_config()
     ttl=max(120,min(1800,int(_cfg.get('pc_claim_ttl',600) or 600)))
+    if not _pc_nodes_enabled():
+        return jsonify({'ok':True,'sites':[],'ttl':ttl})
     now=time.time()
     picked=[]
     with POST_LOCK:
@@ -12865,7 +12898,7 @@ def api_sites():
 def _site_is_pub(s):
     """renderSites의 isPub 예측을 서버에서 동일 계산(발행가능=진짜 발행처)."""
     _adm=('manual_admin','admin_bulk','legacy_admin','candidate_registered','verified_test')
-    return bool(s.get('permission') and s.get('registration_source') in _adm
+    return bool(s.get('posting_authorized') is True and s.get('permission') and s.get('registration_source') in _adm
                 and s.get('status')!='rejected' and s.get('write_test_status')=='passed'
                 and re.match(r'^https?://', str(s.get('verified_post_url') or ''))
                 and not publishing_block(s) and not unattended_block(s))
@@ -12887,6 +12920,7 @@ def api_site_board():
         state='publishing' if pub else ('rejected' if dead else 'registered')
         rows.append({'kind':'site','id':s.get('id'),'domain':dom,'name':s.get('name') or dom,
                      'url':s.get('site_url'),'platform':s.get('platform'),'bo_table':s.get('bo_table'),
+                     'posting_authorized':s.get('posting_authorized') is True,
                      'state':state,'status':s.get('status'),'posted_today':s.get('posted_today',0),
                      'signup_status':s.get('signup_status'),'login_saved':bool(s.get('mb_pass') or s.get('mb_pass_enc')),
                      'block':publishing_block(s) or unattended_block(s) or s.get('technical_block_reason') or s.get('verification_fail_reason') or ''})
@@ -12902,6 +12936,7 @@ def api_site_board():
         else: state='preparing'                          # 검수완료·가입/발행테스트 대기
         rows.append({'kind':'cand','id':c.get('id'),'domain':dom,'name':c.get('domain') or dom,
                      'url':c.get('url'),'platform':c.get('platform'),'bo_table':c.get('bo_table'),
+                     'posting_authorized':c.get('posting_authorized') is True,
                      'state':state,'status':st,'score':c.get('score',0),
                      'title':c.get('title',''),'reject_reason':c.get('reject_reason') or '',
                      'write_form':bool(c.get('write_form')),'captcha':bool(c.get('captcha')),
@@ -13133,7 +13168,7 @@ def _site_goal_progress(cfg, sites):
     try: goal=max(1,int(cfg.get('site_goal',50) or 50))
     except (TypeError,ValueError): goal=50
     done=sum(1 for s in sites if is_autopostable(s))
-    registered=sum(1 for s in sites if s.get('permission') and s.get('status')!='rejected'
+    registered=sum(1 for s in sites if s.get('posting_authorized') is True and s.get('permission') and s.get('status')!='rejected'
                    and str(s.get('verified_post_url') or '').startswith(('http://','https://')))
     return {'site_goal':goal,'site_done':done,'site_perm':registered,
             'site_remaining':max(0,goal-done),'site_goal_reached':done>=goal}
@@ -13151,7 +13186,7 @@ def api_wk_stats():
         #   (발행 로직은 안 건드림 — 카운트 표기만 정확화.)
         publishable=sum(1 for s in sites if is_autopostable(s))
         # ★발행처 총수(발행허용=permission)도 함께 — 화면에 '발행가능 N · 발행처 M'으로 보여 오해 방지.
-        site_perm=sum(1 for s in sites if s.get('permission') and s.get('status')!='rejected'
+        site_perm=sum(1 for s in sites if s.get('posting_authorized') is True and s.get('permission') and s.get('status')!='rejected'
                       and str(s.get('verified_post_url') or '').startswith(('http://','https://')))
     except Exception:
         goal=50; publishable=0; site_perm=0
@@ -13712,6 +13747,38 @@ def api_sites_permission():
                 n+=1
         save_sites(sites)
     return jsonify({'ok':True,'changed':n})
+
+@app.route('/api/posting-authorization',methods=['POST'])
+def api_posting_authorization():
+    d=request.get_json(silent=True) or {}
+    kind=str(d.get('kind') or '')
+    item_id=str(d.get('id') or '').strip()
+    approved=d.get('approved')
+    if kind not in ('site','cand') or not item_id or not isinstance(approved,bool):
+        return jsonify({'ok':False,'error':'kind, id, approved 값이 필요합니다'}),400
+    now=_kst_now().strftime('%Y-%m-%d %H:%M')
+    if kind=='site':
+        with POST_LOCK:
+            items=load_sites()
+            item=next((x for x in items if str(x.get('id') or '')==item_id),None)
+            if item is None: return jsonify({'ok':False,'error':'사이트 없음'}),404
+            item['posting_authorized']=approved
+            item['posting_authorization_updated_at']=now
+            if not approved:
+                item['pc_claim_by']=''; item['pc_claim_expire']=0
+            save_sites(items)
+    else:
+        with _cand_lock:
+            items=load_cands()
+            item=next((x for x in items if str(x.get('id') or '')==item_id),None)
+            if item is None: return jsonify({'ok':False,'error':'후보 없음'}),404
+            item['posting_authorized']=approved
+            item['posting_authorization_updated_at']=now
+            if not approved:
+                item['claimed_by']=''; item['claim_expire']=0
+            save_cands(items)
+    add_log(f'[사이트별 발행 승인] {item_id} · '+('O' if approved else 'X'))
+    return jsonify({'ok':True,'kind':kind,'id':item_id,'approved':approved})
 
 # ---- 사이트 헬스체크 ----
 @app.route('/api/sites/health/<sid>',methods=['POST'])
@@ -14701,6 +14768,18 @@ let _cands=[];
 // ★사이트+발굴 통합 목록(대표님 2026-09-12): /api/site-board를 도메인 dedup 상태별로 한 표에.
 const _BOARD_STATE={publishing:{t:'🟢 발행중',c:'st-ok'},registered:{t:'🔵 등록됨',c:'st-ok'},
   preparing:{t:'🟡 준비중',c:'st-y'},waiting:{t:'⚪ 대기',c:'st-i'},rejected:{t:'🔴 탈락',c:'st-f'}};
+function postingAuthorizationButtons(kind,id,approved){
+  const yes=approved===true;
+  return `<span style="display:inline-flex;gap:3px" aria-label="사이트 자동발행 승인">
+    <button class="btn ${yes?'btn-g':'btn-d'} btn-xs" aria-pressed="${yes}" title="O: 이 사이트의 자동발행을 승인" onclick="setPostingAuthorization('${kind}','${esc(id)}',true)">O</button>
+    <button class="btn ${yes?'btn-d':'btn-r'} btn-xs" aria-pressed="${!yes}" title="X: 자동발행을 승인하지 않음" onclick="setPostingAuthorization('${kind}','${esc(id)}',false)">X</button>
+  </span>`;
+}
+async function setPostingAuthorization(kind,id,approved){
+  const r=await api('/posting-authorization','POST',{kind,id,approved});
+  if(r&&r.ok){toast(approved?'✅ 이 도메인의 자동발행 승인':'⛔ 이 도메인의 자동발행 잠금');renderBoard();renderSites()}
+  else{toast((r&&r.error)||'승인 상태를 저장하지 못했습니다','er')}
+}
 async function auditForm(id,kind){
  const box=$('formAuditResults');box.textContent='양식 측정 중 · 가입하거나 글을 제출하지 않습니다';
  try{
@@ -14728,7 +14807,7 @@ async function renderBoard(){
   const rows=f?r.rows.filter(x=>x.state===f):r.rows;
   if($('boardCount'))$('boardCount').textContent=rows.length.toLocaleString()+'개'+(f?' ('+(_BOARD_STATE[f]||{}).t+')':'');
   if(!rows.length){el.innerHTML='<p style="color:var(--d);padding:24px;text-align:center">표시할 사이트가 없습니다</p>';return}
-  const head='<table style="width:100%;font-size:12px"><thead><tr style="color:var(--d);font-size:10px"><th style="text-align:left">상태</th><th style="text-align:left">이름/도메인</th><th style="text-align:left">게시판</th><th style="text-align:left">정보</th><th style="text-align:right">동작</th></tr></thead><tbody>';
+  const head='<table style="width:100%;font-size:12px"><thead><tr style="color:var(--d);font-size:10px"><th style="text-align:left">상태</th><th style="text-align:left">이름/도메인</th><th style="text-align:left">게시판</th><th style="text-align:left">정보</th><th style="text-align:center">자동발행 승인</th><th style="text-align:right">동작</th></tr></thead><tbody>';
   const body=rows.map(function(x){
     const b=_BOARD_STATE[x.state]||{t:x.state,c:'st-i'};
     const plat=x.platform==='cafe24'?'Cafe24':x.platform==='gnuboard'?'그누보드':'';
@@ -14743,11 +14822,12 @@ async function renderBoard(){
     // 동작: 사이트는 삭제, 후보는 자동처리중 표시(수동버튼 최소화 — 대표님 '알아서')
     const act=x.kind==='site'
       ? '<button class="btn btn-xs" onclick="auditForm(\''+esc(x.id)+'\',\'signup\')">가입 양식</button> <button class="btn btn-xs" onclick="auditForm(\''+esc(x.id)+'\',\'write\')">글쓰기 양식</button> <button class="btn btn-xs" onclick="editSite(\''+esc(x.id)+'\')">계정 연결</button> <button class="btn btn-r btn-xs" onclick="delSite(\''+esc(x.id)+'\')">삭제</button>'
-      : (x.state==='rejected'?'<span style="color:var(--d);font-size:10px">자동 제외</span>':'<span style="color:var(--v);font-size:10px">자동 진행중</span>');
+      : (x.state==='rejected'?'<span style="color:var(--d);font-size:10px">자동 제외</span>':(x.posting_authorized?'승인됨 · 검수 후 처리':'O 승인 전까지 발행 안 함'));
     return '<tr><td><span class="st '+b.c+'" style="white-space:nowrap">'+b.t+'</span></td>'
       +'<td style="max-width:260px"><b>'+esc(x.name||x.domain)+'</b><br><a href="'+esc(x.url||'#')+'" target="_blank" rel="noopener" style="color:var(--p);word-break:break-all;font-size:11px">'+esc((x.url||'').slice(0,60))+'</a></td>'
       +'<td style="color:var(--p)">'+esc(x.bo_table||'')+(plat?'<br><span style="color:var(--d);font-size:10px">'+plat+'</span>':'')+'</td>'
       +'<td style="color:var(--d);font-size:11px">'+info+'</td>'
+      +'<td style="text-align:center">'+postingAuthorizationButtons(x.kind,x.id,x.posting_authorized)+'</td>'
       +'<td style="text-align:right;white-space:nowrap">'+act+'</td></tr>';
   }).join('');
   el.innerHTML=head+body+'</tbody></table>';
@@ -15272,10 +15352,9 @@ $('statSites').innerHTML='<table><thead><tr><th>사이트</th><th>성공</th><th
 
 // ---- 사이트 목록 실시간 렌더 (새로고침 없이) ----
 function siteRow(s){const st=s.status==='done'?'ok':s.status==='failed'?'f':'i';const nm=esc(s.name||(s.site_url||'').slice(0,20));const today=(s.posted_today||0);
-// ★'허용' 열 숨김(대표님 2026-09-12 '굳이 보일 필요 없음'): 배지/체크박스 제거.
-//   발행 불가(미허용)는 행 왼쪽 빨간 테두리(lb)로만 표시 유지.
+// 승인 O/X는 사용자 명시 선택이며, 승인 전에는 발행하지 않는다.
 const adminSource=['manual_admin','admin_bulk','legacy_admin','candidate_registered','verified_test'].includes(s.registration_source);
-const lb=(s.permission&&adminSource)?'':'border-left:3px solid var(--r)';
+const lb=(s.posting_authorized===true&&s.permission&&adminSource)?'':'border-left:3px solid var(--r)';
 const hdot=s.health?('<span title="상태점검: '+esc(s.health)+' ('+esc(s.health_at||'')+')" style="color:'+(s.health==='ok'?'var(--g)':'var(--r)')+'">●</span> '):'';
 const pl=(s.platform||'auto');const plname=pl==='cafe24'?'Cafe24':(pl==='gnuboard'?'그누보드':'자동');const plcolor=pl==='cafe24'?'var(--v)':(pl==='gnuboard'?'var(--p)':'var(--d)');
 const learned=s.learned&&s.learned.write_url;const lbadge=learned?' <span title="자가학습 셀렉터 저장됨" style="color:var(--g)">🎓</span>':'';
@@ -15284,7 +15363,7 @@ const pltag='<span style="font-size:9px;color:'+plcolor+'" title="발행 방식"
 const ss=s.signup_status||'';const signup=ss==='complete'?'<span class="st st-ok">가입완료·로그인저장</span>':(ss==='rejected'?'<span class="st st-f" title="'+esc(s.signup_reject_reason||'')+'">가입 제외 · 이메일인증</span>':(ss==='prepared'?'<span class="st st-y">가입정보만 준비됨</span>':(ss?'<span class="st st-y">가입 '+esc(ss)+'</span>':'')));const pv=s.signup_profile_version?'<span class="st st-i" title="최근측정 '+esc(s.signup_profile_measured_at||'')+'">가입학습 v'+s.signup_profile_version+(s.signup_profile_changed?' 변경':'')+'</span>':'';
 const allLabel=ss==='rejected'?'가입 제외':(ss==='complete'?'✓ 로그인 저장됨':(['prepared','captcha_wait','email_wait'].includes(ss)?'실제 가입완료 확인':'올인원 가입'));const allClass=(ss==='rejected'||ss==='complete')?'btn-d':(['prepared','captcha_wait','email_wait'].includes(ss)?'btn-g':'btn-v');
 const menu=`<details style="display:inline-block;position:relative"><summary class="btn btn-d btn-xs" style="list-style:none;cursor:pointer">관리 ▾</summary><div style="position:absolute;right:0;z-index:20;background:#101a2c;border:1px solid #33425f;border-radius:8px;padding:7px;min-width:125px;display:grid;gap:5px;box-shadow:0 8px 24px #0008"><button class="btn btn-p btn-xs" onclick="editSite('${esc(s.id)}')">편집</button><button class="btn ${allClass} btn-xs" onclick="signupAll('${esc(s.id)}','${esc(ss)}')">${allLabel}</button><button class="btn btn-r btn-xs" onclick="delSite('${esc(s.id)}')">삭제</button></div></details>`;
-return `<tr data-id="${esc(s.id)}" style="${lb}"><td><input type="checkbox" class="cb" data-id="${esc(s.id)}"></td><td>${hdot}<b>${nm}</b><br>${signup} ${pv}</td><td style="min-width:240px;max-width:340px"><a href="${esc(s.site_url||'#')}" target="_blank" rel="noopener" title="${esc(s.site_url||'')}" style="display:block;color:var(--p);word-break:break-all;line-height:1.45">${esc(s.site_url||'-')}</a><a href="${esc(s.site_url||'#')}" target="_blank" rel="noopener" class="btn btn-p btn-xs" style="display:inline-block;margin-top:5px">🔗 링크 열기</a></td><td style="color:var(--p)">${esc(s.bo_table||'')}<br>${pltag}</td><td style="color:var(--d);white-space:nowrap"><div>오늘 ${today}건</div><div style="margin-top:3px;font-size:10px;color:var(--g)">무제한 · 1분 간격(고정)</div></td><td><span class="st st-${st}" title="${esc(s.technical_block_reason||s.verification_fail_reason||'')}">${esc(s.status||'idle')}</span>${s.technical_block_reason?'<br><span style="color:var(--r);font-size:9px">'+esc(s.technical_block_reason)+'</span>':''}</td><td style="white-space:nowrap">${menu}</td></tr>`}
+return `<tr data-id="${esc(s.id)}" style="${lb}"><td><input type="checkbox" class="cb" data-id="${esc(s.id)}"></td><td>${hdot}<b>${nm}</b><br>${signup} ${pv}</td><td style="min-width:240px;max-width:340px"><a href="${esc(s.site_url||'#')}" target="_blank" rel="noopener" title="${esc(s.site_url||'')}" style="display:block;color:var(--p);word-break:break-all;line-height:1.45">${esc(s.site_url||'-')}</a><a href="${esc(s.site_url||'#')}" target="_blank" rel="noopener" class="btn btn-p btn-xs" style="display:inline-block;margin-top:5px">🔗 링크 열기</a></td><td style="color:var(--p)">${esc(s.bo_table||'')}<br>${pltag}</td><td style="color:var(--d);white-space:nowrap"><div>오늘 ${today}건</div><div style="margin-top:3px;font-size:10px;color:var(--g)">무제한 · 1분 간격(고정)</div></td><td><span class="st st-${st}" title="${esc(s.technical_block_reason||s.verification_fail_reason||'')}">${esc(s.status||'idle')}</span>${s.technical_block_reason?'<br><span style="color:var(--r);font-size:9px">'+esc(s.technical_block_reason)+'</span>':''}</td><td>${postingAuthorizationButtons('site',s.id,s.posting_authorized)}</td><td style="white-space:nowrap">${menu}</td></tr>`}
 async function healthSite(id){toast('점검중...');const r=await api('/sites/health/'+id,'POST');if(r&&r.ok){const h=r.health;const pn=h.platform==='cafe24'?'Cafe24':'그누보드';toast((h.ok?'✅ 정상':'⚠️ 확인필요')+` [${pn}] 접속:${h.reachable?'O':'X'} 로그인폼:${h.login_form?'O':'X'} 글쓰기:${h.write_page?'O':'X'}`,h.ok?'ok':'er');renderSites()}else toast('실패','er')}
 async function dryRun(id){toast('🧪 드라이런 실행중... (글은 올리지 않습니다, 최대 60초)');const r=await api('/sites/dryrun/'+id,'POST');if(!r){toast('실패','er');return}
 const rows=(r.steps||[]).map(s=>`<tr><td>${s.ok?'<span style="color:var(--g)">✅</span>':'<span style="color:var(--r)">❌</span>'}</td><td><b>${esc(s.name)}</b></td><td style="color:var(--d)">${esc(s.detail)}</td></tr>`).join('');
@@ -15298,7 +15377,7 @@ async function renderSites(){const sites=await api('/sites','GET');if(!Array.isA
 // 탭 카운트는 '실시간 발행가능' 수로 설정(아래 pubs 계산 후)
 // 발행용 드롭다운: 실제 게시 성공 URL까지 검증된 허용 사이트만 표시
 const sources=['manual_admin','admin_bulk','legacy_admin','candidate_registered','verified_test'];
-const publishable=sites.filter(s=>!!s.permission&&sources.includes(s.registration_source)&&s.status!=='rejected'&&s.write_test_status==='passed'&&/^https?:\/\//.test(s.verified_post_url||''));
+const publishable=sites.filter(s=>s.posting_authorized===true&&!!s.permission&&sources.includes(s.registration_source)&&s.status!=='rejected'&&s.write_test_status==='passed'&&/^https?:\/\//.test(s.verified_post_url||''));
 [['kwSiteFilter','전체 실게시 검증 사이트'],['wrSite','전체 실게시 검증 사이트'],['poolSiteFilter','전체 실게시 검증 사이트']].forEach(([id,label])=>{const sel=$(id);if(!sel)return;const cur=sel.value;sel.innerHTML='<option value="">'+label+' ('+publishable.length+'곳)</option>'+publishable.map(s=>`<option value="${esc(s.id)}">${esc(s.name||(s.site_url||'').slice(0,20))}</option>`).join('');if(publishable.some(s=>s.id===cur))sel.value=cur});
 // 체크 상태 보존
 const checked=new Set(getSiteIds());
@@ -15307,7 +15386,7 @@ if(!sites.length){$('siteList').innerHTML='<p style="color:var(--d);padding:30px
 // (사장님 요청 — 목록엔 되는 것/시도 예정만 보이게. 전체보기 토글로 숨긴 것도 확인 가능)
 // 3분류: 발행가능(실제 돌아감) / 진행중(뚫는 중) / 탈락(안 됨)
 const srcOK=s=>['manual_admin','admin_bulk','legacy_admin','candidate_registered','verified_test'].indexOf(s.registration_source)>=0;
-const isPub=s=>!s.publishing_block&&!!s.permission&&srcOK(s)&&s.status!=='rejected'&&s.write_test_status==='passed'&&/^https?:\/\//.test(s.verified_post_url||'');
+const isPub=s=>!s.publishing_block&&s.posting_authorized===true&&!!s.permission&&srcOK(s)&&s.status!=='rejected'&&s.write_test_status==='passed'&&/^https?:\/\//.test(s.verified_post_url||'');
 const isDead=s=>(s.status==='rejected'||s.status==='failed'||(s.permission===false&&srcOK(s)&&s.write_test_status==='failed'));
 const pubs=sites.filter(isPub);
 const prog=sites.filter(s=>!isPub(s)&&!isDead(s));
@@ -15316,7 +15395,7 @@ const showOnlyUnattended=window._siteOnlyUnattended===true;
 let shown=showOnlyUnattended?pubs:sites;   // '안 되는' 사이트는 서버가 자동삭제 — 이 영역은 발행가능/진행중만
 const toggle=`<div class="row" style="margin-bottom:6px;font-size:11px;color:var(--d);flex-wrap:wrap;gap:8px"><span>등록 ${sites.length}곳 · 과거 실게시 검증 ${publishable.length}곳 · 현재 무인 발행 가능 ${pubs.length}곳</span><label style="display:flex;align-items:center;gap:4px"><input type="checkbox" style="width:auto" ${showOnlyUnattended?'checked':''} onclick="window._siteOnlyUnattended=this.checked;renderSites()">무인 발행 가능한 곳만 보기</label><span style="flex:1"></span></div>`;
 if(!shown.length){$('siteList').innerHTML=toggle+'<p style="color:var(--d);padding:30px;text-align:center">발행가능 사이트가 아직 없습니다'+(prog.length?' (진행중 '+prog.length+'곳 — 위에서 보기)':'')+'</p>';return}
-$('siteList').innerHTML=toggle+'<table><thead><tr><th><input type="checkbox" id="allCb" onclick="document.querySelectorAll(\'.cb\').forEach(c=>c.checked=this.checked)"></th><th>이름</th><th>URL</th><th>게시판</th><th>오늘</th><th>상태</th><th>동작</th></tr></thead><tbody>'+shown.map(siteRow).join('')+'</tbody></table>';
+$('siteList').innerHTML=toggle+'<table><thead><tr><th><input type="checkbox" id="allCb" onclick="document.querySelectorAll(\'.cb\').forEach(c=>c.checked=this.checked)"></th><th>이름</th><th>URL</th><th>게시판</th><th>오늘</th><th>상태</th><th>자동발행 승인</th><th>동작</th></tr></thead><tbody>'+shown.map(siteRow).join('')+'</tbody></table>';
 checked.forEach(id=>{const c=document.querySelector(`.cb[data-id="${id}"]`);if(c)c.checked=true})}
 
 async function purgeDeadSites(){

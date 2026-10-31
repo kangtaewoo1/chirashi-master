@@ -26,8 +26,19 @@ class GateTests(unittest.TestCase):
         scope={'_strip_non_bmp':lambda x:x,'resolve_platform':lambda s:'cafe24',
                'cafe24_post':lambda *a,**k:(False,'[admin_only] denied')}
         exec(compile(ast.Module(body=[router],type_ignores=[]),'<router-test>','exec'),scope)
-        result=scope['do_post']({'_manual_review_job':True,'learned':{'write_url':'ignored','subject_sel':'ignored','content_sel':'ignored'}},'test','test')
+        result=scope['do_post']({'posting_authorized':True,'_manual_review_job':True,'learned':{'write_url':'ignored','subject_sel':'ignored','content_sel':'ignored'}},'test','test')
         self.assertEqual(result,(False,'[admin_only] denied'))
+
+    def test_router_requires_explicit_site_approval_before_transport(self):
+        reached=[]
+        tree=ast.parse(Path(__file__).with_name('app.py').read_text(encoding='utf-8'))
+        router=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='do_post')
+        scope={'_strip_non_bmp':lambda x:x,'resolve_platform':lambda s:'cafe24',
+               'cafe24_post':lambda *a,**k:reached.append('submit')}
+        exec(compile(ast.Module(body=[router],type_ignores=[]),'<authorization-test>','exec'),scope)
+        result=scope['do_post']({'posting_authorized':False,'_manual_review_job':True},'test','test')
+        self.assertEqual(result,(False,'발행 보류 — 사이트별 O 승인 필요'))
+        self.assertEqual(reached,[])
 
     def test_admin_denial_stops_publish(self):
         reached=[]
@@ -351,6 +362,7 @@ class ServerQueueOnlyTest(unittest.TestCase):
             env={'jsonify':lambda value:value,
                  'request':SimpleNamespace(get_json=lambda **kw:{}), 'time':time,
                  'load_config':lambda:{}, 'POST_LOCK':threading.RLock(),
+                 '_pc_nodes_enabled':lambda:True,
                  'load_sites':lambda:[site], 'is_permitted':lambda s:True,
                  'load_json':lambda *a:[], 'WORKROOMS_FILE':Path('/unused'),
                  'save_sites':lambda *a:self.fail('Blocked site must not be claimed'),
@@ -359,6 +371,40 @@ class ServerQueueOnlyTest(unittest.TestCase):
             with self.subTest(blocked=blocked):
                 self.assertEqual(env['api_pipeline_claim_sites']()['sites'],[])
                 self.assertNotIn('pc_claim_by',site)
+
+    def test_server_only_mode_returns_no_pc_site_claims(self):
+        tree=ast.parse(Path(__file__).with_name('app.py').read_text(encoding='utf-8'))
+        fn=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='api_pipeline_claim_sites')
+        fn.decorator_list=[]
+        from types import SimpleNamespace
+        env={'jsonify':lambda value:value,'request':SimpleNamespace(get_json=lambda **kw:{}),
+             'load_config':lambda:{'pc_claim_ttl':600},'_pc_nodes_enabled':lambda:False}
+        exec(compile(ast.Module(body=[fn],type_ignores=[]),'server-only-test','exec'),env)
+        self.assertEqual(env['api_pipeline_claim_sites']()['sites'],[])
+
+    def test_explicit_approval_endpoint_saves_o_and_x_for_sites_and_candidates(self):
+        tree=ast.parse(Path(__file__).with_name('app.py').read_text(encoding='utf-8'))
+        fn=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='api_posting_authorization')
+        fn.decorator_list=[]
+        import threading
+        from datetime import datetime
+        from types import SimpleNamespace
+        for kind,lock_name,load_name,save_name in (
+            ('site','POST_LOCK','load_sites','save_sites'),
+            ('cand','_cand_lock','load_cands','save_cands'),
+        ):
+            item={'id':'item-1','pc_claim_by':'node','pc_claim_expire':123,'claimed_by':'node','claim_expire':123}
+            env={'request':SimpleNamespace(get_json=lambda **kw:{'kind':kind,'id':'item-1','approved':True}),
+                 'POST_LOCK':threading.RLock(),'_cand_lock':threading.RLock(),
+                 'load_sites':lambda:[item],'load_cands':lambda:[item],
+                 'save_sites':lambda items:None,'save_cands':lambda items:None,
+                 '_kst_now':datetime.now,'add_log':lambda *a:None,'jsonify':lambda value:value}
+            exec(compile(ast.Module(body=[fn],type_ignores=[]),'authorization-test','exec'),env)
+            self.assertTrue(env['api_posting_authorization']()['approved'])
+            self.assertTrue(item['posting_authorized'])
+            env['request'].get_json=lambda **kw:{'kind':kind,'id':'item-1','approved':False}
+            self.assertFalse(env['api_posting_authorization']()['approved'])
+            self.assertFalse(item['posting_authorized'])
 
 
 class ExplicitAuditHoldTest(unittest.TestCase):

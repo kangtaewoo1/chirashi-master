@@ -17,7 +17,7 @@ class SiteGoalTests(unittest.TestCase):
         exec(compile(ast.Module(body=functions,type_ignores=[]),'site-goal-test','exec'),self.env)
 
     def valid(self):
-        return {'permission':True,'registration_source':'manual_admin','platform':'gnuboard','write_test_status':'passed',
+        return {'permission':True,'posting_authorized':True,'registration_source':'manual_admin','platform':'gnuboard','write_test_status':'passed',
                 'verified_post_url':'https://example.com/bbs/board.php?bo_table=free&wr_id=42',
                 'site_url':'https://example.com','bo_table':'free','unattended_audit':{'state':'ready'}}
 
@@ -46,12 +46,19 @@ class SiteGoalTests(unittest.TestCase):
         self.assertEqual(progress['site_remaining'],0)
 
     def test_existing_access_denial_and_maintenance_guards_remain(self):
-        for change in ({'maintenance_hold':True},{'permission':False},{'status':'rejected'},
+        for change in ({'maintenance_hold':True},{'permission':False},{'posting_authorized':False},{'status':'rejected'},
                        {'secret_forced':True},{'login_required':True,'mb_id':''},
                        {'write_access_state':'admin_only'},{'write_access_state':'human_verification_required'}):
             with self.subTest(change=change):
                 progress=self.env['_site_goal_progress']({'site_goal':50},[dict(self.valid(),**change)])
                 self.assertEqual(progress['site_done'],0)
+
+    def test_explicit_site_approval_is_required(self):
+        for value in (False,None,1,'true'):
+            with self.subTest(value=value):
+                site=dict(self.valid(),posting_authorized=value)
+                self.assertFalse(self.env['is_permitted'](site))
+                self.assertFalse(self.env['is_autopostable'](site))
 
     def test_goal_does_not_raise_the_chrome_concurrency_limit(self):
         fn=next(n for n in self.tree.body if isinstance(n,ast.FunctionDef) and n.name=='_publish_one_combo')
