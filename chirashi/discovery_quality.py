@@ -21,6 +21,40 @@ def finder_queries(provider='brave'):
     return phrases
 
 
+def campaign_queries(value):
+    """Build board-focused searches from comma- or line-separated campaign terms."""
+    terms=[]
+    for raw in re.split(r'[\r\n,;|]+',str(value or '')):
+        term=re.sub(r'\s+',' ',raw).strip().replace('"','')
+        if term and len(term)<=120 and term.casefold() not in {x.casefold() for x in terms}:
+            terms.append(term)
+    return list(dict.fromkeys(
+        query
+        for term in terms
+        for query in (f'"{term}" "홍보게시판" 글쓰기',f'"{term}" "광고게시판" 글쓰기')
+    ))
+
+
+def select_discovery_query(finder, secondary, query_index, finder_ratio, finder_cursor, secondary_cursor):
+    """Return one query while reserving slots for both board and user searches."""
+    if not finder and not secondary:
+        return None,None,finder_cursor,secondary_cursor
+    if not secondary:
+        use_finder=True
+    elif not finder:
+        use_finder=False
+    else:
+        try: ratio=float(finder_ratio)
+        except (TypeError,ValueError): ratio=0.7
+        ratio=max(0.2,min(0.8,ratio))
+        use_finder=(query_index%10)<round(ratio*10)
+    if use_finder:
+        query=finder[finder_cursor%len(finder)]
+        return query,'search',finder_cursor+1,secondary_cursor
+    query,source=secondary[secondary_cursor%len(secondary)]
+    return query,source,finder_cursor,secondary_cursor+1
+
+
 def qualify_result(row):
     url=str(row.get('url') or '')
     try:p=urlsplit(url)

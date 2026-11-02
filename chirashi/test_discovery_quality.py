@@ -3,7 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from datetime import datetime
 from unittest.mock import Mock
-from discovery_quality import qualify_result,prepare_results,finder_queries
+from discovery_quality import qualify_result,prepare_results,finder_queries,campaign_queries,select_discovery_query
 
 class DiscoveryQualityTests(unittest.TestCase):
     def test_nonboard_results_are_dropped_without_any_request(self):
@@ -27,6 +27,68 @@ class DiscoveryQualityTests(unittest.TestCase):
     def test_queries_use_board_intent_instead_of_phone_ads(self):
         queries=finder_queries();self.assertGreaterEqual(len(queries),10)
         self.assertTrue(all('홍보' in x or '광고' in x for x in queries));self.assertFalse(any('010' in x for x in queries))
+    def test_campaign_terms_create_deduplicated_board_searches(self):
+        queries=campaign_queries('사무실 청소, 정기 청소\n서울 청소업체, 사무실 청소')
+        self.assertEqual(len(queries),6)
+        self.assertIn('"사무실 청소" "홍보게시판" 글쓰기',queries)
+        self.assertTrue(all('게시판' in q and '글쓰기' in q for q in queries))
+    def test_query_schedule_reserves_slots_for_campaign_even_at_full_finder_ratio(self):
+        finder_cursor=secondary_cursor=0;selected=[]
+        finder=['board search'];secondary=[('campaign search','search')]
+        for index in range(10):
+            query,_,finder_cursor,secondary_cursor=select_discovery_query(
+                finder,secondary,index,1.0,finder_cursor,secondary_cursor)
+            selected.append(query)
+        self.assertEqual(selected.count('campaign search'),2)
+        self.assertEqual(selected.count('board search'),8)
+    def test_discovery_obeys_daily_limit_and_fifty_query_batch_cap(self):
+        tree=ast.parse(Path(__file__).with_name('app.py').read_text(encoding='utf-8'))
+        fn=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='discover_once')
+        def run(max_queries,query_limit,initial_queries=0):
+            today='2026-01-02'
+            state={'date':today,'queries':initial_queries,'found':0,'cursor':0,'fcursor':0}
+            searches=[]
+            env={'DISCO_FILE':'discovery.json','load_json':lambda *args:dict(state),
+                 'save_json':lambda path,value:(state.clear(),state.update(value)),
+                 '_kst_now':lambda:datetime(2026,1,2),'_board_finder_queries':lambda provider:['board'],
+                 'campaign_queries':campaign_queries,'select_discovery_query':select_discovery_query,
+                 '_is_url_pattern_query':lambda query:False,'build_queries':lambda cfg:[],
+                 '_web_search_with_trace':lambda cfg,query:(searches.append(query) or [],'brave',None),
+                 'add_candidates_from':lambda items,cfg,source:0,'screen_pending':lambda count:0,
+                 'add_log':lambda *args:None,'time':SimpleNamespace(sleep=lambda seconds:None)}
+            exec(compile(ast.Module(body=[fn],type_ignores=[]),'discover-once-test','exec'),env)
+            result=env['discover_once']({'discover_daily_target':5000,'discover_query_limit':query_limit,
+                                         'finder_ratio':1.0},max_queries)
+            return result,state,searches
+        result,state,searches=run(100,2)
+        self.assertEqual(result['queries'],2)
+        self.assertEqual(state['queries'],2)
+        result,state,searches=run(500,100)
+        self.assertEqual(result['queries'],50)
+        self.assertEqual(len(searches),50)
+        self.assertEqual(result['provider_results'],50)
+        result,state,searches=run(50,1000000,4999)
+        self.assertEqual(result['queries'],1)
+        self.assertEqual(state['queries'],5000)
+    def test_brave_fallback_trace_exposes_cooldown_without_hiding_provider_status(self):
+        tree=ast.parse(Path(__file__).with_name('app.py').read_text(encoding='utf-8'))
+        fn=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='_web_search_with_trace')
+        brave_calls=[];logs=[];skip_until=[0.0]
+        def brave(*args):
+            brave_calls.append(args)
+            raise RuntimeError('Brave API 402 usage limit')
+        env={'_BRAVE_SKIP_UNTIL':skip_until,'time':SimpleNamespace(time=lambda:100.0),
+             'brave_search':brave,'_free_search':lambda *args:[{'url':'https://example.com'}],
+             'add_log':lambda *args:logs.append(args)}
+        exec(compile(ast.Module(body=[fn],type_ignores=[]),'search-trace-test','exec'),env)
+        rows,source,reason=env['_web_search_with_trace']({'search_provider':'brave'},'term')
+        self.assertEqual((len(rows),source,reason),(1,'free','brave_error'))
+        self.assertEqual(skip_until[0],3700.0)
+        rows,source,reason=env['_web_search_with_trace']({'search_provider':'brave'},'term')
+        self.assertEqual(source,'free')
+        self.assertEqual(reason,'brave_cooldown')
+        self.assertEqual(len(brave_calls),1)
+        self.assertTrue(logs)
     def test_no_form_cache_prevents_repeat_network_but_not_manual_or_login_board(self):
         import time,secrets
         tree=ast.parse(Path(__file__).with_name('app.py').read_text(encoding='utf-8'))

@@ -548,7 +548,7 @@ def load_config():
        'block_unpaid':True,
        'google_api_key':'','google_cx':'','brave_api_key':'','search_provider':'brave','discover_enabled':True,
        'discover_daily_target':500,'discover_query_limit':500,'discover_batch':50,'discover_keywords':'',
-       'finder_ratio':1.0,   # 발굴 쿼리 중 '게시판 찾기'(finder) 비중(1.0=100%). 업소 직접키워드는 미사용
+       'finder_ratio':0.7,   # 게시판 찾기와 사용자가 입력한 홍보 키워드를 섞는 비율
        'site_goal':50,   # 실제 발행 가능 사이트 확보 목표(대시보드 진행률 표시용)
        # 웹빌더/템플릿 플랫폼 등 발행 불가 도메인 제외 목록(한 줄에 하나, 발굴에서 즉시 제외). 설정에서 관리.
        'excluded_domains':'isweb.co.kr\nimweb.me\nimweb.io\nmodoo.at\ncreatorlink.net\nwixsite.com\nweebly.com\nblog.me',
@@ -7684,23 +7684,25 @@ def _free_search(cfg, query, start, num):
     return naver_web_search(cfg,query,start,num)
 
 _BRAVE_SKIP_UNTIL=[0.0]   # ★Brave 402(크레딧소진) 감지 시 이 시각까지 Brave 시도 건너뜀(대표님 2026-09-18 'Brave 건너뛰기')
-def web_search(cfg, query, start=1, num=10):
+def _web_search_with_trace(cfg, query, start=1, num=10):
     provider=(cfg.get('search_provider') or 'brave').lower()
     if provider=='ddg':
-        return _free_search(cfg,query,start,num)
+        return _free_search(cfg,query,start,num),'free',None
     if provider=='google':
         try:
             r=google_search(cfg,query,start,num)
-            return r if r else _free_search(cfg,query,start,num)
-        except Exception: return _free_search(cfg,query,start,num)
+            return (r,'google',None) if r else (_free_search(cfg,query,start,num),'free','google_empty')
+        except Exception as e:
+            add_log(f'[발굴] Google 실패({str(e)[:36]}) → 무료 검색','발굴')
+            return _free_search(cfg,query,start,num),'free','google_error'
     # brave(기본): 실패(402 크레딧소진·429·키오류 등)면 무료(DDG→네이버)로 폴백 → 발굴 안 멈춤.
     # ★402(크레딧소진)가 뜨면 1시간 동안 Brave를 아예 건너뛰고 바로 무료검색으로 간다(대표님 2026-09-18):
     #   크레딧 없는데 매 쿼리 Brave를 때려 402 로그만 도배되고 시간 낭비. 크레딧 충전하면 1시간 뒤 자동 재시도.
     if time.time() < _BRAVE_SKIP_UNTIL[0]:
-        return _free_search(cfg,query,start,num)
+        return _free_search(cfg,query,start,num),'free','brave_cooldown'
     try:
         r=brave_search(cfg,query,start,num)
-        return r if r else _free_search(cfg,query,start,num)
+        return (r,'brave',None) if r else (_free_search(cfg,query,start,num),'free','brave_empty')
     except Exception as e:
         _es=str(e)
         if '402' in _es:
@@ -7708,7 +7710,10 @@ def web_search(cfg, query, start=1, num=10):
             add_log('[발굴] Brave 402(크레딧 소진) — 1시간 Brave 건너뛰고 무료검색(네이버)만 사용. 충전 시 자동 재개','발굴')
         else:
             add_log(f'[발굴] Brave 실패({_es[:36]}) → 무료 검색(DDG/네이버)','발굴')
-        return _free_search(cfg,query,start,num)
+        return _free_search(cfg,query,start,num),'free','brave_error'
+
+def web_search(cfg, query, start=1, num=10):
+    return _web_search_with_trace(cfg,query,start,num)[0]
 
 def _post_read_block_reason(url):
     """발행된 글 URL을 '비로그인'으로 열어 실제 본문이 읽히는지 확인. 읽기 차단이면 사유 문자열,
@@ -8386,6 +8391,7 @@ def discover_once(cfg=None, max_queries=10):
        그 뒤에 지역×업종(direct) 목록을 커서로 순환한다. (finder가 첫날만 실행되고
        마는 문제 방지 — 실제 글 올릴 게시판을 매일 새로 찾기 위함)"""
     cfg=cfg or load_config()
+    max_queries=min(50,max(0,int(max_queries)))
     st=load_json(DISCO_FILE,{})
     today=_kst_now().strftime('%Y-%m-%d')
     if st.get('date')!=today:
@@ -8394,56 +8400,39 @@ def discover_once(cfg=None, max_queries=10):
         st={'date':today,'queries':0,'found':0,
             'cursor':int(st.get('cursor',0) or 0),'fcursor':int(st.get('fcursor',0) or 0)}
     st.setdefault('fcursor',0)  # 기존 상태 호환(finder 커서 없던 날)
-    target=int(cfg.get('discover_daily_target',100) or 100)
-    qlimit=int(cfg.get('discover_query_limit',100) or 100)   # 구글 무료 하루 100
-    # 발행가능 사이트가 목표(site_goal, 기본 500) 미만이면 일일 쿼리·후보 한도를 풀어
-    # 목표를 채울 때까지 계속 발굴한다(대표님 요청). 목표 도달 시 discover_loop이 자동 중단.
-    # ※ Brave 쿼리당 과금 — 배치(discover_batch)·주기(discover_interval_sec)로 속도는 유지.
-    try:
-        _pub=len([s for s in load_sites() if is_autopostable(s)])
-        _goal=int(cfg.get('site_goal',50) or 50)
-        if _pub < _goal:
-            if st.get('_goal_mode_logged')!=today:
-                add_log(f'[발굴] 발행가능 {_pub}/{_goal} — 목표까지 한도해제 연속 발굴 모드')
-                st['_goal_mode_logged']=today
-            qlimit=max(qlimit,1000000); target=max(target,1000000)
-    except Exception: pass
+    target=max(0,int(cfg.get('discover_daily_target',500)))
+    qlimit=max(0,min(5000,int(cfg.get('discover_query_limit',500))))
     provider=(cfg.get('search_provider') or 'brave').lower()
     finder=_board_finder_queries(provider)          # 게시판 찾기(매일 우선)
+    from discovery_quality import campaign_queries,select_discovery_query
+    campaign=campaign_queries(cfg.get('discover_keywords',''))
     direct=[x.strip() for x in (cfg.get('discover_direct_queries','') or '').splitlines()
             if x.strip() and not x.lstrip().startswith('#')]  # 지역×업종(커서 순환)
     finder=list(dict.fromkeys(finder))
-    # '바로 되는 500곳' 목표: 쿼리의 대부분(90%)을 게시판찾기(finder)에 쓴다.
-    # direct(지역+업종)는 업소 홈페이지만 나와 발행 불가라 최소한만. finder는 fcursor로
-    # 여러 날에 걸쳐 순회(날짜 바뀌어도 fcursor 유지)해 122개 검색어를 골고루 소진.
-    # finder(게시판 찾기) 비중 — 기본 100%. 업소 직접키워드(강남동노래방 등)는 업체 홈페이지만
-    # 나와 발행 불가라 기본적으로 사용 안 함. finder_ratio 설정(0~1)으로 조절 가능.
-    try: _fr=float(cfg.get('finder_ratio',1.0) or 1.0)
-    except Exception: _fr=1.0
-    _fr=max(0.0,min(1.0,_fr))
-    finder_budget=int(qlimit*_fr) if finder else 0
-    if not finder and not direct:
-        queries=build_queries(cfg)
-        if not queries: return {'ok':False,'error':'쿼리 없음'}
-    added=0; used=0; errs=[]
-    def _next_query():
-        # finder를 fcursor로 순회하다(예산 소진 전) 그 뒤 direct를 cursor로 순환.
-        # 반환: (쿼리, source) — direct 항목이 게시판 URL 조각이면 'urlpattern'으로 처리.
-        if finder and st['queries']<finder_budget:
-            q=finder[st['fcursor']%len(finder)]; st['fcursor']+=1; return q,'search'
-        if direct:
-            q=direct[st['cursor']%len(direct)]; st['cursor']+=1
-            return q,('urlpattern' if _is_url_pattern_query(q) else 'search')
-        if finder:  # direct가 없으면 finder 계속
-            q=finder[st['fcursor']%len(finder)]; st['fcursor']+=1; return q,'search'
-        return None,None
+    secondary=[(q,'search') for q in campaign]
+    secondary.extend((q,('urlpattern' if _is_url_pattern_query(q) else 'search')) for q in direct)
+    if not finder and not secondary:
+        secondary=[(q,'search') for q in build_queries(cfg)]
+    if not finder and not secondary: return {'ok':False,'error':'쿼리 없음'}
+    try: finder_ratio=float(cfg.get('finder_ratio',0.7))
+    except (TypeError,ValueError): finder_ratio=0.7
+    added=0; used=0; errs=[]; search_results=0
+    brave_attempts=0; brave_results=0; provider_results=0; fallback_queries=0
     for _ in range(max_queries):
         if st['queries']>=qlimit: errs.append('일일 쿼리 한도 도달'); break
         if st['found']>=target: errs.append('일일 후보 목표 달성'); break
-        q,qsrc=_next_query()
+        q,qsrc,st['fcursor'],st['cursor']=select_discovery_query(
+            finder,secondary,st['queries'],finder_ratio,st['fcursor'],st['cursor'])
         if q is None: errs.append('쿼리 없음'); break
         try:
-            items=web_search(cfg,q)
+            items,search_source,fallback_reason=_web_search_with_trace(cfg,q)
+            search_results+=len(items)
+            if provider=='brave' and fallback_reason!='brave_cooldown':
+                brave_attempts+=1
+            if search_source=='brave': brave_results+=1
+            if search_source==provider or (provider=='ddg' and fallback_reason is None):
+                provider_results+=1
+            if fallback_reason: fallback_queries+=1
             for it in items: it['query']=q
             n=add_candidates_from(items,cfg,source=qsrc); added+=n; st['found']+=n
         except Exception as e:
@@ -8455,9 +8444,15 @@ def discover_once(cfg=None, max_queries=10):
     screened=0
     try: screened=screen_pending(20)
     except Exception as e: errs.append('검수 오류 '+str(e)[:80])
-    add_log(f'[발굴] 쿼리 {used}회 · 신규 {added}개 · 검수 {screened}건'+(' · '+errs[0] if errs else ''))
+    provider_name={'brave':'Brave','google':'Google','ddg':'무료 검색'}.get(provider,provider)
+    provider_stats=f' · 검색결과 {search_results}건 · {provider_name} 결과 {provider_results}회 · 무료 폴백 {fallback_queries}회'
+    if provider=='brave':
+        provider_stats=f' · 검색결과 {search_results}건 · Brave 시도 {brave_attempts}회(결과 {brave_results}) · 무료 폴백 {fallback_queries}회'
+    add_log(f'[발굴] 쿼리 {used}회 · 신규 {added}개 · 검수 {screened}건'+provider_stats+(' · '+errs[0] if errs else ''))
     return {'ok':True,'queries':used,'added':added,'screened':screened,
-            'today_queries':st['queries'],'today_found':st['found'],'errors':errs}
+            'today_queries':st['queries'],'today_found':st['found'],'search_results':search_results,
+            'provider_results':provider_results,'brave_attempts':brave_attempts,'brave_results':brave_results,
+            'fallback_queries':fallback_queries,'errors':errs}
 
 # ==================== 임시메일(mail.tm) — 이메일 인증 자동 처리 ====================
 TEMPMAIL_API='https://api.mail.tm'
@@ -14557,8 +14552,10 @@ DASH_HTML=r'''<header><div class="logo" onclick="window.scrollTo({top:0,behavior
 
 <div class="card"><h3>🔎 도메인 발굴 (Brave Search)</h3>
 <div class="f"><small>Brave API 키 <a href="https://api-dashboard.search.brave.com/" target="_blank" rel="noopener" title="Brave API 대시보드" style="color:var(--p)">↗</a></small><input type="password" id="cBraveKey" placeholder="변경시만 입력"></div>
-<div class="r2"><div><small class="lb">하루 후보 목표</small><input type="number" id="cDTarget" value="100" min="10" max="1000"></div><div><small class="lb">하루 쿼리 한도</small><input type="number" id="cDQuery" value="100" min="1" max="10000" title="Brave 플랜 한도 안에서"></div></div>
+<div class="r2"><div><small class="lb">하루 후보 목표</small><input type="number" id="cDTarget" value="100" min="10" max="1000"></div><div><small class="lb">하루 쿼리 한도 (최대 5,000)</small><input type="number" id="cDQuery" value="100" min="1" max="5000" title="설정한 한도 안에서만 검색"></div></div>
 <label class="chk" style="color:var(--g)"><input type="checkbox" id="cDiscoOn">24시간 자동 발굴 (1분마다)</label>
+<div class="f" style="grid-template-columns:1fr"><small>홍보 키워드 — 쉼표 또는 한 줄마다 입력 (예: 사무실 청소, 정기 청소, 서울 청소업체)</small>
+<textarea id="cDKeywords" rows="2" placeholder="사무실 청소, 정기 청소, 서울 청소업체"></textarea></div>
 <div class="f" style="grid-template-columns:1fr"><small>검색어 목록 — 한 줄 하나, 그대로 Brave 검색 · <b>게시판 URL 조각</b>(예 <code>bbs/board.php?bo_table=free&amp;wr_id=</code>)도 가능 · #은 메모</small>
 <textarea id="cDDirect" rows="5" placeholder="bbs/board.php?bo_table=free&amp;wr_id=&#10;&quot;홍보게시판&quot; 마사지&#10;# 메모(검색 안 함)"></textarea></div>
 <div class="f" style="grid-template-columns:1fr"><small>🚫 제외 도메인 — 웹빌더 등 · 한 줄 하나, 이 문자열이 포함되면 즉시 제외</small><textarea id="cExcludedDomains" rows="2" placeholder="isweb.co.kr&#10;imweb.me&#10;modoo.at"></textarea></div>
@@ -15121,7 +15118,7 @@ function previewPost(){const c=$('gContent').value.trim();if(!c){toast('먼저 �
 function closePreview(){$('pvOverlay').style.display='none';$('pvFrame').srcdoc=''}
 async function delSite(id){if(!confirm('삭제?'))return;await api('/sites','DELETE',{id});renderSites()}
 async function testSite(id){toast('Selenium 테스트 중...');const r=await api('/test/'+id,'POST');if(r&&r.ok)toast('✅ 테스트 성공!'+(r.platform?' ['+(r.platform==='cafe24'?'Cafe24':'그누보드')+']':'')+' '+(r.message||''));else toast('실패: '+(r?.error||r?.message||''),'er')}
-async function saveCfg(){const d={brand:$('cBrand').value.trim(),phone:$('cPhone').value.trim(),phones:$('cPhones').value,video_url:$('cVideoUrl').value.trim(),landing_url:$('cLandingUrl').value.trim(),post_email:$('cPostEmail').value.trim(),workers:parseInt($('cWorkers').value)||2,post_delay:parseInt($('cDelay').value)||0,daily_limit:parseInt($('cDaily').value)||0,use_gpt:$('cUseGpt').checked,llm_provider:($('cLlmProvider')?$('cLlmProvider').value:'openrouter'),nvidia_model:($('cNvidiaModel')?$('cNvidiaModel').value.trim():''),openrouter_model:($('cOpenrouterModel')?$('cOpenrouterModel').value.trim():''),telegram_chat_id:$('cTgChat').value.trim(),notify_done:$('cNotifyDone').checked,notify_fail:$('cNotifyFail').checked,backup_time:$('cBackupTime').value.trim(),telegram_control:$('cTgControl').checked,verify_enabled:$('cVerify').checked,mix_keywords:$('cMixKw').checked,block_unpaid:$('cBlockUnpaid').checked,search_provider:'brave',discover_enabled:$('cDiscoOn').checked,discover_daily_target:parseInt($('cDTarget').value)||100,discover_query_limit:parseInt($('cDQuery').value)||100,discover_keywords:'',discover_direct_queries:$('cDDirect').value,excluded_domains:($('cExcludedDomains')?$('cExcludedDomains').value:''),imap_email:($('cImapEmail')?$('cImapEmail').value.trim():''),imap_password:($('cImapPass')&&$('cImapPass').value?$('cImapPass').value:'***설정됨***'),imap_host:($('cImapHost')&&$('cImapHost').value.trim()?$('cImapHost').value.trim():'imap.gmail.com'),twocaptcha_enabled:$('cTwocaptchaEn').checked,turnstile_mode:($('cTurnstileMode')?$('cTurnstileMode').value:'auto'),turnstile_human_wait_sec:($('cTurnstileWait')?(parseInt($('cTurnstileWait').value)||180):180),brave_price_per_query_usd:parseFloat($('cBravePrice').value)||0,twocaptcha_price_recaptcha_usd:parseFloat($('cCapRePrice').value)||0,twocaptcha_price_image_usd:parseFloat($('cCapImgPrice').value)||0};
+async function saveCfg(){const d={brand:$('cBrand').value.trim(),phone:$('cPhone').value.trim(),phones:$('cPhones').value,video_url:$('cVideoUrl').value.trim(),landing_url:$('cLandingUrl').value.trim(),post_email:$('cPostEmail').value.trim(),workers:parseInt($('cWorkers').value)||2,post_delay:parseInt($('cDelay').value)||0,daily_limit:parseInt($('cDaily').value)||0,use_gpt:$('cUseGpt').checked,llm_provider:($('cLlmProvider')?$('cLlmProvider').value:'openrouter'),nvidia_model:($('cNvidiaModel')?$('cNvidiaModel').value.trim():''),openrouter_model:($('cOpenrouterModel')?$('cOpenrouterModel').value.trim():''),telegram_chat_id:$('cTgChat').value.trim(),notify_done:$('cNotifyDone').checked,notify_fail:$('cNotifyFail').checked,backup_time:$('cBackupTime').value.trim(),telegram_control:$('cTgControl').checked,verify_enabled:$('cVerify').checked,mix_keywords:$('cMixKw').checked,block_unpaid:$('cBlockUnpaid').checked,search_provider:'brave',discover_enabled:$('cDiscoOn').checked,discover_daily_target:parseInt($('cDTarget').value)||100,discover_query_limit:parseInt($('cDQuery').value)||100,discover_keywords:$('cDKeywords').value,discover_direct_queries:$('cDDirect').value,excluded_domains:($('cExcludedDomains')?$('cExcludedDomains').value:''),imap_email:($('cImapEmail')?$('cImapEmail').value.trim():''),imap_password:($('cImapPass')&&$('cImapPass').value?$('cImapPass').value:'***설정됨***'),imap_host:($('cImapHost')&&$('cImapHost').value.trim()?$('cImapHost').value.trim():'imap.gmail.com'),twocaptcha_enabled:$('cTwocaptchaEn').checked,turnstile_mode:($('cTurnstileMode')?$('cTurnstileMode').value:'auto'),turnstile_human_wait_sec:($('cTurnstileWait')?(parseInt($('cTurnstileWait').value)||180):180),brave_price_per_query_usd:parseFloat($('cBravePrice').value)||0,twocaptcha_price_recaptcha_usd:parseFloat($('cCapRePrice').value)||0,twocaptcha_price_image_usd:parseFloat($('cCapImgPrice').value)||0};
 const bk=$('cBraveKey').value.trim();if(bk)d.brave_api_key=bk;
 // 프록시(Bright Data): 비번은 입력했을 때만 전송(빈칸이면 마스크값으로 기존 유지).
 d.proxy_enabled=$('cProxyEn').checked;d.proxy_host=$('cProxyHost').value.trim();d.proxy_port=$('cProxyPort').value.trim();d.proxy_user=$('cProxyUser').value.trim();d.proxy_only_for_cf=$('cProxyCfOnly').checked;
@@ -15137,6 +15134,7 @@ d.signup_fixed_id=$('cSignupId').value.trim();
 const spw=$('cSignupPw').value.trim();d.signup_fixed_pw=(spw?spw:'***설정됨***');
 const pw=$('cPw').value.trim();if(pw)d.password=pw;const gp=$('cGuestPw').value.trim();if(gp)d.guest_post_password=gp;const nk=($('cNvidiaKey')?$('cNvidiaKey').value.trim():'');if(nk)d.nvidia_api_key=nk;const ork=($('cOpenrouterKey')?$('cOpenrouterKey').value.trim():'');if(ork)d.openrouter_api_key=ork;const tg=$('cTgTok').value.trim();if(tg)d.telegram_token=tg;const tc=$('cTwocaptchaKey').value.trim();if(tc)d.twocaptcha_api_key=tc;const r=await api('/config','POST',d);if(r&&r.ok){toast('저장 완료');$('cPw').value='';$('cGuestPw').value='';if($('cNvidiaKey'))$('cNvidiaKey').value='';if($('cOpenrouterKey'))$('cOpenrouterKey').value='';$('cTgTok').value='';$('cTwocaptchaKey').value='';$('cProxyPass').value='';$('cUnlockerKey').value='';$('cSbrEp').value='';$('cSignupPw').value='';loadOpenAIUsage()}}
 async function loadCfgUI(){const c=await api('/config','GET');if(!c)return;$('cVideoUrl').value=c.video_url||'';$('cLandingUrl').value=c.landing_url||'';$('cPostEmail').value=c.post_email||'';$('cGuestPw').placeholder=(c.guest_post_password==='***설정됨***')?'설정됨 · 변경시에만 입력':'변경시에만 입력';$('cUseGpt').checked=!!c.use_gpt;$('cNotifyDone').checked=!!c.notify_done;$('cNotifyFail').checked=!!c.notify_fail;$('cTgControl').checked=!!c.telegram_control;$('cVerify').checked=(c.verify_enabled!==false);$('cMixKw').checked=(c.mix_keywords!==false);$('cBlockUnpaid').checked=(c.block_unpaid!==false);$('cDiscoOn').checked=!!c.discover_enabled;if(c.discover_daily_target)$('cDTarget').value=c.discover_daily_target;if(c.discover_query_limit)$('cDQuery').value=c.discover_query_limit;if(typeof c.discover_direct_queries==='string')$('cDDirect').value=c.discover_direct_queries;if($('cExcludedDomains')&&typeof c.excluded_domains==='string')$('cExcludedDomains').value=c.excluded_domains;if($('cImapEmail'))$('cImapEmail').value=c.imap_email||'';if($('cImapHost'))$('cImapHost').value=c.imap_host||'imap.gmail.com';if($('cImapPass'))$('cImapPass').placeholder=(c.imap_password==='***설정됨***')?'설정됨 · 변경시만 입력':'앱 비밀번호 16자리 (변경시만)';$('cBraveKey').placeholder=(c.brave_api_key==='***설정됨***')?'설정됨 · 변경시에만 입력':'Brave API 키 입력';
+if(typeof c.discover_keywords==='string')$('cDKeywords').value=c.discover_keywords;
 if($('cProxyEn')){$('cProxyEn').checked=!!c.proxy_enabled;$('cProxyHost').value=c.proxy_host||'';$('cProxyPort').value=c.proxy_port||'';$('cProxyUser').value=c.proxy_user||'';$('cProxyCfOnly').checked=(c.proxy_only_for_cf!==false);$('cProxyPass').placeholder=(c.proxy_pass==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';}
 if($('cUnlockerEn')){$('cUnlockerEn').checked=!!c.unlocker_enabled;$('cUnlockerZone').value=c.unlocker_zone||'web_unlocker1';$('cUnlockerKey').placeholder=(c.unlocker_api_key==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';}
 if($('cSbrEn')){$('cSbrEn').checked=!!c.sbr_enabled;$('cSbrEp').placeholder=(c.sbr_endpoint==='***설정됨***')?'설정됨 · 변경시만 입력':'변경시만 입력';}
