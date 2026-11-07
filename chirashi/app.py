@@ -533,6 +533,13 @@ def learn_signup_profile(site,force=False):
         return profile
 
 _CFG_CACHE=None   # (mtime_key, read_ts, parsed_dict) — load_config 디스크읽기 캐시(TTL 0.8s, save_config가 무효화)
+def _enforce_server_only_config(c):
+    changed=c.get('server_only_mode') is not True or c.get('node_publish_all') is not False
+    if changed:
+        c['server_only_mode']=True
+        c['node_publish_all']=False
+    return changed
+
 def load_config():
     d={'brand':'인천홍마니','phone':'01082755736','phones':'','openai_key':'','model':'gpt-4o-mini',
        'openai_admin_key':'','openai_monthly_budget_usd':20.0,
@@ -709,10 +716,8 @@ def load_config():
         c['unattended_gate_off_v1']=True
         try: save_json(CONFIG_FILE,c)
         except Exception: pass
-    if c.get('server_only_mode') and c.get('node_publish_all') is not False:
-        c['node_publish_all']=False
-        try: save_json(CONFIG_FILE,c)
-        except Exception: pass
+    if _enforce_server_only_config(c):
+        save_json(CONFIG_FILE,c)
     # 1회 마이그레이션: sbr_country='kr' 제거 — endpoint customer name 깨서 'Wrong customer name'
     #   오류로 SBR(Cafe24 로그인 발행) 전부 실패시킴(2026-09-09). Browser API 자동IP로 충분.
     if not c.get('sbr_country_cleared'):
@@ -3694,7 +3699,7 @@ def fill_required_post_fields(d,site):
         ("#kboard-input-member-display,input[name='member_display']",writer,'member_display'),
         ("input[name='wr_name'],input[name='name'],#name,input[name='writer'],input[name='writer_name'],input[name='nick_name'],input[name='user_name']",writer,'name'),
         ("input[name='email'],#email",post_email,'email'),
-        ("#kboard-input-password,input[name='password']",guest_pw,'password')]:
+        ("input[name='wr_password'],#wr_password,#kboard-input-password,input[name='password']",guest_pw,'password')]:
         try:
             elems=[x for x in d.find_elements(By.CSS_SELECTOR,sel) if _sel_vis(x)]
             if not elems: continue
@@ -3711,7 +3716,8 @@ def fill_required_post_fields(d,site):
                 continue
             if (el.get_attribute('value') or '').strip(): continue
             if value:
-                el.clear(); el.send_keys(value); filled.append(label)
+                if _robust_fill(d,el,value): filled.append(label)
+                else: missing.append(label)
             else: missing.append(label)
         except Exception: missing.append(label)
     skip={'wr_subject','subject','title','wr_content','content','captcha_key','captcha'}
@@ -10030,6 +10036,7 @@ def _publish_combo_to_site(s, kw, wname, rid, cfg, writer_name='', chrome_sem=No
     if not cfg.get('publish_loop_enabled'): return
     fresh=next((x for x in load_sites() if x.get('id')==s.get('id')),None)
     if not fresh or not is_publishable(fresh): return
+    if fresh.get('pc_last_finalized_job') and (fresh.get('unattended_audit') or {}).get('state')!='ready': return
     _slk=_site_lock(fresh.get('id'))
     if not _slk.acquire(blocking=False): return   # 다른 슬롯/조합이 이 사이트 발행 중 → 스킵
     try:
@@ -10049,6 +10056,15 @@ def _publish_combo_to_site(s, kw, wname, rid, cfg, writer_name='', chrome_sem=No
         except Exception as e:
             add_log(f"[작업실:{wname}] 생성오류 {str(e)[:50]}"); return
         if (fresh.get('unattended_audit') or {}).get('state')=='ready':
+            try:
+                import requests as charset_requests
+                from charset_guard import form_encoding,prepare_generated_article
+                form_response=charset_requests.get(_signup_origin(fresh)+'/bbs/write.php',params={'bo_table':fresh.get('bo_table','')},timeout=20)
+                form_response.raise_for_status()
+                title,html=prepare_generated_article(title,html,form_encoding(form_response))
+            except (ValueError,UnicodeError,LookupError,charset_requests.RequestException):
+                add_log('PC queue generation charset preflight blocked before enqueue')
+                return
             count,_=enqueue([fresh],title,html,{'region':pub_kw.get('지역',''),'service':pub_kw.get('서비스',''),
                 'workroom_id':rid,'workroom_name':wname,'queue_source':'scheduled_unattended'})
             if count and not wk_active: start_workers(cfg.get('workers',2))
@@ -10855,8 +10871,6 @@ def _wr_save_image_urls(wid,urls):
 
 def _req_wid():
     """요청에서 workroom_id 추출(JSON body·query·form 순). 없으면 ''(전역)."""
-    if not _pc_nodes_enabled():
-        return jsonify({'ok':False,'error':'서버 전용 모드에서는 PC 노드를 사용하지 않습니다'}),403
     d=request.get_json(silent=True) or {}
     return _sanitize_wid(d.get('workroom_id') or request.args.get('workroom_id') or request.form.get('workroom_id') or '')
 
@@ -11429,6 +11443,8 @@ def api_pipeline_claim():
 def api_pipeline_node_beat():
     """★노드 상태 비트(2026-10-02 Turnstile 사람 클릭 모드): 노드가 사람 클릭 대기 시작/종료를 알린다.
        body: {node_id, action?, turnstile_pending}. 관제실 노드 카드에 '🖱 사람 클릭 대기 N건'으로 표시."""
+    if not _pc_nodes_enabled():
+        return jsonify({'ok':False,'error':'서버 전용 모드에서는 PC 노드 상태를 받지 않습니다'}),403
     d=request.get_json(silent=True) or {}
     nid=str(d.get('node_id') or '').strip() or 'pc'
     try: pend=max(0,int(d.get('turnstile_pending') or 0))
@@ -11444,6 +11460,8 @@ def api_pipeline_report():
     """★PC 발행노드 결과 회신: PC가 가입·발행한 결과를 서버에 반영(사이트등록·이력·상태·claim해제).
        서버 auto_pipeline_once의 성공/실패 처리와 동일 효과. body: {node_id, results:[...]}
        각 result: {cand_id, ok, result_url, mb_id?, mb_pass?, bo_table?, msg?, is_temp?, signed?}"""
+    if not _pc_nodes_enabled():
+        return jsonify({'ok':False,'error':'서버 전용 모드에서는 PC 노드 결과를 받지 않습니다'}),403
     d=request.get_json(silent=True) or {}
     node_id=str(d.get('node_id') or '').strip() or 'pc'
     results=d.get('results') or []
@@ -11520,7 +11538,8 @@ _PC_SITE_LOCKS={}
 
 def _pc_queue_online():
     state=load_json(DATA_DIR/'pc_queue_state.json',{})
-    return state.get('protocol')==1 and time.time()-float(state.get('last_seen',0))<90
+    return state.get('protocol')==2 and time.time()-float(state.get('last_seen',0))<90
+
 
 def _pc_queue_authorized(leases,d):
     item=leases.get(str(d.get('job_id','')))
@@ -11530,6 +11549,8 @@ def _pc_queue_authorized(leases,d):
 
 @app.route('/api/pipeline/pc-queue/audit',methods=['POST'])
 def api_pc_queue_audit():
+    if not _pc_nodes_enabled():
+        return jsonify({'ok':False,'error':'서버 전용 모드에서는 PC 노드 보고를 받지 않습니다'}),403
     d=request.get_json(silent=True) or {};reports=d.get('reports',[])
     if not isinstance(reports,list) or len(reports)>50: return jsonify({'ok':False}),400
     applied=0
@@ -11603,6 +11624,7 @@ def api_pc_queue_claim():
         keys=('id','site_url','bo_table','platform','permission','registration_source','write_test_status','verified_post_url','unattended_audit','writer_name','login_required','has_captcha','maintenance_hold','manual_review_only')
         return jsonify({'ok':True,'job':{'job_id':job['job_id'],'lease_token':token,'site':{k:site.get(k) for k in keys},'title':job['title'],'content':job['content']}})
 
+
 @app.route('/api/pipeline/pc-queue/start',methods=['POST'])
 def api_pc_queue_start():
     d=request.get_json(silent=True) or {}
@@ -11615,10 +11637,13 @@ def api_pc_queue_start():
         site=next((x for x in load_sites() if x.get('id')==item['job']['site']['id']),None)
         if not site or _server_queue_site(site) or not is_publishable(site) or not under_daily_limit(site,load_config()) or not under_min_interval(site)[0]:
             return jsonify({'ok':False,'error':'publishing hold; do not submit'}),409
+        archive=DATA_DIR/'pc_queue_jobs'; archive.mkdir(exist_ok=True)
+        save_json(archive/(item['job']['job_id']+'.json'),item['job'])
         item['state']='submitting'; item['started_at']=datetime.now().isoformat(timespec='seconds')
         save_json(DATA_DIR/'pc_queue_leases.json',leases)
         history_update(item['job']['hist_id'],status='pc_posting',message='PC 제출 시작 승인; 재전송 금지')
         return jsonify({'ok':True})
+
 
 def _pc_finalize(site,job_id,ok):
     with POST_LOCK:
@@ -11639,6 +11664,8 @@ def _pc_finalize(site,job_id,ok):
 
 @app.route('/api/pipeline/pc-queue/report',methods=['POST'])
 def api_pc_queue_report():
+    if not _pc_nodes_enabled():
+        return jsonify({'ok':False,'error':'서버 전용 모드에서는 PC 노드 결과를 받지 않습니다'}),403
     import requests as rq
     from form_schema import Parser
     d=request.get_json(silent=True) or {}
@@ -11652,7 +11679,7 @@ def api_pc_queue_report():
             if d.get('ok') is not True: raise ValueError(str(d.get('message','PC 발행 중단'))[:180])
             target=urllib.parse.urlsplit(url); origin=urllib.parse.urlsplit(site['site_url']); query=urllib.parse.parse_qs(target.query)
             if target.scheme not in ('http','https') or target.netloc!=origin.netloc or query.get('bo_table')!=[str(site['bo_table'])] or not query.get('wr_id',[''])[0].isdigit(): raise ValueError('결과 URL 불일치')
-            response=rq.get(url,timeout=20); response.raise_for_status();response.encoding=response.apparent_encoding
+            response=rq.get(url,timeout=20); response.raise_for_status();response.encoding=response.apparent_encoding or response.encoding
             if urllib.parse.urlsplit(response.url).netloc!=origin.netloc: raise ValueError('결과 호스트 변경')
             parsed=Parser();parsed.feed(response.text);text=parsed.root.text()
             parsed=Parser();parsed.feed(job['content']);expected=parsed.root.text()
@@ -11668,6 +11695,8 @@ def api_pc_queue_report():
         else:
             set_site_flag(site['id'],unattended_audit={'state':'result_review','checked_at':datetime.now().isoformat(timespec='seconds')})
         _pc_finalize(site,job['job_id'],ok)
+        archive=DATA_DIR/'pc_queue_jobs'; archive.mkdir(exist_ok=True)
+        save_json(archive/(job['job_id']+'.result.json'),{'job_id':job['job_id'],'node_id':d['node_id'],'reported_url':url,'verified':ok,'message':message,'verification_receipt':receipt})
         item['state']='finished';item['ok']=ok;item.pop('job',None)
         save_json(DATA_DIR/'pc_queue_leases.json',leases)
         _persist_remove(job['job_id'])
@@ -11678,93 +11707,18 @@ def api_pc_queue_report():
         _node_beat(d['node_id'],action='PC 큐 검증 완료' if ok else 'PC 큐 결과 보류',publish=1 if ok else 0)
         return jsonify({'ok':True,'verified':ok,'result_url':url if ok else ''})
 
+
 @app.route('/api/pipeline/claim-sites',methods=['POST'])
 def api_pipeline_claim_sites():
-    """★등록 사이트(계정 보유 로그인 사이트 + cafe24)를 노드(집 IP)에 넘겨 로컬 발행시킨다(2026-10-23 복구).
-       서버(DC IP)는 로그인/Turnstile에 막혀 실패만 쌓이므로 이들은 집 IP 노드가 전담.
-       claim 잠금(pc_claim_by·pc_claim_expire, TTL)으로 서버·다른 노드와 중복 방지. 결과는 report-site로 회신.
-       body: {node_id, n}. 반환: {sites:[비번 포함], ttl, llm}."""
-    d=request.get_json(silent=True) or {}
-    node_id=str(d.get('node_id') or '').strip() or 'pc'
-    n=max(1,min(10,int(d.get('n',4) or 4)))
-    _cfg=load_config()
-    ttl=max(120,min(1800,int(_cfg.get('pc_claim_ttl',600) or 600)))
-    if not _pc_nodes_enabled():
-        return jsonify({'ok':True,'sites':[],'ttl':ttl})
-    now=time.time()
-    picked=[]
-    with POST_LOCK:
-        sites=load_sites()
-        # 만료된 claim 먼저 회수(죽은 노드가 잡고 있던 것 되살리기)
-        for s in sites:
-            if s.get('pc_claim_by') and float(s.get('pc_claim_expire',0) or 0) <= now:
-                s['pc_claim_by']=''; s['pc_claim_expire']=0
-        _retry_cool=now-max(300,int(_cfg.get('pc_site_retry_sec',900) or 900))  # 같은 사이트 재시도 최소간격(기본 15분)
-        def _node_target(s):
-            # ★노드 재시도 대상(2026-10-23 claim 0 문제 수정): is_autopostable은 '검증완료(passed)'만 통과시켜
-            #   cafe24 전부(write_test failed/human_verification)가 영영 claim에서 빠졌다. 노드는 집IP+2captcha로
-            #   Turnstile을 뚫어 '재검증·재발행'하는 게 목적이므로, 검증 실패여도 재시도 대상에 넣는다.
-            if s.get('platform')=='telpan': return False  # Dedicated server adapter; never generic PC publishing.
-            if s.get('pc_claim_by') and float(s.get('pc_claim_expire',0) or 0) > now: return False  # 이미 claim됨
-            if float(s.get('pc_last_try',0) or 0) > _retry_cool: return False   # 최근 시도 → 쿨다운
-            if s.get('status')=='rejected': return False
-            if s.get('maintenance_hold') or s.get('secret_forced'): return False
-            if s.get('write_access_state')=='admin_only': return False          # 관리자전용은 영구불가
-            if s.get('signup_phone_cert'): return False                         # 휴대폰 본인인증은 자동불가
-            plat=s.get('platform')
-            _verified=str(s.get('verified_post_url') or '').startswith(('http://','https://'))
-            # ★cafe24 human_verification 재시도 bypass(2026-10-25): cafe24가 Turnstile 실패로 permission=False가 되면
-            #   is_permitted에서 걸려 노드가 영영 재시도 못 하는 데드엔드였음. cafe24는 집IP+2captcha로만 Turnstile을
-            #   뚫을 수 있으므로, human_verification 상태 + 계정/발행흔적 있으면 permission 꺼졌어도 노드에만 넘긴다.
-            #   (서버 DC IP 발행은 permission=False로 계속 차단됨 — 안전. 2captcha 해결될 때까지 쿨다운마다 재시도.)
-            _c24_retry=(plat=='cafe24' and s.get('write_access_state')=='human_verification_required'
-                        and (str(s.get('mb_id') or '').strip() or _verified))
-            if not is_permitted(s) and not _c24_retry: return False
-            # cafe24: 계정 있거나 과거 발행흔적 있으면 재시도(Turnstile은 노드가 2captcha로)
-            if plat=='cafe24' and (str(s.get('mb_id') or '').strip() or _verified): return True
-            # 계정 보유 로그인 사이트: 집 IP 로그인 발행 재시도
-            if s.get('login_required') and str(s.get('mb_id') or '').strip() and _verified: return True
-            return False
-        elig=[s for s in sites if _node_target(s)]
-        # cafe24 먼저(집 IP 아니면 못 함), 그다음 로그인 사이트. 오래 안 쓴 것 우선.
-        elig.sort(key=lambda s:(0 if s.get('platform')=='cafe24' else 1, float(s.get('pc_last_try',0) or 0)))
-        # ★발행 작업실 선택(2026-10-23): 활성(키워드 있는) 작업실 중 첫 번째 = 노래방. 그 작업실 kw·이미지를 노드에 실어
-        #   보내 ① 노래방 키워드로 ② 작업실 저장이미지를 박아 발행하게 한다(없으면 노드가 통합풀/이미지없이 폴백).
-        _room=next((r for r in (load_json(WORKROOMS_FILE,[]) or [])
-                    if (r.get('keyword_csv') or r.get('keywords') or '').strip()
-                    and not (r.get('keyword_csv') or '').lstrip().startswith('#')),None)
-        _wid=(_room or {}).get('id') or ''
-        _wname=(_room or {}).get('name') or ''
-        _wimgs=_workroom_image_urls(_wid) if _wid else []
-        # ★작업실 키워드 메인 목록(한 줄=메인) — 사이트마다 랜덤 메인 1개로 {지역,서비스,브랜드} 조합 생성.
-        #   없으면 노드가 '키워드 없음'으로 스킵(2026-10-23 cafe24 실패 원인 수정).
-        _mains=[ln.strip() for ln in ((_room or {}).get('keyword_csv') or '').splitlines()
-                if ln.strip() and not ln.lstrip().startswith('#')]
-        for s in elig[:n]:
-            s['pc_claim_by']=node_id; s['pc_claim_expire']=now+ttl; s['pc_last_try']=now
-            try: _kw=_auto_subkeywords(random.choice(_mains)) if _mains else {}
-            except Exception: _kw={}
-            picked.append({
-                'id':s.get('id'),'site_url':s.get('site_url',''),'platform':s.get('platform',''),
-                'bo_table':s.get('bo_table',''),'write_url':s.get('write_url',''),
-                'write_entry_url':s.get('write_entry_url',''),'verified_post_url':s.get('verified_post_url',''),
-                'article_board_name':s.get('article_board_name',''),
-                'login_required':bool(s.get('login_required')),'signup_exhausted':bool(s.get('signup_exhausted')),
-                'mb_id':s.get('mb_id',''),'mb_pass':_decrypt_password(s.get('mb_pass_enc') or s.get('mb_pass','')),
-                'name':s.get('name') or s.get('site_url',''),
-                'kw':_kw,'workroom_id':_wid,'workroom_name':_wname,'image_urls':_wimgs,   # 키워드·작업실 이미지·이력
-            })
-        if picked: save_sites(sites)
-    if picked:
-        add_log(f'[노드 claim] {node_id} ← 등록사이트 {len(picked)}곳 (cafe24·회원) 로컬발행 배정','파이프라인')
-    # 노드가 Turnstile 설정 동기화에 쓰는 llm 블록(기존 claim과 동일 형식)
-    _llm={'turnstile_mode':_cfg.get('turnstile_mode','auto'),'twocaptcha_enabled':bool(_cfg.get('twocaptcha_enabled'))}
-    return jsonify({'ok':True,'sites':picked,'ttl':ttl,'llm':_llm})
+    """Unattended publishing uses the audited server queue; no legacy PC handoff."""
+    return jsonify({'ok':True,'sites':[],'ttl':0,'reason':'audited_server_queue_only'})
 
 @app.route('/api/pipeline/report-site',methods=['POST'])
 def api_pipeline_report_site():
     """★PC가 등록 Cafe24 사이트 로컬발행 결과 회신 → write_test_status·verified_post_url 갱신 + claim 해제.
        body: {node_id, results:[{site_id, ok, result_url, msg}]}"""
+    if not _pc_nodes_enabled():
+        return jsonify({'ok':False,'error':'서버 전용 모드에서는 PC 노드 결과를 받지 않습니다'}),403
     d=request.get_json(silent=True) or {}
     node_id=str(d.get('node_id') or '').strip() or 'pc'
     results=d.get('results') or []

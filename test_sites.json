@@ -1,0 +1,59 @@
+[
+  {
+    "site_url": "https://example1.com",
+    "platform": "cafe24",
+    "login_required": false,
+    "write_access_state": "normal",
+    "has_captcha": false,
+    "verified_post_url": "https://example1.com/article/1/1/",
+    "write_test_status": "passed",
+    "permission": true,
+    "status": "approved"
+  },
+  {
+    "site_url": "https://example2.com",
+    "platform": "cafe24",
+    "login_required": true,
+    "mb_id": "member1",
+    "mb_pass_enc": "encrypted_password",
+    "write_access_state": "normal",
+    "has_captcha": false,
+    "verified_post_url": "https://example2.com/article/2/1/",
+    "write_test_status": "passed",
+    "permission": true,
+    "status": "approved"
+  },
+  {
+    "site_url": "https://example3.com",
+    "platform": "cafe24",
+    "login_required": false,
+    "write_access_state": "admin_only",
+    "has_captcha": false,
+    "verified_post_url": "https://example3.com/article/3/1/",
+    "write_test_status": "passed",
+    "permission": true,
+    "status": "approved"
+  },
+  {
+    "site_url": "https://example4.com",
+    "platform": "gnuboard",
+    "login_required": false,
+    "write_access_state": "normal",
+    "has_captcha": true,
+    "verified_post_url": "https://example4.com/article/4/1/",
+    "write_test_status": "passed",
+    "permission": true,
+    "status": "approved"
+  },
+  {
+    "site_url": "https://example5.com",
+    "platform": "cafe24",
+    "login_required": false,
+    "write_access_state": "normal",
+    "has_captcha": false,
+    "verified_post_url": "",
+    "write_test_status": "passed",
+    "permission": true,
+    "status": "approved"
+  }
+]

@@ -1,0 +1,9 @@
+# 프로젝트 의존성 파일
+flask==2.3.3
+requests==2.31.0
+urllib3==2.0.4
+werkzeug==2.3.7
+pyyaml==6.0.1
+python-dotenv==1.0.0
+# Bright Data 관련 패키지
+bright-data==0.1.0

@@ -1,0 +1,55 @@
+{
+  "https://www.telpan.co.kr": {
+    "origin": "https://www.telpan.co.kr",
+    "adapter": "telpan",
+    "fields": [
+      {
+        "name": "nickname",
+        "role": "account_nickname",
+        "required": true,
+        "type": "text",
+        "selector": "input[placeholder=\"닉네임 입력\"]"
+      },
+      {
+        "name": "password",
+        "role": "account_password",
+        "required": true,
+        "type": "password",
+        "selector": "input[placeholder=\"비밀번호 입력\"]"
+      },
+      {
+        "name": "email",
+        "role": "owner_email",
+        "required": true,
+        "type": "email",
+        "selector": "input[type=\"email\"]"
+      },
+      {
+        "name": "snsId",
+        "role": "contact_sns",
+        "required": true,
+        "type": "text",
+        "selector": "input[placeholder=\"@telegram 또는 카카오톡 ID\"]"
+      }
+    ],
+    "routes": {
+      "signup": "https://www.telpan.co.kr/signup",
+      "signup_submit": "https://www.telpan.co.kr/api/signup",
+      "login": "https://www.telpan.co.kr/signup",
+      "write": "https://www.telpan.co.kr/board/ads/write"
+    },
+    "limits": {
+      "title_utf16": 40,
+      "body_utf16": 500,
+      "signup_attempts_per_request": 1,
+      "retry_uncertain_submission": false,
+      "ip_restriction_bypass": false
+    },
+    "fingerprint": "1a1e28e2b99a8e9ce6d6a731cee4950e3863374fc99308b4e244579052ccb36c",
+    "version": 1,
+    "history": [],
+    "evidence": {},
+    "implementation_state": "adapter_implemented",
+    "server_publish_verified": false
+  }
+}

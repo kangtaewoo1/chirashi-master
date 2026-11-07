@@ -816,4 +816,5 @@ if __name__ == "__main__":
         from pc_queue import run as run_queue
         run_queue(once=a.once,idle=min(a.idle,10))
     else:
-        run(once=a.once, workers=a.workers, idle=a.idle)
+        from pc_queue import run as run_queue
+        run_queue(once=a.once,idle=min(a.idle,10))

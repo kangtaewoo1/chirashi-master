@@ -39,11 +39,13 @@ def run(once=False,idle=10):
                 outbox.unlink()
                 settings.log('PC 큐 결과 서버 반영 완료')
                 if once:return
-            job=api('claim',{'protocol':1}).get('job')
+            job=api('claim',{'protocol':2,'capabilities':['charset_preflight','job_journal']}).get('job')
             if not job:
                 if once:return
                 time.sleep(max(3,idle));continue
             auth={'job_id':job['job_id'],'lease_token':job['lease_token']}
+            journal=base/'pc_queue_jobs';journal.mkdir(exist_ok=True)
+            (journal/(job['job_id']+'.json')).write_text(json.dumps(job,ensure_ascii=False),encoding='utf-8')
             api('start',auth) # Durable submit marker precedes any external publication.
             site=dict(job['site'],_maintenance_job_id=job['job_id'])
             try:
@@ -51,6 +53,7 @@ def run(once=False,idle=10):
                 report=dict(auth,ok=ok is True,result_url=str(result) if ok else '',message='' if ok else str(result)[:200])
             except Exception:
                 report=dict(auth,ok=False,result_url='',message='PC 실행 예외 — 제출 여부 확인 전 재실행 금지')
+            (journal/(job['job_id']+'.result.json')).write_text(json.dumps({'job_id':job['job_id'],'ok':report['ok'],'candidate_url':site.get('_verification_candidate_url',''),'charset_preflight':site.get('_charset_preflight',{}),'message':report.get('message','')},ensure_ascii=False),encoding='utf-8')
             save_report(report)
             settings.log('PC 큐 작업 처리 완료; 결과 검증 회신 대기')
         except KeyboardInterrupt:
