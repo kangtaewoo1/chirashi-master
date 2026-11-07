@@ -382,6 +382,31 @@ class ServerQueueOnlyTest(unittest.TestCase):
         exec(compile(ast.Module(body=[fn],type_ignores=[]),'server-only-test','exec'),env)
         self.assertEqual(env['api_pipeline_claim_sites']()['sites'],[])
 
+    def test_legacy_node_claim_is_disabled_even_when_nodes_are_enabled(self):
+        tree=ast.parse(Path(__file__).with_name('app.py').read_text(encoding='utf-8'))
+        fn=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='api_pipeline_claim_sites')
+        fn.decorator_list=[]
+        import threading,time
+        from types import SimpleNamespace
+        site={'id':'site','site_url':'https://example.com','platform':'cafe24','mb_id':'user',
+              'verified_post_url':'https://example.com/article/1','permission':True}
+        env={'jsonify':lambda value:value,
+             'request':SimpleNamespace(get_json=lambda **kw:{'node_id':'pc'}),
+             'load_config':lambda:{'pc_claim_ttl':600},'_pc_nodes_enabled':lambda:True,
+             'time':time,'POST_LOCK':threading.RLock(),'load_sites':lambda:[site],
+             'is_permitted':lambda value:True,'load_json':lambda *args:[],
+             'WORKROOMS_FILE':Path('/unused'),
+             'save_sites':lambda *args:self.fail('Legacy PC endpoint must not claim sites'),
+             '_workroom_image_urls':lambda *args:[],
+             '_auto_subkeywords':lambda *args:{},
+             '_decrypt_password':lambda *args:self.fail('Legacy PC endpoint must not read credentials'),
+             'add_log':lambda *args,**kwargs:None}
+        exec(compile(ast.Module(body=[fn],type_ignores=[]),'disabled-node-claim-test','exec'),env)
+        result=env['api_pipeline_claim_sites']()
+        self.assertEqual(result['sites'],[])
+        self.assertEqual(result['reason'],'audited_server_queue_only')
+        self.assertNotIn('pc_claim_by',site)
+
     def test_explicit_approval_endpoint_saves_o_and_x_for_sites_and_candidates(self):
         tree=ast.parse(Path(__file__).with_name('app.py').read_text(encoding='utf-8'))
         fn=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='api_posting_authorization')

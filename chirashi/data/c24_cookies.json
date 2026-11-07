@@ -1,0 +1,4569 @@
+{
+  "rental-zon.com": {
+    "ts": 1791319895.7352123,
+    "cookies": [
+      {
+        "domain": ".rental-zon.com",
+        "httpOnly": false,
+        "name": "fb_event_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "event_id.momom88.1.IVWGHTYXPMDCKAB0G8I9O0E16JYADG4GS"
+      },
+      {
+        "domain": ".rental-zon.com",
+        "httpOnly": false,
+        "name": "siteSID",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1ba18a01-4f8f-b2b7-dfec-2978906e85e0"
+      },
+      {
+        "domain": ".rental-zon.com",
+        "httpOnly": false,
+        "name": "atl_option",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0%2C0%2CE"
+      },
+      {
+        "domain": ".rental-zon.com",
+        "httpOnly": true,
+        "name": "PHPSESSVERIFY",
+        "path": "/",
+        "sameSite": "None",
+        "secure": true,
+        "value": "d12e30981f0943a4f659f8ec37395140"
+      },
+      {
+        "domain": ".rental-zon.com",
+        "httpOnly": false,
+        "name": "analytics_session_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "analytics_session_id.momom88_1.86E97E3.1791319886155"
+      },
+      {
+        "domain": ".rental-zon.com",
+        "expiry": 1822855892,
+        "httpOnly": false,
+        "name": "siteLT",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "2d77445b-4fcb-d642-9ddb-703e6f4f033b"
+      },
+      {
+        "domain": ".rental-zon.com",
+        "httpOnly": false,
+        "name": "fb_external_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "36f61e1fd3dfed57c86a77da16634bf80e286c664ad8f6b477d3bf53002370f3"
+      },
+      {
+        "domain": ".rental-zon.com",
+        "httpOnly": false,
+        "name": "CVID",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "CVID.5c5d595b550d086602.1791319886155"
+      },
+      {
+        "domain": ".rental-zon.com",
+        "expiry": 1791924686,
+        "httpOnly": false,
+        "name": "wish_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "097ad72c1b4d11a416bd222e66805a62"
+      },
+      {
+        "domain": ".rental-zon.com",
+        "httpOnly": true,
+        "name": "ECSESSID",
+        "path": "/",
+        "sameSite": "None",
+        "secure": true,
+        "value": "ta90onoh2ens15vce91r4lte3ohnp1mv"
+      },
+      {
+        "domain": ".rental-zon.com",
+        "expiry": 1791323487,
+        "httpOnly": false,
+        "name": "basketcount_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".rental-zon.com",
+        "expiry": 1791327086,
+        "httpOnly": false,
+        "name": "iscache",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "F"
+      },
+      {
+        "domain": ".rental-zon.com",
+        "expiry": 1791323487,
+        "httpOnly": false,
+        "name": "basketprice_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0%EC%9B%90"
+      },
+      {
+        "domain": "rental-zon.com",
+        "expiry": 1825879892,
+        "httpOnly": false,
+        "name": "wcs_bt",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1066e0bcbcb06b0:1791319892|89dd2f57851e58:1791319892"
+      },
+      {
+        "domain": ".rental-zon.com",
+        "expiry": 1791320487,
+        "httpOnly": false,
+        "name": "ec_async_cache_unavail_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".rental-zon.com",
+        "expiry": 1822855892,
+        "httpOnly": false,
+        "name": "analytics_longterm",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "analytics_longterm.momom88_1.86E97E3.1791319886155"
+      },
+      {
+        "domain": ".rental-zon.com",
+        "expiry": 1791320487,
+        "httpOnly": false,
+        "name": "ec_async_cache_used_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0.00"
+      },
+      {
+        "domain": "rental-zon.com",
+        "expiry": 1791406286,
+        "httpOnly": false,
+        "name": "return_url",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "/"
+      },
+      {
+        "domain": ".rental-zon.com",
+        "expiry": 1825879892,
+        "httpOnly": false,
+        "name": "_fwb",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "81Z7GBjswIpZTERci49OdM.1791319886009"
+      },
+      {
+        "domain": "rental-zon.com",
+        "httpOnly": false,
+        "name": "ec_ipad_device",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "F"
+      },
+      {
+        "domain": ".rental-zon.com",
+        "expiry": 1791320487,
+        "httpOnly": false,
+        "name": "ec_async_cache_avail_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0.00"
+      },
+      {
+        "domain": ".rental-zon.com",
+        "expiry": 1791320487,
+        "httpOnly": false,
+        "name": "ec_async_cache_returned_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".rental-zon.com",
+        "expiry": 1791323487,
+        "httpOnly": false,
+        "name": "isviewtype",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "pc"
+      },
+      {
+        "domain": ".rental-zon.com",
+        "expiry": 1791406287,
+        "httpOnly": false,
+        "name": "wishcount_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".rental-zon.com",
+        "expiry": 1822855892,
+        "httpOnly": false,
+        "name": "CVID_Y",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "CVID_Y.5c5d595b550d086602.1791319886155"
+      },
+      {
+        "domain": ".rental-zon.com",
+        "httpOnly": false,
+        "name": "atl_epcheck",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1"
+      },
+      {
+        "domain": ".rental-zon.com",
+        "httpOnly": false,
+        "name": "login_provider_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "%7B%22member_id%22%3A%22faka1818%22%2C%22provider%22%3Anull%2C%22client_id%22%3Anull%7D"
+      },
+      {
+        "domain": ".rental-zon.com",
+        "expiry": 1791320187,
+        "httpOnly": false,
+        "name": "couponcount_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".rental-zon.com",
+        "httpOnly": false,
+        "name": "s3_connection_bucket",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "pg1653b82668399066"
+      },
+      {
+        "domain": ".rental-zon.com",
+        "expiry": 1791327086,
+        "httpOnly": false,
+        "name": "ec_mem_level",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1"
+      }
+    ]
+  },
+  "kuspoon.co.kr": {
+    "ts": 1792136029.7108803,
+    "cookies": [
+      {
+        "domain": "www.kuspoon.co.kr",
+        "expiry": 1792222400,
+        "httpOnly": false,
+        "name": "return_url",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "/"
+      },
+      {
+        "domain": ".kuspoon.co.kr",
+        "expiry": 1792136321,
+        "httpOnly": false,
+        "name": "couponcount_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".kuspoon.co.kr",
+        "expiry": 1792136621,
+        "httpOnly": false,
+        "name": "ec_async_cache_member_total_deposit_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".www.kuspoon.co.kr",
+        "httpOnly": false,
+        "name": "siteSID",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "910e21bc-2a6a-997b-40c8-d68dc2ee3d4e"
+      },
+      {
+        "domain": ".kuspoon.co.kr",
+        "httpOnly": true,
+        "name": "ECSESSID",
+        "path": "/",
+        "sameSite": "None",
+        "secure": true,
+        "value": "hrm6it9e3dnds469g47ikomrge4sdiqv"
+      },
+      {
+        "domain": ".kuspoon.co.kr",
+        "expiry": 1792136621,
+        "httpOnly": false,
+        "name": "ec_async_cache_used_deposit_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".kuspoon.co.kr",
+        "expiry": 1792137826,
+        "httpOnly": false,
+        "name": "_TRK_SID",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "690c48a400fbb5bdd84901202f03336c"
+      },
+      {
+        "domain": ".kuspoon.co.kr",
+        "expiry": 1823672026,
+        "httpOnly": false,
+        "name": "CVID_Y",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "CVID_Y.5a474744575a5e0b6c01.1792136000537"
+      },
+      {
+        "domain": "www.kuspoon.co.kr",
+        "httpOnly": false,
+        "name": "ec_ipad_device",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "F"
+      },
+      {
+        "domain": ".kuspoon.co.kr",
+        "expiry": 1792143219,
+        "httpOnly": false,
+        "name": "iscache",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "F"
+      },
+      {
+        "domain": ".kuspoon.co.kr",
+        "httpOnly": false,
+        "name": "analytics_session_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "analytics_session_id.kuspoon2_1.F63AAD2.1792136000537"
+      },
+      {
+        "domain": ".kuspoon.co.kr",
+        "expiry": 1823672026,
+        "httpOnly": false,
+        "name": "analytics_longterm",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "analytics_longterm.kuspoon2_1.F63AAD2.1792136000537"
+      },
+      {
+        "domain": ".kuspoon.co.kr",
+        "expiry": 1826696001,
+        "httpOnly": false,
+        "name": "_TRK_UID",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "ca10b00840b6e43d8f892a5519c8503f:1:0:1792136001526"
+      },
+      {
+        "domain": ".kuspoon.co.kr",
+        "httpOnly": false,
+        "name": "atl_option",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1%2C1%2CH"
+      },
+      {
+        "domain": ".kuspoon.co.kr",
+        "expiry": 1792139621,
+        "httpOnly": false,
+        "name": "isviewtype",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "pc"
+      },
+      {
+        "domain": ".kuspoon.co.kr",
+        "httpOnly": false,
+        "name": "fb_external_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "91dda49c196b051bd11a07ef2271b7c0ba00c935f5f4b2b2321d47d41f68eb46"
+      },
+      {
+        "domain": ".kuspoon.co.kr",
+        "expiry": 1792136626,
+        "httpOnly": false,
+        "name": "ec_async_cache_used_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0.00"
+      },
+      {
+        "domain": ".kuspoon.co.kr",
+        "expiry": 1792136621,
+        "httpOnly": false,
+        "name": "ec_async_cache_returned_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".www.kuspoon.co.kr",
+        "expiry": 1823672026,
+        "httpOnly": false,
+        "name": "siteLT",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "5cf7c32f-b33d-dd8d-d83e-5167b2eaa094"
+      },
+      {
+        "domain": ".kuspoon.co.kr",
+        "httpOnly": false,
+        "name": "fb_event_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "event_id.kuspoon2.1.GMXFPS8SBHTMKBPT781KB7A2ZO37UQZE"
+      },
+      {
+        "domain": ".kuspoon.co.kr",
+        "expiry": 1826696026,
+        "httpOnly": false,
+        "name": "_fwb",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "134qZ6sXP90aceLgczUhUHM.1792136000375"
+      },
+      {
+        "domain": ".kuspoon.co.kr",
+        "expiry": 1792136621,
+        "httpOnly": false,
+        "name": "ec_async_cache_deposit_refund_wait_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".kuspoon.co.kr",
+        "httpOnly": true,
+        "name": "PHPSESSVERIFY",
+        "path": "/",
+        "sameSite": "None",
+        "secure": true,
+        "value": "39a9b5b61174b1dde76b5a2c8716089d"
+      },
+      {
+        "domain": ".kuspoon.co.kr",
+        "expiry": 1792137826,
+        "httpOnly": false,
+        "name": "_TRK_EX",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "3"
+      },
+      {
+        "domain": ".kuspoon.co.kr",
+        "httpOnly": false,
+        "name": "atl_epcheck",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1"
+      },
+      {
+        "domain": ".kuspoon.co.kr",
+        "expiry": 1799912026,
+        "httpOnly": false,
+        "name": "_fbp",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "fb.2.1792136000808.834428850924732457"
+      },
+      {
+        "domain": ".kuspoon.co.kr",
+        "expiry": 1799912000,
+        "httpOnly": false,
+        "name": "_gcl_au",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1.1.116187048.1792136001"
+      },
+      {
+        "domain": ".kuspoon.co.kr",
+        "expiry": 1826696001,
+        "httpOnly": false,
+        "name": "_BS_GUUID",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "rQn0yCUJIjkpFpGmRY77laUUho38hkzIbXIJzDti"
+      },
+      {
+        "domain": ".kuspoon.co.kr",
+        "expiry": 1792136621,
+        "httpOnly": false,
+        "name": "ec_async_cache_all_deposit_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".kuspoon.co.kr",
+        "expiry": 1792740819,
+        "httpOnly": false,
+        "name": "wish_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "d192be79428ba38404f46848a3f82ebb"
+      },
+      {
+        "domain": ".kuspoon.co.kr",
+        "expiry": 1792139621,
+        "httpOnly": false,
+        "name": "basketcount_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": "www.kuspoon.co.kr",
+        "expiry": 1826696026,
+        "httpOnly": false,
+        "name": "wcs_bt",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "s_5028f5494b1f:1792136026"
+      },
+      {
+        "domain": ".kuspoon.co.kr",
+        "expiry": 1792136626,
+        "httpOnly": false,
+        "name": "ec_async_cache_avail_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1000.00"
+      },
+      {
+        "domain": ".kuspoon.co.kr",
+        "expiry": 1792143219,
+        "httpOnly": false,
+        "name": "ec_mem_level",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1"
+      },
+      {
+        "domain": ".kuspoon.co.kr",
+        "httpOnly": false,
+        "name": "login_provider_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "%7B%22member_id%22%3A%22twseo09123133%22%2C%22provider%22%3Anull%2C%22client_id%22%3Anull%7D"
+      },
+      {
+        "domain": ".kuspoon.co.kr",
+        "expiry": 1792136626,
+        "httpOnly": false,
+        "name": "ec_async_cache_unavail_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".kuspoon.co.kr",
+        "httpOnly": false,
+        "name": "CVID",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "CVID.5a474744575a5e0b6c01.1792136000537"
+      }
+    ]
+  },
+  "uum.co.kr": {
+    "ts": 1792127318.650612,
+    "cookies": [
+      {
+        "domain": ".uum.co.kr",
+        "httpOnly": false,
+        "name": "fb_external_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "e7940a3460b5f697597af9c500cbfe9288fddd5e0bfd0796a5137cb91bc26d15"
+      },
+      {
+        "domain": "uum.co.kr",
+        "expiry": 1792213689,
+        "httpOnly": false,
+        "name": "return_url",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "/"
+      },
+      {
+        "domain": ".uum.co.kr",
+        "httpOnly": false,
+        "name": "atl_epcheck",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1"
+      },
+      {
+        "domain": ".uum.co.kr",
+        "httpOnly": false,
+        "name": "fb_event_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "event_id.uum24.1.ENMCSFEJI42MAKQ5UFL11X6SNU1NP7MN"
+      },
+      {
+        "domain": ".uum.co.kr",
+        "httpOnly": false,
+        "name": "siteSID",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "34ef535e-911f-9f6a-81e5-f5fe18e7aece"
+      },
+      {
+        "domain": ".uum.co.kr",
+        "httpOnly": false,
+        "name": "CVID",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "CVID.444759060c6a01.1792127280153"
+      },
+      {
+        "domain": ".uum.co.kr",
+        "expiry": 1792134508,
+        "httpOnly": false,
+        "name": "ec_mem_level",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1"
+      },
+      {
+        "domain": ".uum.co.kr",
+        "expiry": 1792130915,
+        "httpOnly": false,
+        "name": "basketcount_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".uum.co.kr",
+        "expiry": 1792127910,
+        "httpOnly": false,
+        "name": "ec_async_cache_used_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0.00"
+      },
+      {
+        "domain": ".uum.co.kr",
+        "expiry": 1792130910,
+        "httpOnly": false,
+        "name": "isviewtype",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "pc"
+      },
+      {
+        "domain": ".uum.co.kr",
+        "httpOnly": false,
+        "name": "login_provider_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "%7B%22member_id%22%3A%22twseo10163285%22%2C%22provider%22%3Anull%2C%22client_id%22%3Anull%7D"
+      },
+      {
+        "domain": ".uum.co.kr",
+        "httpOnly": false,
+        "name": "analytics_session_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "analytics_session_id.uum24_1.9EADB97.1792127280153"
+      },
+      {
+        "domain": ".uum.co.kr",
+        "expiry": 1826687315,
+        "httpOnly": false,
+        "name": "_fwb",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "63TJLqroO7QHWZudVGOsTH.1792127279999"
+      },
+      {
+        "domain": ".uum.co.kr",
+        "httpOnly": false,
+        "name": "atl_option",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1%2C1%2CH"
+      },
+      {
+        "domain": ".uum.co.kr",
+        "expiry": 1792127910,
+        "httpOnly": false,
+        "name": "ec_async_cache_unavail_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".uum.co.kr",
+        "httpOnly": false,
+        "name": "s3_connection_bucket",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "pg849b76938127037"
+      },
+      {
+        "domain": ".uum.co.kr",
+        "expiry": 1792127610,
+        "httpOnly": false,
+        "name": "couponcount_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": "uum.co.kr",
+        "expiry": 1826687315,
+        "httpOnly": false,
+        "name": "wcs_bt",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "s_35d16ebe1500:1792127315"
+      },
+      {
+        "domain": ".uum.co.kr",
+        "expiry": 1823663315,
+        "httpOnly": false,
+        "name": "CVID_Y",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "CVID_Y.444759060c6a01.1792127280153"
+      },
+      {
+        "domain": ".uum.co.kr",
+        "expiry": 1792127910,
+        "httpOnly": false,
+        "name": "ec_async_cache_member_total_deposit_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".uum.co.kr",
+        "expiry": 1792134508,
+        "httpOnly": false,
+        "name": "iscache",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "F"
+      },
+      {
+        "domain": ".uum.co.kr",
+        "httpOnly": true,
+        "name": "ECSESSID",
+        "path": "/",
+        "sameSite": "None",
+        "secure": true,
+        "value": "hd1olqpof1m0ajlrvtdqaho14i5pr16o"
+      },
+      {
+        "domain": ".uum.co.kr",
+        "expiry": 1792127910,
+        "httpOnly": false,
+        "name": "ec_async_cache_deposit_refund_wait_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": "uum.co.kr",
+        "httpOnly": false,
+        "name": "ec_ipad_device",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "F"
+      },
+      {
+        "domain": ".uum.co.kr",
+        "expiry": 1792732108,
+        "httpOnly": false,
+        "name": "wish_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "4b28f4ebb95db2528cefb425ade4023d"
+      },
+      {
+        "domain": ".uum.co.kr",
+        "expiry": 1823663315,
+        "httpOnly": false,
+        "name": "analytics_longterm",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "analytics_longterm.uum24_1.9EADB97.1792127280153"
+      },
+      {
+        "domain": ".uum.co.kr",
+        "expiry": 1792127910,
+        "httpOnly": false,
+        "name": "ec_async_cache_avail_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "5000.00"
+      },
+      {
+        "domain": ".uum.co.kr",
+        "httpOnly": true,
+        "name": "PHPSESSVERIFY",
+        "path": "/",
+        "sameSite": "None",
+        "secure": true,
+        "value": "713eb0d41a2c86fea6e9450e3af66335"
+      },
+      {
+        "domain": ".uum.co.kr",
+        "expiry": 1792127910,
+        "httpOnly": false,
+        "name": "ec_async_cache_returned_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".uum.co.kr",
+        "expiry": 1799903315,
+        "httpOnly": false,
+        "name": "_fbp",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "fb.2.1792127280172.983649932327808004"
+      },
+      {
+        "domain": ".uum.co.kr",
+        "expiry": 1792127910,
+        "httpOnly": false,
+        "name": "ec_async_cache_used_deposit_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".uum.co.kr",
+        "expiry": 1792127910,
+        "httpOnly": false,
+        "name": "ec_async_cache_all_deposit_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".uum.co.kr",
+        "expiry": 1823663315,
+        "httpOnly": false,
+        "name": "siteLT",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "dc29affa-dded-9595-09b0-91f81a7552cf"
+      }
+    ]
+  },
+  "conch.co.kr": {
+    "ts": 1792128007.847254,
+    "cookies": [
+      {
+        "domain": "conch.co.kr",
+        "expiry": 1826687999,
+        "httpOnly": false,
+        "name": "_pk_ref.10470.e8f3",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "%5B%22%22%2C%22%22%2C%221792127999%22%2C%22https%3A%2F%2Fconch.co.kr%2Fexec%2Ffront%2FMember%2Flogin%2F%22%5D"
+      },
+      {
+        "domain": ".conch.co.kr",
+        "expiry": 1792128604,
+        "httpOnly": false,
+        "name": "ec_async_cache_deposit_refund_wait_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".conch.co.kr",
+        "httpOnly": false,
+        "name": "atl_option",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1%2C1%2CH"
+      },
+      {
+        "domain": ".conch.co.kr",
+        "expiry": 1825823999,
+        "httpOnly": false,
+        "name": "_tt_enable_cookie",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1"
+      },
+      {
+        "domain": "conch.co.kr",
+        "expiry": 1826688004,
+        "httpOnly": false,
+        "name": "_pk_id.10470.e8f3",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "46be8ed9486fdcac.1792127979.1.1792128004.0."
+      },
+      {
+        "domain": "conch.co.kr",
+        "httpOnly": false,
+        "name": "ec_ipad_device",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "F"
+      },
+      {
+        "domain": ".conch.co.kr",
+        "httpOnly": false,
+        "name": "analytics_session_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "analytics_session_id.newshow_1.6A6AD76.1792127979519"
+      },
+      {
+        "domain": ".conch.co.kr",
+        "expiry": 1792131599,
+        "httpOnly": false,
+        "name": "basketprice_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0%EC%9B%90"
+      },
+      {
+        "domain": ".conch.co.kr",
+        "expiry": 1823663979,
+        "httpOnly": false,
+        "name": "conch.co.kr-crema_device_token",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "lLSf75K2eN6WbsXLOtTPQtnPth4Mfgmc"
+      },
+      {
+        "domain": "conch.co.kr",
+        "expiry": 1792214379,
+        "httpOnly": false,
+        "name": "return_url",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "/"
+      },
+      {
+        "domain": ".conch.co.kr",
+        "expiry": 1826688004,
+        "httpOnly": false,
+        "name": "_ga_WMNGLKGTJC",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "GS2.1.s1792127971$o1$g1$t1792128004$j27$l0$h0"
+      },
+      {
+        "domain": ".conch.co.kr",
+        "httpOnly": false,
+        "name": "login_provider_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "%7B%22member_id%22%3A%22twseo1016857e%22%2C%22provider%22%3Anull%2C%22client_id%22%3Anull%7D"
+      },
+      {
+        "domain": ".conch.co.kr",
+        "httpOnly": true,
+        "name": "PHPSESSVERIFY",
+        "path": "/",
+        "sameSite": "None",
+        "secure": true,
+        "value": "5ea3bb61102534265af6bbca27861678"
+      },
+      {
+        "domain": ".conch.co.kr",
+        "expiry": 1825823999,
+        "httpOnly": false,
+        "name": "ttcsid",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1792127979772::P_l36J59u9GXB9Dsusp1.1.1792127999637.0::1.18746.19640::18525.1.944.546::0.0.0"
+      },
+      {
+        "domain": "conch.co.kr",
+        "expiry": 1823664000,
+        "httpOnly": false,
+        "name": "_dd_s_v2",
+        "path": "/",
+        "sameSite": "Strict",
+        "secure": true,
+        "value": "aid=3ff5f9ba-0762-44ad-b096-1255d6acba5f&id=2749195b-e6dd-474c-8398-c70cacab2e0c&created=1792127980633&expire=1792128900010&c=0"
+      },
+      {
+        "domain": ".conch.co.kr",
+        "expiry": 1792128604,
+        "httpOnly": false,
+        "name": "ec_async_cache_member_total_deposit_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".conch.co.kr",
+        "httpOnly": true,
+        "name": "ECSESSID",
+        "path": "/",
+        "sameSite": "None",
+        "secure": true,
+        "value": "e3oe262i43em6lnlptsp5j8o3o047avp"
+      },
+      {
+        "domain": ".conch.co.kr",
+        "expiry": 1792128064,
+        "httpOnly": false,
+        "name": "ordercnt_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "%7B%22shipped_before_count%22%3A%220%22%2C%22shipped_standby_count%22%3A%220%22%2C%22shipped_begin_count%22%3A%220%22%2C%22shipped_complate_count%22%3A%220%22%2C%22order_cancel_count%22%3A%220%22%2C%22order_exchange_count%22%3A%220%22%2C%22order_return_count%22%3A%220%22%7D"
+      },
+      {
+        "domain": ".conch.co.kr",
+        "expiry": 1792128064,
+        "httpOnly": false,
+        "name": "order_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "%7B%22total_order_price%22%3A%22%3Cspan%20class%3D%27notranslate%27%3E0%5Cuc6d0%3C%5C%2Fspan%3E%22%2C%22total_order_count%22%3A0%2C%22_mid%22%3A%2250d2679b%22%7D"
+      },
+      {
+        "domain": ".conch.co.kr",
+        "expiry": 1826687971,
+        "httpOnly": false,
+        "name": "_ga",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "GA1.1.1872937251.1792127972"
+      },
+      {
+        "domain": ".conch.co.kr",
+        "expiry": 1792135198,
+        "httpOnly": false,
+        "name": "iscache",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "F"
+      },
+      {
+        "domain": ".conch.co.kr",
+        "expiry": 1792128604,
+        "httpOnly": false,
+        "name": "ec_async_cache_all_deposit_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".conch.co.kr",
+        "expiry": 1823664004,
+        "httpOnly": false,
+        "name": "analytics_longterm",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "analytics_longterm.newshow_1.6A6AD76.1792127979519"
+      },
+      {
+        "domain": ".conch.co.kr",
+        "expiry": 1799903972,
+        "httpOnly": false,
+        "name": "_gcl_au",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1.1.1100666409.1792127972.858473577.1792127998.1792127998.1073621617.1792127998.1792127998"
+      },
+      {
+        "domain": ".conch.co.kr",
+        "httpOnly": false,
+        "name": "CVID",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "CVID.5f574347505a476602.1792127979519"
+      },
+      {
+        "domain": ".conch.co.kr",
+        "expiry": 1792128604,
+        "httpOnly": false,
+        "name": "ec_async_cache_avail_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0.00"
+      },
+      {
+        "domain": ".conch.co.kr",
+        "expiry": 1792149599,
+        "httpOnly": false,
+        "name": "conch.co.kr-crema_review_popup_count_v2",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1"
+      },
+      {
+        "domain": ".conch.co.kr",
+        "expiry": 1826688005,
+        "httpOnly": false,
+        "name": "_ga_162NB56RKR",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "GS2.1.s1792127971$o1$g1$t1792128005$j26$l0$h0"
+      },
+      {
+        "domain": ".conch.co.kr",
+        "expiry": 1792131604,
+        "httpOnly": false,
+        "name": "isviewtype",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "pc"
+      },
+      {
+        "domain": ".conch.co.kr",
+        "expiry": 1826688004,
+        "httpOnly": false,
+        "name": "_fwb",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "16323oV0P2yui84I9fr2N35.1792127970979"
+      },
+      {
+        "domain": ".conch.co.kr",
+        "expiry": 1792128299,
+        "httpOnly": false,
+        "name": "couponcount_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "2"
+      },
+      {
+        "domain": ".conch.co.kr",
+        "expiry": 1792131599,
+        "httpOnly": false,
+        "name": "basketcount_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".conch.co.kr",
+        "httpOnly": false,
+        "name": "atl_epcheck",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1"
+      },
+      {
+        "domain": "conch.co.kr",
+        "httpOnly": false,
+        "name": "ck_20269165",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1"
+      },
+      {
+        "domain": ".conch.co.kr",
+        "expiry": 1792135198,
+        "httpOnly": false,
+        "name": "ec_mem_level",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1"
+      },
+      {
+        "domain": ".conch.co.kr",
+        "expiry": 1823664004,
+        "httpOnly": false,
+        "name": "siteLT",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "99ca07f2-441c-f629-dda5-b684bcb7ef89"
+      },
+      {
+        "domain": "conch.co.kr",
+        "expiry": 1823663980,
+        "httpOnly": false,
+        "name": "upsell_user",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "WIdfBl7CgPWW"
+      },
+      {
+        "domain": ".conch.co.kr",
+        "expiry": 1823664004,
+        "httpOnly": false,
+        "name": "CVID_Y",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "CVID_Y.5f574347505a476602.1792127979519"
+      },
+      {
+        "domain": ".conch.co.kr",
+        "expiry": 1792128604,
+        "httpOnly": false,
+        "name": "ec_async_cache_unavail_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".conch.co.kr",
+        "expiry": 1792128604,
+        "httpOnly": false,
+        "name": "ec_async_cache_used_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0.00"
+      },
+      {
+        "domain": "conch.co.kr",
+        "httpOnly": false,
+        "name": "cpik-script-setting",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "{}"
+      },
+      {
+        "domain": ".conch.co.kr",
+        "expiry": 1792128604,
+        "httpOnly": false,
+        "name": "ec_async_cache_used_deposit_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".conch.co.kr",
+        "httpOnly": false,
+        "name": "siteSID",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "52846e02-4fd3-1258-3b3a-f9d34c9c3d8d"
+      },
+      {
+        "domain": ".conch.co.kr",
+        "expiry": 1792128604,
+        "httpOnly": false,
+        "name": "ec_async_cache_returned_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".conch.co.kr",
+        "expiry": 1792214399,
+        "httpOnly": false,
+        "name": "wishcount_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".conch.co.kr",
+        "httpOnly": false,
+        "name": "fb_event_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "event_id.newshow.1.FBX7ZS9VVAEBGOWY4XO94G212J0VHN1U3"
+      },
+      {
+        "domain": "conch.co.kr",
+        "expiry": 1826688004,
+        "httpOnly": false,
+        "name": "wcs_bt",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "s_150f6e18680e:1792128004"
+      },
+      {
+        "domain": ".conch.co.kr",
+        "expiry": 1825823999,
+        "httpOnly": false,
+        "name": "ttcsid_CGL2FSBC77UFB849FMAG",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1792127979771::FYYFS_Mw6Jpxr2ETL5bl.1.1792127999638.1"
+      },
+      {
+        "domain": ".conch.co.kr",
+        "expiry": 1794719979,
+        "httpOnly": false,
+        "name": "wish_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "4d0bb27118b85cea196fac63e0c1f8b8"
+      },
+      {
+        "domain": ".conch.co.kr",
+        "httpOnly": false,
+        "name": "fb_external_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "c00b772efb52bb3ead67fdc381d008dd784b1a4b48bf56340270b197fd073404"
+      },
+      {
+        "domain": ".conch.co.kr",
+        "expiry": 1825823999,
+        "httpOnly": false,
+        "name": "_ttp",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "01M51JDM7R0QQQM1YNQF0M2BXM_.tt.2.1792127979768"
+      },
+      {
+        "domain": "conch.co.kr",
+        "expiry": 1792129804,
+        "httpOnly": false,
+        "name": "_pk_ses.10470.e8f3",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1"
+      },
+      {
+        "domain": ".conch.co.kr",
+        "expiry": 1799903999,
+        "httpOnly": false,
+        "name": "_fbp",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "fb.2.1792127980526.141928547398945457"
+      }
+    ]
+  },
+  "apgo7080.com": {
+    "ts": 1792130495.7286654,
+    "cookies": [
+      {
+        "domain": ".apgo7080.com",
+        "expiry": 1792134082,
+        "httpOnly": false,
+        "name": "basketcount_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".apgo7080.com",
+        "httpOnly": false,
+        "name": "atl_epcheck",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1"
+      },
+      {
+        "domain": ".apgo7080.com",
+        "httpOnly": true,
+        "name": "ECSESSID",
+        "path": "/",
+        "sameSite": "None",
+        "secure": true,
+        "value": "2gmp73i296379m3t2a1os0tsc8ehktj7"
+      },
+      {
+        "domain": ".apgo7080.com",
+        "expiry": 1792131082,
+        "httpOnly": false,
+        "name": "ec_async_cache_all_deposit_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".apgo7080.com",
+        "expiry": 1826690492,
+        "httpOnly": false,
+        "name": "_fwb",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "110TjT4JOHrPT796DDnSGPO.1792130471534"
+      },
+      {
+        "domain": "apgo7080.com",
+        "httpOnly": false,
+        "name": "mobile_more_current_page_3",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1"
+      },
+      {
+        "domain": ".apgo7080.com",
+        "httpOnly": false,
+        "name": "login_provider_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "%7B%22member_id%22%3A%22twseo1016df6d%22%2C%22provider%22%3Anull%2C%22client_id%22%3Anull%7D"
+      },
+      {
+        "domain": ".apgo7080.com",
+        "expiry": 1823666492,
+        "httpOnly": false,
+        "name": "analytics_longterm",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "analytics_longterm.cbj2927081_1.25DCD68.1792130480336"
+      },
+      {
+        "domain": ".apgo7080.com",
+        "expiry": 1792131082,
+        "httpOnly": false,
+        "name": "ec_async_cache_member_total_deposit_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".apgo7080.com",
+        "expiry": 1823666492,
+        "httpOnly": false,
+        "name": "CVID_Y",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "CVID_Y.52505e06010707090b016b00.1792130480336"
+      },
+      {
+        "domain": "apgo7080.com",
+        "expiry": 1826690492,
+        "httpOnly": false,
+        "name": "wcs_bt",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "s_2e1ddd87a5e:1792130492"
+      },
+      {
+        "domain": "apgo7080.com",
+        "httpOnly": false,
+        "name": "mobile_more_current_page_5",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1"
+      },
+      {
+        "domain": ".apgo7080.com",
+        "expiry": 1792134082,
+        "httpOnly": false,
+        "name": "isviewtype",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "pc"
+      },
+      {
+        "domain": ".apgo7080.com",
+        "httpOnly": false,
+        "name": "analytics_session_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "analytics_session_id.cbj2927081_1.25DCD68.1792130480336"
+      },
+      {
+        "domain": ".apgo7080.com",
+        "httpOnly": false,
+        "name": "s3_connection_bucket",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "pg504b48944335043"
+      },
+      {
+        "domain": ".apgo7080.com",
+        "expiry": 1792131082,
+        "httpOnly": false,
+        "name": "ec_async_cache_used_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0.00"
+      },
+      {
+        "domain": ".apgo7080.com",
+        "httpOnly": false,
+        "name": "atl_option",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0%2C0%2CE"
+      },
+      {
+        "domain": "apgo7080.com",
+        "httpOnly": false,
+        "name": "ec_ipad_device",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "F"
+      },
+      {
+        "domain": ".apgo7080.com",
+        "expiry": 1823666492,
+        "httpOnly": false,
+        "name": "siteLT",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "ed417d76-888f-9dd6-9057-2f7482f36794"
+      },
+      {
+        "domain": ".apgo7080.com",
+        "expiry": 1792131082,
+        "httpOnly": false,
+        "name": "ec_async_cache_unavail_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".apgo7080.com",
+        "httpOnly": false,
+        "name": "fb_event_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "event_id.cbj2927081.1.DWVY6UM0T56NJLG9HMACW8BC8DW63TXTR"
+      },
+      {
+        "domain": ".apgo7080.com",
+        "expiry": 1792137680,
+        "httpOnly": false,
+        "name": "iscache",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "F"
+      },
+      {
+        "domain": ".apgo7080.com",
+        "httpOnly": false,
+        "name": "siteSID",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "cadd7ac5-e3f0-d205-049c-a8f57f342031"
+      },
+      {
+        "domain": ".apgo7080.com",
+        "expiry": 1792134082,
+        "httpOnly": false,
+        "name": "basketprice_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0%EC%9B%90"
+      },
+      {
+        "domain": ".apgo7080.com",
+        "httpOnly": false,
+        "name": "fb_external_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "f6be5407588a37b03aad6db179975c1750b9d1684643e29923f2b72b3589fd90"
+      },
+      {
+        "domain": "apgo7080.com",
+        "expiry": 1792216880,
+        "httpOnly": false,
+        "name": "return_url",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "/"
+      },
+      {
+        "domain": ".apgo7080.com",
+        "expiry": 1792130782,
+        "httpOnly": false,
+        "name": "couponcount_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".apgo7080.com",
+        "expiry": 1792131082,
+        "httpOnly": false,
+        "name": "ec_async_cache_avail_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1000.00"
+      },
+      {
+        "domain": ".apgo7080.com",
+        "expiry": 1792131082,
+        "httpOnly": false,
+        "name": "ec_async_cache_returned_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".apgo7080.com",
+        "expiry": 1792216882,
+        "httpOnly": false,
+        "name": "wishcount_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": "apgo7080.com",
+        "httpOnly": false,
+        "name": "mobile_more_current_page_4",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1"
+      },
+      {
+        "domain": ".apgo7080.com",
+        "expiry": 1792131082,
+        "httpOnly": false,
+        "name": "ec_async_cache_deposit_refund_wait_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".apgo7080.com",
+        "expiry": 1792137680,
+        "httpOnly": false,
+        "name": "ec_mem_level",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1"
+      },
+      {
+        "domain": ".apgo7080.com",
+        "httpOnly": false,
+        "name": "CVID",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "CVID.52505e06010707090b016b00.1792130480336"
+      },
+      {
+        "domain": ".apgo7080.com",
+        "httpOnly": true,
+        "name": "PHPSESSVERIFY",
+        "path": "/",
+        "sameSite": "None",
+        "secure": true,
+        "value": "e1bba862c5c1e7acef028da56f907c6e"
+      },
+      {
+        "domain": "apgo7080.com",
+        "httpOnly": false,
+        "name": "mobile_more_current_page_2",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1"
+      },
+      {
+        "domain": ".apgo7080.com",
+        "expiry": 1792735280,
+        "httpOnly": false,
+        "name": "wish_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "15cbab016e7899b0ebd7aba3678441a4"
+      },
+      {
+        "domain": ".apgo7080.com",
+        "expiry": 1792131082,
+        "httpOnly": false,
+        "name": "ec_async_cache_used_deposit_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      }
+    ]
+  },
+  "nmdalbang.com": {
+    "ts": 1792131032.9166038,
+    "cookies": [
+      {
+        "domain": ".nmdalbang.com",
+        "expiry": 1792131624,
+        "httpOnly": false,
+        "name": "ec_async_cache_returned_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".nmdalbang.com",
+        "expiry": 1792131624,
+        "httpOnly": false,
+        "name": "ec_async_cache_unavail_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".nmdalbang.com",
+        "expiry": 1823667029,
+        "httpOnly": false,
+        "name": "analytics_longterm",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "analytics_longterm.realtyessay_1.A5A91D7.1792131022712"
+      },
+      {
+        "domain": ".nmdalbang.com",
+        "expiry": 1792217424,
+        "httpOnly": false,
+        "name": "wishcount_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".nmdalbang.com",
+        "expiry": 1792138223,
+        "httpOnly": false,
+        "name": "iscache",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "F"
+      },
+      {
+        "domain": ".nmdalbang.com",
+        "httpOnly": false,
+        "name": "like_product_cnt1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": "nmdalbang.com",
+        "httpOnly": false,
+        "name": "mobile_more_current_page_2",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1"
+      },
+      {
+        "domain": ".nmdalbang.com",
+        "expiry": 1792131624,
+        "httpOnly": false,
+        "name": "ec_async_cache_all_deposit_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".nmdalbang.com",
+        "httpOnly": false,
+        "name": "s3_connection_bucket",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "pg753b66865082034"
+      },
+      {
+        "domain": ".nmdalbang.com",
+        "httpOnly": false,
+        "name": "atl_option",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0%2C0%2CE"
+      },
+      {
+        "domain": ".nmdalbang.com",
+        "expiry": 1792131624,
+        "httpOnly": false,
+        "name": "ec_async_cache_deposit_refund_wait_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": "nmdalbang.com",
+        "httpOnly": false,
+        "name": "ec_ipad_device",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "F"
+      },
+      {
+        "domain": ".nmdalbang.com",
+        "expiry": 1823667029,
+        "httpOnly": false,
+        "name": "siteLT",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "b04c0f16-9b4c-d7c5-ce41-f918fe9c905c"
+      },
+      {
+        "domain": ".nmdalbang.com",
+        "httpOnly": false,
+        "name": "siteSID",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "5548882f-9537-9f74-ac09-570075ab5001"
+      },
+      {
+        "domain": ".nmdalbang.com",
+        "expiry": 1792134624,
+        "httpOnly": false,
+        "name": "basketcount_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": "nmdalbang.com",
+        "expiry": 1792217422,
+        "httpOnly": false,
+        "name": "return_url",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "/"
+      },
+      {
+        "domain": ".nmdalbang.com",
+        "expiry": 1792138223,
+        "httpOnly": false,
+        "name": "ec_mem_level",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1"
+      },
+      {
+        "domain": ".nmdalbang.com",
+        "httpOnly": false,
+        "name": "fb_event_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "event_id.realtyessay.1.JJBH6CQU6U2SHDT1MR3D2469K2ZNOZN6"
+      },
+      {
+        "domain": ".nmdalbang.com",
+        "expiry": 1792131324,
+        "httpOnly": false,
+        "name": "couponcount_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".nmdalbang.com",
+        "expiry": 1792131624,
+        "httpOnly": false,
+        "name": "ec_async_cache_used_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0.00"
+      },
+      {
+        "domain": ".nmdalbang.com",
+        "expiry": 1792134624,
+        "httpOnly": false,
+        "name": "basketprice_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0%EC%9B%90"
+      },
+      {
+        "domain": ".nmdalbang.com",
+        "expiry": 1823667029,
+        "httpOnly": false,
+        "name": "CVID_Y",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "CVID_Y.435755584c4c554a40514d6e06.1792131022712"
+      },
+      {
+        "domain": ".nmdalbang.com",
+        "httpOnly": false,
+        "name": "fb_external_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "a6086a152341568abeb88a353774af11ef5c946c519be509ac94c7a3ed7754fa"
+      },
+      {
+        "domain": ".nmdalbang.com",
+        "httpOnly": false,
+        "name": "login_provider_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "%7B%22member_id%22%3A%22twseo10167b72%22%2C%22provider%22%3Anull%2C%22client_id%22%3Anull%7D"
+      },
+      {
+        "domain": ".nmdalbang.com",
+        "expiry": 1792131624,
+        "httpOnly": false,
+        "name": "ec_async_cache_member_total_deposit_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".nmdalbang.com",
+        "expiry": 1792134624,
+        "httpOnly": false,
+        "name": "isviewtype",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "pc"
+      },
+      {
+        "domain": ".nmdalbang.com",
+        "httpOnly": false,
+        "name": "CVID",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "CVID.435755584c4c554a40514d6e06.1792131022712"
+      },
+      {
+        "domain": ".nmdalbang.com",
+        "expiry": 1792131624,
+        "httpOnly": false,
+        "name": "ec_async_cache_used_deposit_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".nmdalbang.com",
+        "httpOnly": true,
+        "name": "ECSESSID",
+        "path": "/",
+        "sameSite": "None",
+        "secure": true,
+        "value": "j1hc3rhle666d6qii5k27h79rol40569"
+      },
+      {
+        "domain": ".nmdalbang.com",
+        "httpOnly": false,
+        "name": "atl_epcheck",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1"
+      },
+      {
+        "domain": ".nmdalbang.com",
+        "expiry": 1792131624,
+        "httpOnly": false,
+        "name": "ec_async_cache_avail_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0.00"
+      },
+      {
+        "domain": ".nmdalbang.com",
+        "expiry": 1792735822,
+        "httpOnly": false,
+        "name": "wish_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "240950c0bbe92b3b80d55dd5a35af5f7"
+      },
+      {
+        "domain": ".nmdalbang.com",
+        "httpOnly": true,
+        "name": "PHPSESSVERIFY",
+        "path": "/",
+        "sameSite": "None",
+        "secure": true,
+        "value": "18436604b0e1b7b76c0f65d70cd507e1"
+      },
+      {
+        "domain": ".nmdalbang.com",
+        "httpOnly": false,
+        "name": "analytics_session_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "analytics_session_id.realtyessay_1.A5A91D7.1792131022712"
+      }
+    ]
+  },
+  "dogshower.co.kr": {
+    "ts": 1792132639.1673987,
+    "cookies": [
+      {
+        "domain": ".dogshower.co.kr",
+        "httpOnly": false,
+        "name": "login_provider_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "%7B%22member_id%22%3A%22twseo10164d8e%22%2C%22provider%22%3Anull%2C%22client_id%22%3Anull%7D"
+      },
+      {
+        "domain": ".dogshower.co.kr",
+        "httpOnly": false,
+        "name": "fb_external_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "b378144bf7e723cb3e816e294bedee4f0648d013ca4f550eb2d8546feb63d169"
+      },
+      {
+        "domain": ".dogshower.co.kr",
+        "httpOnly": false,
+        "name": "fb_event_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "event_id.dogbibi.1.3BWIA2CQ8HXQVVDGFLIRSL03H6HYQZ5I"
+      },
+      {
+        "domain": ".dogshower.co.kr",
+        "expiry": 1792996597,
+        "httpOnly": false,
+        "name": "wish_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "ae842f87255d9de3b3e8871e50271bef"
+      },
+      {
+        "domain": ".dogshower.co.kr",
+        "expiry": 1826692636,
+        "httpOnly": false,
+        "name": "_fwb",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "187tyGrYilco3AGVVLnXyll.1792132597514"
+      },
+      {
+        "domain": ".dogshower.co.kr",
+        "expiry": 1792136235,
+        "httpOnly": false,
+        "name": "basketcount_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".dogshower.co.kr",
+        "expiry": 1823668636,
+        "httpOnly": false,
+        "name": "analytics_longterm",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "analytics_longterm.dogbibi_1.DF2D692.1792132597691"
+      },
+      {
+        "domain": ".dogshower.co.kr",
+        "httpOnly": false,
+        "name": "CVID",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "CVID.555d53565157596602.1792132597691"
+      },
+      {
+        "domain": "dogshower.co.kr",
+        "expiry": 1823668606,
+        "httpOnly": false,
+        "name": "_dd_s_v2",
+        "path": "/",
+        "sameSite": "Strict",
+        "secure": true,
+        "value": "aid=94dc9c73-7434-482c-a238-21dfacbcf152&id=23b3f6f1-e84b-40b3-9e24-4c5a89e984c3&created=1792132606795&expire=1792133506795&c=0"
+      },
+      {
+        "domain": ".dogshower.co.kr",
+        "expiry": 1825828616,
+        "httpOnly": false,
+        "name": "ttcsid_CIEINVRC77U9SME23UFG",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1792132606555::yFyKERo6pVC5fErTMGmt.1.1792132616577.1"
+      },
+      {
+        "domain": ".dogshower.co.kr",
+        "expiry": 1792139834,
+        "httpOnly": false,
+        "name": "ec_mem_level",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1"
+      },
+      {
+        "domain": ".dogshower.co.kr",
+        "httpOnly": true,
+        "name": "PHPSESSVERIFY",
+        "path": "/",
+        "sameSite": "None",
+        "secure": true,
+        "value": "9567b98cb8ba981fada0b30e256b0ede"
+      },
+      {
+        "domain": ".dogshower.co.kr",
+        "expiry": 1825828616,
+        "httpOnly": false,
+        "name": "ttcsid",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1792132606556::r6YXChawqgxYa-riVFG-.1.1792132616573.0::1.-540.0::0.0.0.0::0.0.0"
+      },
+      {
+        "domain": ".dogshower.co.kr",
+        "expiry": 1792133235,
+        "httpOnly": false,
+        "name": "ec_async_cache_used_deposit_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".dogshower.co.kr",
+        "expiry": 1792133235,
+        "httpOnly": false,
+        "name": "ec_async_cache_returned_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".dogshower.co.kr",
+        "expiry": 1792133235,
+        "httpOnly": false,
+        "name": "ec_async_cache_deposit_refund_wait_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".dogshower.co.kr",
+        "httpOnly": true,
+        "name": "ECSESSID",
+        "path": "/",
+        "sameSite": "None",
+        "secure": true,
+        "value": "q7m8k9amo2cjhq6ees3sqqbvp2s1rod7"
+      },
+      {
+        "domain": ".dogshower.co.kr",
+        "expiry": 1792133235,
+        "httpOnly": false,
+        "name": "ec_async_cache_member_total_deposit_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".dogshower.co.kr",
+        "expiry": 1825828606,
+        "httpOnly": false,
+        "name": "_tt_enable_cookie",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1"
+      },
+      {
+        "domain": ".dogshower.co.kr",
+        "expiry": 1826692636,
+        "httpOnly": false,
+        "name": "_ga_C9NSMG858T",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "GS2.1.s1792132606$o1$g1$t1792132636$j30$l0$h0"
+      },
+      {
+        "domain": ".dogshower.co.kr",
+        "expiry": 1792133235,
+        "httpOnly": false,
+        "name": "ec_async_cache_avail_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1000.00"
+      },
+      {
+        "domain": ".dogshower.co.kr",
+        "httpOnly": false,
+        "name": "siteSID",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "a0f6d552-d458-0a24-5ca8-eafcec92f092"
+      },
+      {
+        "domain": ".dogshower.co.kr",
+        "httpOnly": false,
+        "name": "analytics_session_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "analytics_session_id.dogbibi_1.DF2D692.1792132597691"
+      },
+      {
+        "domain": "dogshower.co.kr",
+        "expiry": 1792219006,
+        "httpOnly": false,
+        "name": "return_url",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "/"
+      },
+      {
+        "domain": ".dogshower.co.kr",
+        "expiry": 1823668636,
+        "httpOnly": false,
+        "name": "CVID_Y",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "CVID_Y.555d53565157596602.1792132597691"
+      },
+      {
+        "domain": ".dogshower.co.kr",
+        "expiry": 1826692606,
+        "httpOnly": false,
+        "name": "_ga",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "GA1.1.1702821519.1792132606"
+      },
+      {
+        "domain": ".dogshower.co.kr",
+        "expiry": 1825828606,
+        "httpOnly": false,
+        "name": "_ttp",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "01M51PTTJRT7DK6EFWFXHRPSTZ_.tt.2.1792132606552"
+      },
+      {
+        "domain": ".dogshower.co.kr",
+        "expiry": 1799908606,
+        "httpOnly": false,
+        "name": "_fbp",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "fb.2.1792132606684.319552018827651946"
+      },
+      {
+        "domain": "dogshower.co.kr",
+        "httpOnly": false,
+        "name": "ec_ipad_device",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "F"
+      },
+      {
+        "domain": ".dogshower.co.kr",
+        "expiry": 1792133235,
+        "httpOnly": false,
+        "name": "ec_async_cache_all_deposit_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": "dogshower.co.kr",
+        "expiry": 1826692636,
+        "httpOnly": false,
+        "name": "wcs_bt",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "ac446b512f8a:1792132636|s_291233775deb:1792132636"
+      },
+      {
+        "domain": ".dogshower.co.kr",
+        "expiry": 1792132935,
+        "httpOnly": false,
+        "name": "couponcount_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1"
+      },
+      {
+        "domain": ".dogshower.co.kr",
+        "expiry": 1792136235,
+        "httpOnly": false,
+        "name": "isviewtype",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "pc"
+      },
+      {
+        "domain": ".dogshower.co.kr",
+        "httpOnly": false,
+        "name": "atl_option",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1%2C1%2CH"
+      },
+      {
+        "domain": ".dogshower.co.kr",
+        "expiry": 1792133235,
+        "httpOnly": false,
+        "name": "ec_async_cache_used_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0.00"
+      },
+      {
+        "domain": ".dogshower.co.kr",
+        "httpOnly": false,
+        "name": "atl_epcheck",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1"
+      },
+      {
+        "domain": ".dogshower.co.kr",
+        "expiry": 1792136235,
+        "httpOnly": false,
+        "name": "basketprice_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "%26%238361%3B0%EC%9B%90"
+      },
+      {
+        "domain": ".dogshower.co.kr",
+        "expiry": 1792139834,
+        "httpOnly": false,
+        "name": "iscache",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "F"
+      },
+      {
+        "domain": ".dogshower.co.kr",
+        "expiry": 1792219035,
+        "httpOnly": false,
+        "name": "wishcount_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".dogshower.co.kr",
+        "expiry": 1792133235,
+        "httpOnly": false,
+        "name": "ec_async_cache_unavail_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".dogshower.co.kr",
+        "expiry": 1823668636,
+        "httpOnly": false,
+        "name": "siteLT",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "c1a5fca5-d2f4-ee15-a6ba-d92f1a02e9b7"
+      }
+    ]
+  },
+  "anseongjumul.cafe24.com": {
+    "ts": 1792137139.9009907,
+    "cookies": [
+      {
+        "domain": ".anseongjumul.cafe24.com",
+        "expiry": 1792144326,
+        "httpOnly": false,
+        "name": "ec_mem_level",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1"
+      },
+      {
+        "domain": ".anseongjumul.cafe24.com",
+        "httpOnly": false,
+        "name": "fb_external_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "ceea4856a126c8f0a242c874c0440dbe103471fa2d1da48e65ca6d814b7ef338"
+      },
+      {
+        "domain": ".anseongjumul.cafe24.com",
+        "expiry": 1792741899,
+        "httpOnly": false,
+        "name": "wish_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "72a26ea0cca97cad6f62ebf49a1c7369"
+      },
+      {
+        "domain": ".anseongjumul.cafe24.com",
+        "expiry": 1792140727,
+        "httpOnly": false,
+        "name": "basketprice_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0%EC%9B%90"
+      },
+      {
+        "domain": ".anseongjumul.cafe24.com",
+        "httpOnly": false,
+        "name": "CVID",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "CVID.505c4751575b5753465d415d6850.1792137099187"
+      },
+      {
+        "domain": ".anseongjumul.cafe24.com",
+        "expiry": 1823673136,
+        "httpOnly": false,
+        "name": "CVID_Y",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "CVID_Y.505c4751575b5753465d415d6850.1792137099187"
+      },
+      {
+        "domain": ".anseongjumul.cafe24.com",
+        "expiry": 1792137727,
+        "httpOnly": false,
+        "name": "ec_async_cache_deposit_refund_wait_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".anseongjumul.cafe24.com",
+        "expiry": 1792223527,
+        "httpOnly": false,
+        "name": "wishcount_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".anseongjumul.cafe24.com",
+        "expiry": 1792137727,
+        "httpOnly": false,
+        "name": "ec_async_cache_returned_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".anseongjumul.cafe24.com",
+        "httpOnly": true,
+        "name": "ECSESSID",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "45tfr5l0g381c2hbsgsitiq92krp5o01"
+      },
+      {
+        "domain": ".anseongjumul.cafe24.com",
+        "expiry": 1826697136,
+        "httpOnly": false,
+        "name": "_fwb",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "121FGmmUiDaTLlgE5IZbWZH.1792137099056"
+      },
+      {
+        "domain": ".anseongjumul.cafe24.com",
+        "httpOnly": true,
+        "name": "PHPSESSVERIFY",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "538668d49cff8f5bf1775b6f880560cd"
+      },
+      {
+        "domain": ".anseongjumul.cafe24.com",
+        "httpOnly": false,
+        "name": "fb_event_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "event_id.anseongjumul.1.I3E048ISBZJMCIPZVK3P6N1OFW63WFLAU"
+      },
+      {
+        "domain": ".anseongjumul.cafe24.com",
+        "expiry": 1823673136,
+        "httpOnly": false,
+        "name": "siteLT",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "04ec6223-9d7f-f48e-e3b2-f4d4857de407"
+      },
+      {
+        "domain": ".anseongjumul.cafe24.com",
+        "httpOnly": false,
+        "name": "atl_option",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1%2C1%2CH"
+      },
+      {
+        "domain": ".anseongjumul.cafe24.com",
+        "expiry": 1792137427,
+        "httpOnly": false,
+        "name": "couponcount_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".anseongjumul.cafe24.com",
+        "expiry": 1792144326,
+        "httpOnly": false,
+        "name": "iscache",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "F"
+      },
+      {
+        "domain": ".anseongjumul.cafe24.com",
+        "httpOnly": false,
+        "name": "atl_epcheck",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1"
+      },
+      {
+        "domain": ".anseongjumul.cafe24.com",
+        "httpOnly": false,
+        "name": "siteSID",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "515070e4-3247-fc78-568e-952efb30829a"
+      },
+      {
+        "domain": "anseongjumul.cafe24.com",
+        "httpOnly": false,
+        "name": "ec_ipad_device",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "F"
+      },
+      {
+        "domain": ".anseongjumul.cafe24.com",
+        "httpOnly": false,
+        "name": "EC_MOBILE_DEVICE",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".anseongjumul.cafe24.com",
+        "expiry": 1792137727,
+        "httpOnly": false,
+        "name": "ec_async_cache_avail_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "3000.00"
+      },
+      {
+        "domain": ".anseongjumul.cafe24.com",
+        "expiry": 1792137727,
+        "httpOnly": false,
+        "name": "ec_async_cache_used_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0.00"
+      },
+      {
+        "domain": "anseongjumul.cafe24.com",
+        "expiry": 1826697136,
+        "httpOnly": false,
+        "name": "wcs_bt",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "s_4d732d4516f4:1792137136"
+      },
+      {
+        "domain": ".anseongjumul.cafe24.com",
+        "expiry": 1792137727,
+        "httpOnly": false,
+        "name": "ec_async_cache_all_deposit_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".anseongjumul.cafe24.com",
+        "expiry": 1792137727,
+        "httpOnly": false,
+        "name": "ec_async_cache_unavail_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".anseongjumul.cafe24.com",
+        "expiry": 1792137727,
+        "httpOnly": false,
+        "name": "ec_async_cache_used_deposit_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".anseongjumul.cafe24.com",
+        "expiry": 1792140727,
+        "httpOnly": false,
+        "name": "isviewtype",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "pc"
+      },
+      {
+        "domain": ".anseongjumul.cafe24.com",
+        "expiry": 1792137727,
+        "httpOnly": false,
+        "name": "ec_async_cache_member_total_deposit_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".anseongjumul.cafe24.com",
+        "expiry": 1823673136,
+        "httpOnly": false,
+        "name": "analytics_longterm",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "analytics_longterm.anseongjumul_1.9EFA25E.1792137099187"
+      },
+      {
+        "domain": "anseongjumul.cafe24.com",
+        "expiry": 1792223507,
+        "httpOnly": false,
+        "name": "return_url",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "/"
+      },
+      {
+        "domain": ".anseongjumul.cafe24.com",
+        "httpOnly": false,
+        "name": "login_provider_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "%7B%22member_id%22%3A%22twseo1016901b%22%2C%22provider%22%3Anull%2C%22client_id%22%3Anull%7D"
+      },
+      {
+        "domain": ".anseongjumul.cafe24.com",
+        "expiry": 1792140727,
+        "httpOnly": false,
+        "name": "basketcount_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".anseongjumul.cafe24.com",
+        "httpOnly": false,
+        "name": "analytics_session_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "analytics_session_id.anseongjumul_1.9EFA25E.1792137099187"
+      }
+    ]
+  },
+  "2fyou.co.kr": {
+    "ts": 1792137356.848792,
+    "cookies": [
+      {
+        "domain": ".2fyou.co.kr",
+        "expiry": 1792140948,
+        "httpOnly": false,
+        "name": "basketcount_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".2fyou.co.kr",
+        "expiry": 1792137948,
+        "httpOnly": false,
+        "name": "ec_async_cache_used_deposit_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".2fyou.co.kr",
+        "httpOnly": false,
+        "name": "fb_external_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "92ead4b6c418bd91bb4bf93851e30707567dce06784db71294c0de3cf7141a8f"
+      },
+      {
+        "domain": ".2fyou.co.kr",
+        "httpOnly": false,
+        "name": "CVID",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "CVID.5559035757586f08.1792137320614"
+      },
+      {
+        "domain": ".2fyou.co.kr",
+        "expiry": 1792144547,
+        "httpOnly": false,
+        "name": "iscache",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "F"
+      },
+      {
+        "domain": ".2fyou.co.kr",
+        "httpOnly": false,
+        "name": "fb_event_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "event_id.dk7com.1.CSNFAIIFX79G0504SBPMJ9BVVJPCUTS5"
+      },
+      {
+        "domain": ".2fyou.co.kr",
+        "expiry": 1792137948,
+        "httpOnly": false,
+        "name": "ec_async_cache_returned_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".2fyou.co.kr",
+        "httpOnly": false,
+        "name": "atl_option",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1%2C1%2CH"
+      },
+      {
+        "domain": ".2fyou.co.kr",
+        "expiry": 1792137948,
+        "httpOnly": false,
+        "name": "ec_async_cache_all_deposit_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".2fyou.co.kr",
+        "expiry": 1792742129,
+        "httpOnly": false,
+        "name": "wish_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "115e77da8a2c632464f5b4df57477f94"
+      },
+      {
+        "domain": "2fyou.co.kr",
+        "expiry": 1826697353,
+        "httpOnly": false,
+        "name": "wcs_bt",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "s_3b3f2e514789:1792137353"
+      },
+      {
+        "domain": ".2fyou.co.kr",
+        "expiry": 1826697353,
+        "httpOnly": false,
+        "name": "_fwb",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "254KNT7jZu4KYAqokM7LD9P.1792137320509"
+      },
+      {
+        "domain": ".2fyou.co.kr",
+        "expiry": 1792137948,
+        "httpOnly": false,
+        "name": "ec_async_cache_avail_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "3000.00"
+      },
+      {
+        "domain": ".2fyou.co.kr",
+        "httpOnly": true,
+        "name": "ECSESSID",
+        "path": "/",
+        "sameSite": "None",
+        "secure": true,
+        "value": "a2ml8mktpmajjlgbj0at8ii3kgc2jvet"
+      },
+      {
+        "domain": ".2fyou.co.kr",
+        "expiry": 1792140948,
+        "httpOnly": false,
+        "name": "basketprice_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0%EC%9B%90"
+      },
+      {
+        "domain": ".2fyou.co.kr",
+        "expiry": 1792137653,
+        "httpOnly": false,
+        "name": "couponcount_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".2fyou.co.kr",
+        "httpOnly": false,
+        "name": "login_provider_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "%7B%22member_id%22%3A%22twseo1016d87e%22%2C%22provider%22%3Anull%2C%22client_id%22%3Anull%7D"
+      },
+      {
+        "domain": ".2fyou.co.kr",
+        "expiry": 1792137948,
+        "httpOnly": false,
+        "name": "ec_async_cache_unavail_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".2fyou.co.kr",
+        "expiry": 1792137948,
+        "httpOnly": false,
+        "name": "ec_async_cache_deposit_refund_wait_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".2fyou.co.kr",
+        "expiry": 1823673353,
+        "httpOnly": false,
+        "name": "CVID_Y",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "CVID_Y.5559035757586f08.1792137320614"
+      },
+      {
+        "domain": ".2fyou.co.kr",
+        "httpOnly": true,
+        "name": "PHPSESSVERIFY",
+        "path": "/",
+        "sameSite": "None",
+        "secure": true,
+        "value": "c48c59e0f3d443031802c48ecab2248d"
+      },
+      {
+        "domain": ".2fyou.co.kr",
+        "expiry": 1792137948,
+        "httpOnly": false,
+        "name": "ec_async_cache_member_total_deposit_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".2fyou.co.kr",
+        "expiry": 1792137948,
+        "httpOnly": false,
+        "name": "ec_async_cache_used_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0.00"
+      },
+      {
+        "domain": ".2fyou.co.kr",
+        "expiry": 1792223748,
+        "httpOnly": false,
+        "name": "wishcount_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".2fyou.co.kr",
+        "expiry": 1792140948,
+        "httpOnly": false,
+        "name": "isviewtype",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "pc"
+      },
+      {
+        "domain": ".2fyou.co.kr",
+        "httpOnly": false,
+        "name": "atl_epcheck",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1"
+      },
+      {
+        "domain": "2fyou.co.kr",
+        "httpOnly": false,
+        "name": "ec_ipad_device",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "F"
+      },
+      {
+        "domain": ".2fyou.co.kr",
+        "expiry": 1792742120,
+        "httpOnly": true,
+        "name": "org_phpsess_id_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "a2ml8mktpmajjlgbj0at8ii3kgc2jvet"
+      },
+      {
+        "domain": ".2fyou.co.kr",
+        "expiry": 1823673353,
+        "httpOnly": false,
+        "name": "siteLT",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "9e6ac8b9-e811-baae-a505-c30611add009"
+      },
+      {
+        "domain": ".2fyou.co.kr",
+        "expiry": 1823673353,
+        "httpOnly": false,
+        "name": "analytics_longterm",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "analytics_longterm.dk7com_1.93D00D1.1792137320614"
+      },
+      {
+        "domain": ".2fyou.co.kr",
+        "expiry": 1799913348,
+        "httpOnly": false,
+        "name": "_fbp",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "fb.2.1792137329263.763174882387895779"
+      },
+      {
+        "domain": "2fyou.co.kr",
+        "expiry": 1792223729,
+        "httpOnly": false,
+        "name": "return_url",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "/"
+      },
+      {
+        "domain": "2fyou.co.kr",
+        "expiry": 1823673348,
+        "httpOnly": false,
+        "name": "_dd_s_v2",
+        "path": "/",
+        "sameSite": "Strict",
+        "secure": true,
+        "value": "aid=6c027536-2d40-4748-bdad-3853c48a4943&id=95ad91df-5fc4-4c19-b5f2-6164a513602a&created=1792137329399&expire=1792138248850&c=0"
+      },
+      {
+        "domain": ".2fyou.co.kr",
+        "expiry": 1792144547,
+        "httpOnly": false,
+        "name": "ec_mem_level",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1"
+      },
+      {
+        "domain": ".2fyou.co.kr",
+        "httpOnly": false,
+        "name": "analytics_session_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "analytics_session_id.dk7com_1.93D00D1.1792137320614"
+      },
+      {
+        "domain": ".2fyou.co.kr",
+        "httpOnly": false,
+        "name": "siteSID",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "75ba0b13-75e3-b5cc-f10a-1767747eff93"
+      }
+    ]
+  },
+  "jerishoptoy.com": {
+    "ts": 1792140776.4455855,
+    "cookies": [
+      {
+        "domain": ".jerishoptoy.com",
+        "expiry": 1792141363,
+        "httpOnly": false,
+        "name": "ec_async_cache_used_deposit_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".jerishoptoy.com",
+        "httpOnly": false,
+        "name": "atl_option",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1%2C1%2CH"
+      },
+      {
+        "domain": ".jerishoptoy.com",
+        "expiry": 1792144363,
+        "httpOnly": false,
+        "name": "basketprice_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0%EC%9B%90"
+      },
+      {
+        "domain": ".jerishoptoy.com",
+        "httpOnly": false,
+        "name": "analytics_session_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "analytics_session_id.dldpfl0416_1.FD54F27.1792140750311"
+      },
+      {
+        "domain": ".jerishoptoy.com",
+        "expiry": 1823676773,
+        "httpOnly": false,
+        "name": "CVID_Y",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "CVID_Y.555e50445e59000d02066b00.1792140750311"
+      },
+      {
+        "domain": ".jerishoptoy.com",
+        "expiry": 1792147963,
+        "httpOnly": false,
+        "name": "iscache",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "F"
+      },
+      {
+        "domain": ".jerishoptoy.com",
+        "httpOnly": true,
+        "name": "PHPSESSVERIFY",
+        "path": "/",
+        "sameSite": "None",
+        "secure": true,
+        "value": "ed6753483c58699efec03a7a8e13099d"
+      },
+      {
+        "domain": ".jerishoptoy.com",
+        "expiry": 1792745549,
+        "httpOnly": true,
+        "name": "org_phpsess_id_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "2omvmt2ofs8ab34c8r6keoeqml8ophis"
+      },
+      {
+        "domain": ".jerishoptoy.com",
+        "httpOnly": false,
+        "name": "fb_external_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "4cd5d9263bc162fe4dbff781fbeb30280780ab0f711bb2a2667157de20ae37c1"
+      },
+      {
+        "domain": ".jerishoptoy.com",
+        "expiry": 1823676773,
+        "httpOnly": false,
+        "name": "siteLT",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "8e05f8e5-f9c1-adb9-a696-e4347066f1db"
+      },
+      {
+        "domain": ".jerishoptoy.com",
+        "expiry": 1792227163,
+        "httpOnly": false,
+        "name": "wishcount_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".jerishoptoy.com",
+        "expiry": 1792141373,
+        "httpOnly": false,
+        "name": "ec_async_cache_avail_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1000.00"
+      },
+      {
+        "domain": ".jerishoptoy.com",
+        "expiry": 1792144363,
+        "httpOnly": false,
+        "name": "basketcount_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".jerishoptoy.com",
+        "httpOnly": true,
+        "name": "ECSESSID",
+        "path": "/",
+        "sameSite": "None",
+        "secure": true,
+        "value": "2omvmt2ofs8ab34c8r6keoeqml8ophis"
+      },
+      {
+        "domain": ".jerishoptoy.com",
+        "expiry": 1792141363,
+        "httpOnly": false,
+        "name": "ec_async_cache_member_total_deposit_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".jerishoptoy.com",
+        "expiry": 1792141363,
+        "httpOnly": false,
+        "name": "ec_async_cache_deposit_refund_wait_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": "jerishoptoy.com",
+        "expiry": 1826700773,
+        "httpOnly": false,
+        "name": "wcs_bt",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "s_59d15a9afaa:1792140773"
+      },
+      {
+        "domain": ".jerishoptoy.com",
+        "expiry": 1823676773,
+        "httpOnly": false,
+        "name": "analytics_longterm",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "analytics_longterm.dldpfl0416_1.FD54F27.1792140750311"
+      },
+      {
+        "domain": ".jerishoptoy.com",
+        "httpOnly": false,
+        "name": "login_provider_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "%7B%22member_id%22%3A%22twseo10164e24%22%2C%22provider%22%3Anull%2C%22client_id%22%3Anull%7D"
+      },
+      {
+        "domain": ".jerishoptoy.com",
+        "expiry": 1792141373,
+        "httpOnly": false,
+        "name": "ec_async_cache_unavail_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".jerishoptoy.com",
+        "expiry": 1792141363,
+        "httpOnly": false,
+        "name": "ec_async_cache_all_deposit_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".jerishoptoy.com",
+        "expiry": 1792144363,
+        "httpOnly": false,
+        "name": "isviewtype",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "pc"
+      },
+      {
+        "domain": ".jerishoptoy.com",
+        "httpOnly": false,
+        "name": "siteSID",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "d4aec135-6716-489e-8c10-837e974a1f39"
+      },
+      {
+        "domain": ".jerishoptoy.com",
+        "expiry": 1792147963,
+        "httpOnly": false,
+        "name": "ec_mem_level",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1"
+      },
+      {
+        "domain": ".jerishoptoy.com",
+        "expiry": 1792745558,
+        "httpOnly": false,
+        "name": "wish_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "09ac8028c868e3a45e2f9c9e0f96aa24"
+      },
+      {
+        "domain": ".jerishoptoy.com",
+        "httpOnly": false,
+        "name": "atl_epcheck",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1"
+      },
+      {
+        "domain": ".jerishoptoy.com",
+        "expiry": 1826700773,
+        "httpOnly": false,
+        "name": "_fwb",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "69MIWFdlhtPJgVnVb8L0O2.1792140750083"
+      },
+      {
+        "domain": "jerishoptoy.com",
+        "httpOnly": false,
+        "name": "ec_ipad_device",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "F"
+      },
+      {
+        "domain": ".jerishoptoy.com",
+        "httpOnly": false,
+        "name": "fb_event_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "event_id.dldpfl0416.1.3UAN1SU7VL58QNBA3L5RSFMX2WO9TNRJ"
+      },
+      {
+        "domain": ".jerishoptoy.com",
+        "expiry": 1792141373,
+        "httpOnly": false,
+        "name": "ec_async_cache_used_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0.00"
+      },
+      {
+        "domain": ".jerishoptoy.com",
+        "expiry": 1792141363,
+        "httpOnly": false,
+        "name": "ec_async_cache_returned_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".jerishoptoy.com",
+        "httpOnly": false,
+        "name": "CVID",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "CVID.555e50445e59000d02066b00.1792140750311"
+      },
+      {
+        "domain": ".jerishoptoy.com",
+        "expiry": 1792141063,
+        "httpOnly": false,
+        "name": "couponcount_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": "jerishoptoy.com",
+        "expiry": 1792227158,
+        "httpOnly": false,
+        "name": "return_url",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "/"
+      }
+    ]
+  },
+  "barcode-bank.co.kr": {
+    "ts": 1792144289.0925584,
+    "cookies": [
+      {
+        "domain": ".barcode-bank.co.kr",
+        "expiry": 1792147880,
+        "httpOnly": false,
+        "name": "basketcount_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".barcode-bank.co.kr",
+        "expiry": 1792144880,
+        "httpOnly": false,
+        "name": "ec_async_cache_returned_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": "barcode-bank.co.kr",
+        "httpOnly": false,
+        "name": "ec_ipad_device",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "F"
+      },
+      {
+        "domain": ".barcode-bank.co.kr",
+        "httpOnly": false,
+        "name": "CVID",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "CVID.544258414b0700080a6f05.1792144251650"
+      },
+      {
+        "domain": ".barcode-bank.co.kr",
+        "expiry": 1792147880,
+        "httpOnly": false,
+        "name": "isviewtype",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "pc"
+      },
+      {
+        "domain": ".barcode-bank.co.kr",
+        "expiry": 1792144880,
+        "httpOnly": false,
+        "name": "ec_async_cache_used_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0.00"
+      },
+      {
+        "domain": ".barcode-bank.co.kr",
+        "httpOnly": false,
+        "name": "fb_external_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "3742c8ab92b2729d5f4f269fe5f46547e078947e80ebe7acdf7a8390c478326a"
+      },
+      {
+        "domain": ".barcode-bank.co.kr",
+        "expiry": 1792151479,
+        "httpOnly": false,
+        "name": "iscache",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "F"
+      },
+      {
+        "domain": ".barcode-bank.co.kr",
+        "expiry": 1826704285,
+        "httpOnly": false,
+        "name": "_fwb",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "49lrGEsYJ45DP22v6QPJw2.1792144251455"
+      },
+      {
+        "domain": ".barcode-bank.co.kr",
+        "expiry": 1792749079,
+        "httpOnly": false,
+        "name": "wish_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "4c2d52e045496b88658207371bdcfb70"
+      },
+      {
+        "domain": ".barcode-bank.co.kr",
+        "expiry": 1792144880,
+        "httpOnly": false,
+        "name": "ec_async_cache_avail_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "100.00"
+      },
+      {
+        "domain": ".barcode-bank.co.kr",
+        "expiry": 1792144880,
+        "httpOnly": false,
+        "name": "ec_async_cache_unavail_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": "barcode-bank.co.kr",
+        "expiry": 1826704285,
+        "httpOnly": false,
+        "name": "wcs_bt",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "unknown:1792144285|43f70c087b8868:1792144280"
+      },
+      {
+        "domain": ".barcode-bank.co.kr",
+        "expiry": 1792230680,
+        "httpOnly": false,
+        "name": "wishcount_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".barcode-bank.co.kr",
+        "expiry": 1792144880,
+        "httpOnly": false,
+        "name": "ec_async_cache_deposit_refund_wait_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".barcode-bank.co.kr",
+        "httpOnly": true,
+        "name": "ECSESSID",
+        "path": "/",
+        "sameSite": "None",
+        "secure": true,
+        "value": "trqi7gfqvqbmgsh6a73fvsod0l3tfne4"
+      },
+      {
+        "domain": ".barcode-bank.co.kr",
+        "expiry": 1826704285,
+        "httpOnly": false,
+        "name": "_ga_67254BPG9J",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "GS2.1.s1792144251$o1$g1$t1792144285$j26$l0$h0"
+      },
+      {
+        "domain": ".barcode-bank.co.kr",
+        "expiry": 1826704251,
+        "httpOnly": false,
+        "name": "_ga",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "GA1.1.1210405977.1792144252"
+      },
+      {
+        "domain": ".barcode-bank.co.kr",
+        "expiry": 1792144580,
+        "httpOnly": false,
+        "name": "couponcount_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": "barcode-bank.co.kr",
+        "expiry": 1792230660,
+        "httpOnly": false,
+        "name": "return_url",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "/"
+      },
+      {
+        "domain": ".barcode-bank.co.kr",
+        "httpOnly": false,
+        "name": "login_provider_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "%7B%22member_id%22%3A%22twseo1016719c%22%2C%22provider%22%3Anull%2C%22client_id%22%3Anull%7D"
+      },
+      {
+        "domain": ".barcode-bank.co.kr",
+        "httpOnly": false,
+        "name": "siteSID",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "fc253341-dd5a-0682-ec91-ae81d6266f70"
+      },
+      {
+        "domain": ".barcode-bank.co.kr",
+        "expiry": 1823680285,
+        "httpOnly": false,
+        "name": "siteLT",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "24273f42-c716-9c55-8b73-9fe7b7cef3de"
+      },
+      {
+        "domain": ".barcode-bank.co.kr",
+        "expiry": 1792144880,
+        "httpOnly": false,
+        "name": "ec_async_cache_member_total_deposit_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".barcode-bank.co.kr",
+        "expiry": 1792151479,
+        "httpOnly": false,
+        "name": "ec_mem_level",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1"
+      },
+      {
+        "domain": ".barcode-bank.co.kr",
+        "httpOnly": false,
+        "name": "analytics_session_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "analytics_session_id.eplus2019_1.9698AE0.1792144251650"
+      },
+      {
+        "domain": ".barcode-bank.co.kr",
+        "expiry": 1823680285,
+        "httpOnly": false,
+        "name": "analytics_longterm",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "analytics_longterm.eplus2019_1.9698AE0.1792144251650"
+      },
+      {
+        "domain": ".barcode-bank.co.kr",
+        "httpOnly": false,
+        "name": "fb_event_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "event_id.eplus2019.1.A5BO45THZUBPBXOWUKSROYKWBSG6DSX"
+      },
+      {
+        "domain": ".barcode-bank.co.kr",
+        "expiry": 1792144880,
+        "httpOnly": false,
+        "name": "ec_async_cache_used_deposit_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".barcode-bank.co.kr",
+        "expiry": 1799920252,
+        "httpOnly": false,
+        "name": "_gcl_au",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1.1.169758654.1792144252"
+      },
+      {
+        "domain": ".barcode-bank.co.kr",
+        "httpOnly": true,
+        "name": "PHPSESSVERIFY",
+        "path": "/",
+        "sameSite": "None",
+        "secure": true,
+        "value": "6b9549e1be2fb0462c81465c88dc8793"
+      },
+      {
+        "domain": ".barcode-bank.co.kr",
+        "expiry": 1792144880,
+        "httpOnly": false,
+        "name": "ec_async_cache_all_deposit_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".barcode-bank.co.kr",
+        "expiry": 1823680285,
+        "httpOnly": false,
+        "name": "CVID_Y",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "CVID_Y.544258414b0700080a6f05.1792144251650"
+      }
+    ]
+  },
+  "49mart.com": {
+    "ts": 1792146099.0504477,
+    "cookies": [
+      {
+        "domain": ".49mart.com",
+        "expiry": 1823682095,
+        "httpOnly": false,
+        "name": "CVID_Y",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "CVID_Y.455c435e5c07020e0a6f05.1792146056127"
+      },
+      {
+        "domain": "49mart.com",
+        "expiry": 1792232464,
+        "httpOnly": false,
+        "name": "return_url",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "/"
+      },
+      {
+        "domain": ".49mart.com",
+        "httpOnly": false,
+        "name": "atl_epcheck",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1"
+      },
+      {
+        "domain": ".49mart.com",
+        "httpOnly": true,
+        "name": "ECSESSID",
+        "path": "/",
+        "sameSite": "None",
+        "secure": true,
+        "value": "336csvj0rm8c8msofujdtc1l51mpr9h7"
+      },
+      {
+        "domain": ".49mart.com",
+        "httpOnly": true,
+        "name": "BID",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "BID8acc5b36b5357068cf7791b115ce4063"
+      },
+      {
+        "domain": ".49mart.com",
+        "expiry": 1826706095,
+        "httpOnly": false,
+        "name": "_fwb",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "156KVOCba9E0PK4INFzDXTv.1792146056020"
+      },
+      {
+        "domain": ".49mart.com",
+        "expiry": 1799922065,
+        "httpOnly": false,
+        "name": "_fbp",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "fb.1.1792146065282.55105749313463388"
+      },
+      {
+        "domain": ".49mart.com",
+        "httpOnly": false,
+        "name": "atl_option",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1%2C1%2CH"
+      },
+      {
+        "domain": ".49mart.com",
+        "expiry": 1792153295,
+        "httpOnly": false,
+        "name": "iscache",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "F"
+      },
+      {
+        "domain": ".49mart.com",
+        "httpOnly": false,
+        "name": "siteSID",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0800d8cb-490b-2ccd-8593-ad569d238812"
+      },
+      {
+        "domain": ".49mart.com",
+        "httpOnly": false,
+        "name": "analytics_session_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "analytics_session_id.tnwjd2279_1.3E4D945.1792146056127"
+      },
+      {
+        "domain": ".49mart.com",
+        "expiry": 1823682095,
+        "httpOnly": false,
+        "name": "analytics_longterm",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "analytics_longterm.tnwjd2279_1.3E4D945.1792146056127"
+      },
+      {
+        "domain": ".49mart.com",
+        "httpOnly": false,
+        "name": "CVID",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "CVID.455c435e5c07020e0a6f05.1792146056127"
+      },
+      {
+        "domain": ".49mart.com",
+        "expiry": 1799922065,
+        "httpOnly": false,
+        "name": "_gcl_au",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1.1.24373897.1792146065"
+      },
+      {
+        "domain": ".49mart.com",
+        "expiry": 1826706095,
+        "httpOnly": false,
+        "name": "_ga",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "GA1.1.1100628884.1792146065"
+      },
+      {
+        "domain": ".49mart.com",
+        "expiry": 1792153295,
+        "httpOnly": false,
+        "name": "ec_mem_level",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1"
+      },
+      {
+        "domain": ".49mart.com",
+        "httpOnly": true,
+        "name": "PHPSESSVERIFY",
+        "path": "/",
+        "sameSite": "None",
+        "secure": true,
+        "value": "5452d0b52a53bff0a345a20a1f2f8ded"
+      },
+      {
+        "domain": ".49mart.com",
+        "expiry": 1792750856,
+        "httpOnly": false,
+        "name": "wish_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "a3935024f56174deb03e80e5e1229288"
+      },
+      {
+        "domain": ".49mart.com",
+        "httpOnly": false,
+        "name": "fb_external_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "d43e61892eb2193e7ac77ec06fe93ac55e1937358cb45bab3dd5f3714af77cde"
+      },
+      {
+        "domain": "49mart.com",
+        "expiry": 1826706095,
+        "httpOnly": false,
+        "name": "wcs_bt",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "s_30533d50b514:1792146095"
+      },
+      {
+        "domain": ".49mart.com",
+        "expiry": 1792149695,
+        "httpOnly": false,
+        "name": "basketcount_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".49mart.com",
+        "httpOnly": false,
+        "name": "fb_event_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "event_id.tnwjd2279.1.E5OOM8AZPJ7XMRLDEAWQQLJSICLCZQZG"
+      },
+      {
+        "domain": "49mart.com",
+        "httpOnly": false,
+        "name": "ec_ipad_device",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "F"
+      },
+      {
+        "domain": ".49mart.com",
+        "expiry": 1826706095,
+        "httpOnly": false,
+        "name": "_ga_HZ1HTZRVEM",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "GS2.1.s1792146065$o1$g1$t1792146095$j30$l0$h0"
+      },
+      {
+        "domain": ".49mart.com",
+        "expiry": 1823682095,
+        "httpOnly": false,
+        "name": "siteLT",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "6946ad84-9693-0b1f-b917-fbdff70c9431"
+      },
+      {
+        "domain": ".49mart.com",
+        "httpOnly": false,
+        "name": "login_provider_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "%7B%22member_id%22%3A%22twseo1016dce2%22%2C%22provider%22%3Anull%2C%22client_id%22%3Anull%7D"
+      },
+      {
+        "domain": ".49mart.com",
+        "expiry": 1792149665,
+        "httpOnly": false,
+        "name": "isviewtype",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "pc"
+      }
+    ]
+  },
+  "bonohousemall.co.kr": {
+    "ts": 1792148322.7722404,
+    "cookies": [
+      {
+        "domain": ".bonohousemall.co.kr",
+        "httpOnly": false,
+        "name": "analytics_session_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "analytics_session_id.bonoliving_1.9781891.1792148304532"
+      },
+      {
+        "domain": ".bonohousemall.co.kr",
+        "httpOnly": true,
+        "name": "ECSESSID",
+        "path": "/",
+        "sameSite": "None",
+        "secure": true,
+        "value": "o2e0u4su7e71c27dtrkpguq9upe00cha"
+      },
+      {
+        "domain": ".bonohousemall.co.kr",
+        "httpOnly": false,
+        "name": "atl_option",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0%2C0%2CE"
+      },
+      {
+        "domain": ".bonohousemall.co.kr",
+        "expiry": 1792151922,
+        "httpOnly": false,
+        "name": "isviewtype",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "pc"
+      },
+      {
+        "domain": ".bonohousemall.co.kr",
+        "expiry": 1792148914,
+        "httpOnly": false,
+        "name": "ec_async_cache_used_deposit_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".bonohousemall.co.kr",
+        "expiry": 1792234714,
+        "httpOnly": false,
+        "name": "wishcount_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".bonohousemall.co.kr",
+        "expiry": 1826708322,
+        "httpOnly": false,
+        "name": "_ga_CHN4G7H39T",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "GS2.1.s1792148313$o1$g1$t1792148322$j51$l0$h0"
+      },
+      {
+        "domain": "bonohousemall.co.kr",
+        "expiry": 1792234712,
+        "httpOnly": false,
+        "name": "return_url",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "/"
+      },
+      {
+        "domain": ".bonohousemall.co.kr",
+        "expiry": 1792148914,
+        "httpOnly": false,
+        "name": "ec_async_cache_all_deposit_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".bonohousemall.co.kr",
+        "expiry": 1792753113,
+        "httpOnly": false,
+        "name": "wish_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "115e83ed516327ff6ea3ed9c5ba2bafb"
+      },
+      {
+        "domain": ".bonohousemall.co.kr",
+        "httpOnly": false,
+        "name": "login_provider_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "%7B%22member_id%22%3A%22twseo1016dfd7%22%2C%22provider%22%3Anull%2C%22client_id%22%3Anull%7D"
+      },
+      {
+        "domain": ".bonohousemall.co.kr",
+        "httpOnly": true,
+        "name": "BID",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "BID8b21a2a8bba99525e9767a3e5b01782b"
+      },
+      {
+        "domain": ".bonohousemall.co.kr",
+        "expiry": 1792148914,
+        "httpOnly": false,
+        "name": "ec_async_cache_returned_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": "bonohousemall.co.kr",
+        "httpOnly": false,
+        "name": "mobile_more_current_page_10",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1"
+      },
+      {
+        "domain": ".bonohousemall.co.kr",
+        "expiry": 1792148914,
+        "httpOnly": false,
+        "name": "ec_async_cache_unavail_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".bonohousemall.co.kr",
+        "expiry": 1792148614,
+        "httpOnly": false,
+        "name": "couponcount_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1"
+      },
+      {
+        "domain": ".bonohousemall.co.kr",
+        "httpOnly": false,
+        "name": "siteSID",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "05802f54-dfc6-f31b-59ab-4711f2e23289"
+      },
+      {
+        "domain": ".bonohousemall.co.kr",
+        "httpOnly": false,
+        "name": "CVID",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "CVID.535d5a5b545c46505d576b00.1792148304532"
+      },
+      {
+        "domain": ".bonohousemall.co.kr",
+        "expiry": 1792155513,
+        "httpOnly": false,
+        "name": "ec_mem_level",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1"
+      },
+      {
+        "domain": ".bonohousemall.co.kr",
+        "expiry": 1826708313,
+        "httpOnly": false,
+        "name": "_ga",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "GA1.1.712795199.1792148313"
+      },
+      {
+        "domain": ".bonohousemall.co.kr",
+        "expiry": 1823684322,
+        "httpOnly": false,
+        "name": "siteLT",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "12c84353-e0ed-f043-2551-abe54ad741d5"
+      },
+      {
+        "domain": ".bonohousemall.co.kr",
+        "httpOnly": false,
+        "name": "fb_external_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "4bde384459773eefe7feabfd13299d8876fb84ca61251e265f948349bcbe74b3"
+      },
+      {
+        "domain": ".bonohousemall.co.kr",
+        "expiry": 1792148914,
+        "httpOnly": false,
+        "name": "ec_async_cache_deposit_refund_wait_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".bonohousemall.co.kr",
+        "expiry": 1792155513,
+        "httpOnly": false,
+        "name": "iscache",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "F"
+      },
+      {
+        "domain": "bonohousemall.co.kr",
+        "httpOnly": false,
+        "name": "ec_ipad_device",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "F"
+      },
+      {
+        "domain": ".bonohousemall.co.kr",
+        "httpOnly": true,
+        "name": "PHPSESSVERIFY",
+        "path": "/",
+        "sameSite": "None",
+        "secure": true,
+        "value": "75cd4660a419cda67991d6c84fb5aac1"
+      },
+      {
+        "domain": "bonohousemall.co.kr",
+        "httpOnly": false,
+        "name": "mobile_more_current_page_2",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1"
+      },
+      {
+        "domain": ".bonohousemall.co.kr",
+        "expiry": 1823684322,
+        "httpOnly": false,
+        "name": "analytics_longterm",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "analytics_longterm.bonoliving_1.9781891.1792148304532"
+      },
+      {
+        "domain": ".bonohousemall.co.kr",
+        "expiry": 1792151914,
+        "httpOnly": false,
+        "name": "basketprice_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0%EC%9B%90"
+      },
+      {
+        "domain": ".bonohousemall.co.kr",
+        "expiry": 1792148914,
+        "httpOnly": false,
+        "name": "ec_async_cache_avail_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0.00"
+      },
+      {
+        "domain": ".bonohousemall.co.kr",
+        "expiry": 1792148914,
+        "httpOnly": false,
+        "name": "ec_async_cache_used_mileage_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0.00"
+      },
+      {
+        "domain": ".bonohousemall.co.kr",
+        "httpOnly": false,
+        "name": "atl_epcheck",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "1"
+      },
+      {
+        "domain": ".bonohousemall.co.kr",
+        "expiry": 1823684322,
+        "httpOnly": false,
+        "name": "CVID_Y",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "CVID_Y.535d5a5b545c46505d576b00.1792148304532"
+      },
+      {
+        "domain": ".bonohousemall.co.kr",
+        "httpOnly": false,
+        "name": "fb_event_id",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "event_id.bonoliving.1.HBCXFCVIRNM33GQ8SRJXK5FDYMGO4FLB5"
+      },
+      {
+        "domain": ".bonohousemall.co.kr",
+        "expiry": 1792151914,
+        "httpOnly": false,
+        "name": "basketcount_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      },
+      {
+        "domain": ".bonohousemall.co.kr",
+        "expiry": 1792148914,
+        "httpOnly": false,
+        "name": "ec_async_cache_member_total_deposit_1",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": false,
+        "value": "0"
+      }
+    ]
+  }
+}

@@ -34,24 +34,35 @@ class ScheduledUnattendedQueueTest(unittest.TestCase):
         tree=ast.parse(Path(__file__).with_name('app.py').read_text(encoding='utf-8'))
         fn=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='_publish_combo_to_site')
         lock=threading.Lock();queued=[];started=[]
+        from types import SimpleNamespace
+        import sys
+        from unittest.mock import patch
+        response=SimpleNamespace(headers={'Content-Type':'text/html; charset=utf-8'},
+                                 content=b'',raise_for_status=lambda:None)
+        requests=[]
         site={'id':'target','unattended_audit':{'state':'ready'}}
         env={'load_sites':lambda:[site],'is_publishable':lambda s:True,'_site_lock':lambda sid:lock,
              '_manual_queue_pending':lambda sid:False,'under_daily_limit':lambda *a:True,
              'under_min_interval':lambda *a:(True,0),'_fix_kw_dong':lambda kw:kw,
              '_global_gen_sem':threading.Lock,'generate_article':lambda *a,**k:('<p>body</p>','title'),
              'enqueue':lambda *a:(queued.append(a) or (1,0)),'wk_active':False,
-             'start_workers':lambda n:started.append(n)}
+             'start_workers':lambda n:started.append(n),
+             '_signup_origin':lambda value:'https://example.com'}
         exec(compile(ast.Module(body=[fn],type_ignores=[]),'scheduled-test','exec'),env)
-        env['_publish_combo_to_site'](site,{},'room','room-id',{'publish_loop_enabled':True,'workers':1})
+        fake_requests=SimpleNamespace(get=lambda *args,**kwargs:(requests.append((args,kwargs)) or response))
+        with patch.dict(sys.modules,requests=fake_requests):
+            env['_publish_combo_to_site'](site,{},'room','room-id',{'publish_loop_enabled':True,'workers':1})
         self.assertEqual(len(queued),1)
         self.assertEqual(queued[0][3]['queue_source'],'scheduled_unattended')
         self.assertEqual(started,[1])
+        self.assertEqual(len(requests),1)
+        self.assertEqual(requests[0][1]['params'],{'bo_table':''})
         self.assertFalse(lock.locked())
 
 
 class PcQueueLeaseTest(unittest.TestCase):
     def environment(self):
-        import copy,queue,time,secrets
+        import copy,queue,time,secrets,tempfile
         from types import SimpleNamespace
         tree=ast.parse(Path(__file__).with_name('app.py').read_text(encoding='utf-8'))
         names={'_pc_queue_authorized','api_pc_queue_claim','api_pc_queue_start','api_pc_queue_report'}
@@ -59,8 +70,10 @@ class PcQueueLeaseTest(unittest.TestCase):
         for fn in functions:fn.decorator_list=[]
         store={};history=[];removed=[];finalized=[];payload={}
         q=queue.Queue()
+        data_dir=tempfile.TemporaryDirectory()
+        self.addCleanup(data_dir.cleanup)
         site={'id':'s','site_url':'https://example.com','bo_table':'free','platform':'gnuboard','mb_pass':'private','permission':True,'unattended_audit':{'state':'ready'}}
-        env={'threading':threading,'time':time,'secrets':secrets,'queue':queue,'post_queue':q,'DATA_DIR':Path('/fake'),
+        env={'threading':threading,'time':time,'secrets':secrets,'queue':queue,'post_queue':q,'DATA_DIR':Path(data_dir.name),
              '_server_queue_site':lambda s:False,'_PC_QUEUE_LOCK':threading.RLock(),'_PC_SITE_LOCKS':{},'jsonify':lambda x:x,
              '_pc_nodes_enabled':lambda:True,
              'request':SimpleNamespace(get_json=lambda **k:payload),'load_sites':lambda:[site],
@@ -108,3 +121,30 @@ class PcQueueLeaseTest(unittest.TestCase):
         self.assertEqual(len(finalized),1)
         self.assertTrue(h[-1]['verification_receipt']['body_match'])
         self.assertEqual(removed,['job'])
+
+
+class ServerOnlyConfigTest(unittest.TestCase):
+    def test_server_only_overrides_persisted_pc_node_settings(self):
+        tree=ast.parse(Path(__file__).with_name('app.py').read_text(encoding='utf-8'))
+        fn=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='_enforce_server_only_config')
+        env={}
+        exec(compile(ast.Module(body=[fn],type_ignores=[]),'server-only-test','exec'),env)
+        config={'server_only_mode':False,'node_publish_all':True}
+        self.assertTrue(env['_enforce_server_only_config'](config))
+        self.assertEqual(config,{'server_only_mode':True,'node_publish_all':False})
+        self.assertFalse(env['_enforce_server_only_config'](config))
+
+    def test_pc_result_endpoints_reject_reports_in_server_only_mode(self):
+        names={'api_pc_queue_audit','api_pipeline_node_beat','api_pipeline_report',
+               'api_pc_queue_report','api_pipeline_report_site'}
+        tree=ast.parse(Path(__file__).with_name('app.py').read_text(encoding='utf-8'))
+        functions=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in names]
+        self.assertEqual({fn.name for fn in functions},names)
+        for fn in functions:
+            fn.decorator_list=[]
+        env={'_pc_nodes_enabled':lambda:False,'jsonify':lambda payload:payload}
+        exec(compile(ast.Module(body=functions,type_ignores=[]),'server-only-api-test','exec'),env)
+        for name in names:
+            with self.subTest(endpoint=name):
+                response=env[name]()
+                self.assertEqual(response[1],403)
