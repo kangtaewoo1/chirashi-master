@@ -409,8 +409,8 @@ class ServerQueueOnlyTest(unittest.TestCase):
 
     def test_explicit_approval_endpoint_saves_o_and_x_for_sites_and_candidates(self):
         tree=ast.parse(Path(__file__).with_name('app.py').read_text(encoding='utf-8'))
-        fn=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='api_posting_authorization')
-        fn.decorator_list=[]
+        fns=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in ('_set_posting_authorization','api_posting_authorization')]
+        for f in fns: f.decorator_list=[]
         import threading
         from datetime import datetime
         from types import SimpleNamespace
@@ -424,12 +424,34 @@ class ServerQueueOnlyTest(unittest.TestCase):
                  'load_sites':lambda:[item],'load_cands':lambda:[item],
                  'save_sites':lambda items:None,'save_cands':lambda items:None,
                  '_kst_now':datetime.now,'add_log':lambda *a:None,'jsonify':lambda value:value}
-            exec(compile(ast.Module(body=[fn],type_ignores=[]),'authorization-test','exec'),env)
+            exec(compile(ast.Module(body=fns,type_ignores=[]),'authorization-test','exec'),env)
             self.assertTrue(env['api_posting_authorization']()['approved'])
             self.assertTrue(item['posting_authorized'])
             env['request'].get_json=lambda **kw:{'kind':kind,'id':'item-1','approved':False}
             self.assertFalse(env['api_posting_authorization']()['approved'])
             self.assertFalse(item['posting_authorized'])
+
+    def test_bulk_checkbox_approval_updates_sites_and_candidates(self):
+        tree=ast.parse(Path(__file__).with_name('app.py').read_text(encoding='utf-8'))
+        fns=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in ('_set_posting_authorization','api_posting_authorization_bulk')]
+        for f in fns: f.decorator_list=[]
+        import threading
+        from datetime import datetime
+        from types import SimpleNamespace
+        sites=[{'id':'s1'},{'id':'s2'}]; cands=[{'id':'c1','claimed_by':'node','claim_expire':9}]
+        body={'items':[{'kind':'site','id':'s1'},{'kind':'cand','id':'c1'},{'kind':'site','id':'missing'}],'approved':True}
+        env={'request':SimpleNamespace(get_json=lambda **kw:body),
+             'POST_LOCK':threading.RLock(),'_cand_lock':threading.RLock(),
+             'load_sites':lambda:sites,'load_cands':lambda:cands,
+             'save_sites':lambda items:None,'save_cands':lambda items:None,
+             '_kst_now':datetime.now,'add_log':lambda *a:None,'jsonify':lambda value:value}
+        exec(compile(ast.Module(body=fns,type_ignores=[]),'bulk-authorization-test','exec'),env)
+        self.assertEqual(env['api_posting_authorization_bulk']()['changed'],2)
+        self.assertTrue(sites[0]['posting_authorized']); self.assertNotIn('posting_authorized',sites[1])
+        self.assertTrue(cands[0]['posting_authorized'])
+        body['approved']=False
+        env['api_posting_authorization_bulk']()
+        self.assertFalse(cands[0]['posting_authorized']); self.assertEqual(cands[0]['claimed_by'],'')
 
 
 class ExplicitAuditHoldTest(unittest.TestCase):

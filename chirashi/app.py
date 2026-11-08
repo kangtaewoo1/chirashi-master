@@ -12894,6 +12894,8 @@ def api_site_board():
     rows.sort(key=lambda r:(order.get(r['state'],9), -int(r.get('score',0) or 0)))
     counts={}
     for r in rows: counts[r['state']]=counts.get(r['state'],0)+1
+    # 게시 허가 체크 대기(탈락 제외·미승인) — 대표님 2026-11-08 '수집되면 체크할 수 있게 목록'
+    counts['unapproved']=sum(1 for r in rows if r['state']!='rejected' and not r.get('posting_authorized'))
     st=load_json(DISCO_FILE,{})
     return jsonify({'ok':True,'rows':rows,'counts':counts,'total':len(rows),
                     'today_queries':st.get('queries',0),'today_found':st.get('found',0)})
@@ -13697,6 +13699,39 @@ def api_sites_permission():
         save_sites(sites)
     return jsonify({'ok':True,'changed':n})
 
+def _set_posting_authorization(pairs,approved):
+    """(kind,id) 목록의 사이트 관리자 게시 허가(체크박스) 상태를 저장. 실제로 찾은 (kind,id) 목록 반환.
+       ★대표님 지시 2026-11-08: 수집된 사이트는 목록에서 체크박스 체크 = 관리자 게시 허가 확인 완료.
+         체크된 사이트만 이후 검수·가입·발행이 진행된다(체크 해제 시 진행 중 claim도 회수)."""
+    now=_kst_now().strftime('%Y-%m-%d %H:%M')
+    site_ids={i for k,i in pairs if k=='site'}; cand_ids={i for k,i in pairs if k=='cand'}
+    found=[]
+    if site_ids:
+        with POST_LOCK:
+            items=load_sites()
+            for item in items:
+                iid=str(item.get('id') or '')
+                if iid not in site_ids: continue
+                item['posting_authorized']=approved
+                item['posting_authorization_updated_at']=now
+                if not approved:
+                    item['pc_claim_by']=''; item['pc_claim_expire']=0
+                found.append(('site',iid))
+            if any(k=='site' for k,_ in found): save_sites(items)
+    if cand_ids:
+        with _cand_lock:
+            items=load_cands()
+            for item in items:
+                iid=str(item.get('id') or '')
+                if iid not in cand_ids: continue
+                item['posting_authorized']=approved
+                item['posting_authorization_updated_at']=now
+                if not approved:
+                    item['claimed_by']=''; item['claim_expire']=0
+                found.append(('cand',iid))
+            if any(k=='cand' for k,_ in found): save_cands(items)
+    return found
+
 @app.route('/api/posting-authorization',methods=['POST'])
 def api_posting_authorization():
     d=request.get_json(silent=True) or {}
@@ -13705,29 +13740,28 @@ def api_posting_authorization():
     approved=d.get('approved')
     if kind not in ('site','cand') or not item_id or not isinstance(approved,bool):
         return jsonify({'ok':False,'error':'kind, id, approved 값이 필요합니다'}),400
-    now=_kst_now().strftime('%Y-%m-%d %H:%M')
-    if kind=='site':
-        with POST_LOCK:
-            items=load_sites()
-            item=next((x for x in items if str(x.get('id') or '')==item_id),None)
-            if item is None: return jsonify({'ok':False,'error':'사이트 없음'}),404
-            item['posting_authorized']=approved
-            item['posting_authorization_updated_at']=now
-            if not approved:
-                item['pc_claim_by']=''; item['pc_claim_expire']=0
-            save_sites(items)
-    else:
-        with _cand_lock:
-            items=load_cands()
-            item=next((x for x in items if str(x.get('id') or '')==item_id),None)
-            if item is None: return jsonify({'ok':False,'error':'후보 없음'}),404
-            item['posting_authorized']=approved
-            item['posting_authorization_updated_at']=now
-            if not approved:
-                item['claimed_by']=''; item['claim_expire']=0
-            save_cands(items)
-    add_log(f'[사이트별 발행 승인] {item_id} · '+('O' if approved else 'X'))
+    if not _set_posting_authorization([(kind,item_id)],approved):
+        return jsonify({'ok':False,'error':'사이트 없음' if kind=='site' else '후보 없음'}),404
+    add_log(f'[사이트별 발행 승인] {item_id} · '+('승인' if approved else '취소'))
     return jsonify({'ok':True,'kind':kind,'id':item_id,'approved':approved})
+
+@app.route('/api/posting-authorization/bulk',methods=['POST'])
+def api_posting_authorization_bulk():
+    """체크한 여러 사이트를 한 번에 승인/취소. body: {items:[{kind,id},...], approved:bool}"""
+    d=request.get_json(silent=True) or {}
+    approved=d.get('approved'); raw=d.get('items')
+    if not isinstance(approved,bool) or not isinstance(raw,list) or not raw:
+        return jsonify({'ok':False,'error':'items, approved 값이 필요합니다'}),400
+    pairs=[]
+    for x in raw[:5000]:
+        if not isinstance(x,dict): continue
+        k=str(x.get('kind') or ''); i=str(x.get('id') or '').strip()
+        if k in ('site','cand') and i: pairs.append((k,i))
+    if not pairs:
+        return jsonify({'ok':False,'error':'유효한 항목이 없습니다'}),400
+    found=_set_posting_authorization(pairs,approved)
+    add_log(f'[사이트별 발행 승인·일괄] {len(found)}개 · '+('승인' if approved else '취소'))
+    return jsonify({'ok':True,'changed':len(found),'approved':approved})
 
 # ---- 사이트 헬스체크 ----
 @app.route('/api/sites/health/<sid>',methods=['POST'])
@@ -14316,7 +14350,7 @@ DASH_HTML=r'''<header><div class="logo" onclick="window.scrollTo({top:0,behavior
 <div class="card"><div class="row" style="align-items:center"><h3 style="margin:0">📋 사이트 목록</h3><a class="btn btn-d btn-xs" href="/site-reaudit" target="_blank" rel="noopener">전체 재측정 · 탈락 이유 보기</a>
 <span style="font-size:11px;color:var(--g);font-weight:400">🟢 완전자동 — 발굴·검수·가입·발행이 24시간 자동으로 돕니다</span>
 <span style="flex:1"></span>
-<select id="boardFilter" style="width:auto" onchange="renderBoard()"><option value="">전체</option><option value="publishing">🟢 발행중</option><option value="registered">🔵 등록됨</option><option value="preparing">🟡 준비중</option><option value="waiting">⚪ 대기</option><option value="rejected">🔴 탈락</option></select>
+<select id="boardFilter" style="width:auto" onchange="renderBoard()"><option value="">전체</option><option value="unapproved">☐ 게시 허가 체크 대기</option><option value="publishing">🟢 발행중</option><option value="registered">🔵 등록됨</option><option value="preparing">🟡 준비중</option><option value="waiting">⚪ 대기</option><option value="rejected">🔴 탈락</option></select>
 <button class="btn btn-d btn-xs" onclick="renderBoard()">새로고침</button>
 <button class="btn btn-g btn-xs" onclick="location='/api/candidates/export'">엑셀</button>
 <button class="btn btn-r btn-xs" onclick="if(confirm('탈락 후보만 삭제할까요?'))clearRejected()">탈락 정리</button></div>
@@ -14719,17 +14753,26 @@ let _cands=[];
 // ★사이트+발굴 통합 목록(대표님 2026-09-12): /api/site-board를 도메인 dedup 상태별로 한 표에.
 const _BOARD_STATE={publishing:{t:'🟢 발행중',c:'st-ok'},registered:{t:'🔵 등록됨',c:'st-ok'},
   preparing:{t:'🟡 준비중',c:'st-y'},waiting:{t:'⚪ 대기',c:'st-i'},rejected:{t:'🔴 탈락',c:'st-f'}};
+// ★대표님 지시 2026-11-08: 체크박스 체크 = 사이트 관리자 게시 허가 확인(승인). 체크된 사이트만 이후 검수·가입·발행 진행.
 function postingAuthorizationButtons(kind,id,approved){
   const yes=approved===true;
-  return `<span style="display:inline-flex;gap:3px" aria-label="사이트 자동발행 승인">
-    <button class="btn ${yes?'btn-g':'btn-d'} btn-xs" aria-pressed="${yes}" title="O: 이 사이트의 자동발행을 승인" onclick="setPostingAuthorization('${kind}','${esc(id)}',true)">O</button>
-    <button class="btn ${yes?'btn-d':'btn-r'} btn-xs" aria-pressed="${!yes}" title="X: 자동발행을 승인하지 않음" onclick="setPostingAuthorization('${kind}','${esc(id)}',false)">X</button>
-  </span>`;
+  return `<label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;white-space:nowrap" title="체크 = 사이트 관리자 게시 허가 확인(승인). 체크한 사이트만 진행됩니다">
+    <input type="checkbox" style="width:16px;height:16px;cursor:pointer" ${yes?'checked':''} onchange="setPostingAuthorization('${kind}','${esc(id)}',this.checked,this)">
+    <span style="font-size:10px;color:${yes?'var(--g)':'var(--d)'}">${yes?'승인':'미승인'}</span></label>`;
 }
-async function setPostingAuthorization(kind,id,approved){
+async function setPostingAuthorization(kind,id,approved,el){
   const r=await api('/posting-authorization','POST',{kind,id,approved});
-  if(r&&r.ok){toast(approved?'✅ 이 도메인의 자동발행 승인':'⛔ 이 도메인의 자동발행 잠금');renderBoard();renderSites()}
-  else{toast((r&&r.error)||'승인 상태를 저장하지 못했습니다','er')}
+  if(r&&r.ok){toast(approved?'✅ 게시 허가 승인 — 이후 자동 진행':'⛔ 승인 취소 — 진행 중단');renderBoard();renderSites()}
+  else{if(el)el.checked=!approved;toast((r&&r.error)||'승인 상태를 저장하지 못했습니다','er')}
+}
+let _boardVisible=[];
+async function setPostingAuthorizationAll(approved,el){
+  const items=_boardVisible.filter(x=>x.state!=='rejected'&&(x.posting_authorized===true)!==approved).map(x=>({kind:x.kind,id:x.id}));
+  if(!items.length){toast(approved?'체크할 사이트가 없습니다':'해제할 사이트가 없습니다');if(el)el.checked=!approved;renderBoard();return}
+  if(!confirm('지금 목록에 보이는 '+items.length+'개 사이트를 '+(approved?'모두 게시 허가 승인(체크)':'모두 승인 취소(체크 해제)')+'할까요?')){if(el)el.checked=!approved;return}
+  const r=await api('/posting-authorization/bulk','POST',{items,approved});
+  if(r&&r.ok){toast((approved?'✅ ':'⛔ ')+r.changed+'개 '+(approved?'승인':'취소'));renderBoard();renderSites()}
+  else{if(el)el.checked=!approved;toast((r&&r.error)||'일괄 저장 실패','er')}
 }
 async function auditForm(id,kind){
  const box=$('formAuditResults');box.textContent='양식 측정 중 · 가입하거나 글을 제출하지 않습니다';
@@ -14753,12 +14796,15 @@ async function renderBoard(){
     tile('전체',r.total||0,'var(--t)')+tile('🟢 발행중',c.publishing||0,'var(--g)')
     +tile('🔵 등록됨',c.registered||0,'var(--p)')+tile('🟡 준비중',c.preparing||0,'var(--y)')
     +tile('⚪ 대기',c.waiting||0,'var(--d)')+tile('🔴 탈락',c.rejected||0,'var(--r)')
-    +tile('오늘 발굴',(r.today_found||0),'var(--v)');
+    +tile('오늘 발굴',(r.today_found||0),'var(--v)')
+    +tile('☐ 허가 체크 대기',c.unapproved||0,'var(--y)');
   const f=($('boardFilter')||{}).value||'';
-  const rows=f?r.rows.filter(x=>x.state===f):r.rows;
-  if($('boardCount'))$('boardCount').textContent=rows.length.toLocaleString()+'개'+(f?' ('+(_BOARD_STATE[f]||{}).t+')':'');
+  const rows=f==='unapproved'?r.rows.filter(x=>x.state!=='rejected'&&!x.posting_authorized):(f?r.rows.filter(x=>x.state===f):r.rows);
+  _boardVisible=rows;
+  if($('boardCount'))$('boardCount').textContent=rows.length.toLocaleString()+'개'+(f==='unapproved'?' (게시 허가 체크 대기 — 관리자 허가 확인 후 체크하면 진행됩니다)':(f?' ('+(_BOARD_STATE[f]||{}).t+')':''));
   if(!rows.length){el.innerHTML='<p style="color:var(--d);padding:24px;text-align:center">표시할 사이트가 없습니다</p>';return}
-  const head='<table style="width:100%;font-size:12px"><thead><tr style="color:var(--d);font-size:10px"><th style="text-align:left">상태</th><th style="text-align:left">이름/도메인</th><th style="text-align:left">게시판</th><th style="text-align:left">정보</th><th style="text-align:center">자동발행 승인</th><th style="text-align:right">동작</th></tr></thead><tbody>';
+  const live=rows.filter(x=>x.state!=='rejected'), allOn=live.length>0&&live.every(x=>x.posting_authorized===true);
+  const head='<table style="width:100%;font-size:12px"><thead><tr style="color:var(--d);font-size:10px"><th style="text-align:left">상태</th><th style="text-align:left">이름/도메인</th><th style="text-align:left">게시판</th><th style="text-align:left">정보</th><th style="text-align:center"><label style="cursor:pointer;white-space:nowrap" title="지금 보이는 목록(탈락 제외) 전체 체크/해제"><input type="checkbox" style="vertical-align:middle;cursor:pointer" '+(allOn?'checked':'')+' onchange="setPostingAuthorizationAll(this.checked,this)"> 게시 허가</label></th><th style="text-align:right">동작</th></tr></thead><tbody>';
   const body=rows.map(function(x){
     const b=_BOARD_STATE[x.state]||{t:x.state,c:'st-i'};
     const plat=x.platform==='cafe24'?'Cafe24':x.platform==='gnuboard'?'그누보드':'';
@@ -14773,7 +14819,7 @@ async function renderBoard(){
     // 동작: 사이트는 삭제, 후보는 자동처리중 표시(수동버튼 최소화 — 대표님 '알아서')
     const act=x.kind==='site'
       ? '<button class="btn btn-xs" onclick="auditForm(\''+esc(x.id)+'\',\'signup\')">가입 양식</button> <button class="btn btn-xs" onclick="auditForm(\''+esc(x.id)+'\',\'write\')">글쓰기 양식</button> <button class="btn btn-xs" onclick="editSite(\''+esc(x.id)+'\')">계정 연결</button> <button class="btn btn-r btn-xs" onclick="delSite(\''+esc(x.id)+'\')">삭제</button>'
-      : (x.state==='rejected'?'<span style="color:var(--d);font-size:10px">자동 제외</span>':(x.posting_authorized?'승인됨 · 검수 후 처리':'O 승인 전까지 발행 안 함'));
+      : (x.state==='rejected'?'<span style="color:var(--d);font-size:10px">자동 제외</span>':(x.posting_authorized?'승인됨 · 자동 진행':'체크 전까지 진행 안 함'));
     return '<tr><td><span class="st '+b.c+'" style="white-space:nowrap">'+b.t+'</span></td>'
       +'<td style="max-width:260px"><b>'+esc(x.name||x.domain)+'</b><br><a href="'+esc(x.url||'#')+'" target="_blank" rel="noopener" style="color:var(--p);word-break:break-all;font-size:11px">'+esc((x.url||'').slice(0,60))+'</a></td>'
       +'<td style="color:var(--p)">'+esc(x.bo_table||'')+(plat?'<br><span style="color:var(--d);font-size:10px">'+plat+'</span>':'')+'</td>'
