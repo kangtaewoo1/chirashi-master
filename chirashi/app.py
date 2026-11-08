@@ -3371,9 +3371,9 @@ def check_post_alive(url):
         return None
 
 def verify_once(limit=40):
-    """이력의 성공 발행글 URL 을 재확인해 생존여부(alive)를 기록. 처리 건수 반환."""
-    if not _pc_nodes_enabled():
-        return jsonify({'ok':False,'error':'서버 전용 모드에서는 PC 노드 발굴을 사용하지 않습니다'}),403
+    """이력의 성공 발행글 URL 을 재확인해 생존여부(alive)를 기록. 처리 건수 반환.
+       ★2026-11-09: PC 노드 발굴용 가드(jsonify 403)가 잘못 붙어 백그라운드 스레드에서 'Working outside of application
+       context'로 매시간 실패 → 글 생존 확인이 전혀 안 돌았음. 생존 확인은 PC 노드와 무관하므로 가드 제거."""
     cfg=load_config()
     with JOB_LOCK:
         h=load_json(HISTORY_FILE,[])
@@ -9952,7 +9952,10 @@ def auto_pipeline_once(limit=5):
     _ssem=threading.Semaphore(_sfan)          # 동시 가입/발행테스트 수(이 배치 내)
     _gsem=_global_chrome_sem()                # 전역 크롬 상한(발행 워커와 공유)
     def _proc(c):
-      with _ssem, _gsem:
+      # ★2026-11-09: 전역 크롬 상한(publish_max_chromes=12)을 발행 슬롯(워커4×팬아웃3=12)이 늘 다 써서 전환 스레드가
+      #   크롬 자리를 영영 못 얻음 → 재가동 뒤 10분간 후보 0곳 처리. 전환은 자기 상한(signup_parallel)으로만 묶는다.
+      #   비회원 후보 시험발행은 대부분 HTTP라 크롬을 안 쓰고, 셀레늄이 필요해도 최대 signup_parallel개만 더해진다.
+      with _ssem:
         nonlocal done,registered,signed
         name=c.get('board_name') or c.get('domain') or c.get('url','')[:30]
         # 쿨다운 기록: 이 후보를 방금 시도했음을 남겨, 실패/hang해도 다음 사이클에 곧바로 다시
