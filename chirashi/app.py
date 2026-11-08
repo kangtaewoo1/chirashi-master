@@ -4318,6 +4318,18 @@ def gnuboard_post_http(site, title, content_html):
                         m2=re.search(r'<input[^>]*name=["\']'+fld+r'["\'][^>]*value=["\']([^"\']*)["\']',h2,re.I)
                         if m2: data[fld]=m2.group(1)
                 except Exception: pass
+        # ── 글쓰기 토큰 ── 그누보드 5.3+는 제출 직전 common.js의 get_write_token()이 bbs/write_token.php에서
+        #   일회용 토큰을 받아 넣고, write_update.php가 세션과 대조한다(없으면 '올바른 방법으로 이용해 주십시오.').
+        #   회원 HTTP 발행(http_member)에서 실측(2026-11-09 용산) → 같은 세션으로 똑같이 받아 넣는다. 1회용이라 시도마다 새로.
+        if _mb:
+            try:
+                _tr=s.post(f'{bbs}/write_token.php',data={'bo_table':bo},timeout=12,verify=bool(site.get('_unattended_job')),
+                           headers={'Referer':f'{bbs}/write.php?bo_table={bo}','X-Requested-With':'XMLHttpRequest'})
+                if _tr.status_code<400 and str(_tr.text or '').lstrip().startswith('{'):
+                    _tj=_tr.json()
+                    if _tj.get('error'): return None,f'글쓰기 토큰 거절({str(_tj.get("error"))[:60]})'
+                    if _tj.get('token'): data['token']=_tj['token']
+            except Exception: pass
         # ── 제출 ──
         try:
             payload=data
