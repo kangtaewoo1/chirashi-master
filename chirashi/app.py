@@ -9987,8 +9987,12 @@ def auto_pipeline_once(limit=5):
         except Exception: pass
         try:
             _just_signed=False
-            kw=_test_kw()
-            html,title=generate_article(kw,cfg,unique=True)
+            # ★_test_kw()는 (키워드, 작업실ID) 튜플 — 그대로 넘겨 'tuple' object has no attribute 'get'로 AI 생성이
+            #   매번 실패·템플릿 발행되던 버그(2026-11-09 파이프라인 재가동 직후 실측). 10110행처럼 풀어서 넘긴다.
+            kw,_wid=_test_kw()
+            if not kw:
+                _cand_set(c['id'],pipeline_note='키워드 없음 — 시험 발행 보류'); return
+            html,title=generate_article(kw,cfg,unique=True,workroom_id=(_wid or None))
             # 대표님 파이프라인 순서:
             #  ① 접속은 검수/발굴 단계에서 이미 확인(reachable) → 여기선 통과한 것만 옴
             #  ② 먼저 '비회원 글쓰기'로 바로 발행 시도 — 로그인 명백히 필요한 게 아니면 가입 없이 시도.
@@ -10076,6 +10080,11 @@ def auto_pipeline_once(limit=5):
                 with _pipe_lock: results.append({'name':name,'stage':'post','ok':False,'msg':str(msg)[:90]})
         except Exception as e:
             with _pipe_lock: results.append({'name':name,'stage':'error','ok':False,'msg':str(e)[:100]})
+            # ★예외를 조용히 삼키지 않는다(2026-11-09: 키워드 튜플 버그로 88곳이 '처리'로만 세어지고 기록 0 — 원인 안 보였음).
+            try:
+                _cand_set(c['id'],pipeline_note=f'처리 오류: {type(e).__name__}: {str(e)[:80]}')
+                add_log(f'[파이프라인 오류] {name} — {type(e).__name__}: {str(e)[:100]}')
+            except Exception: pass
         finally:
             with _pipe_lock: done+=1
             reset_driver(); time.sleep(1)   # 각 스레드 자기 크롬 정리(병렬이라 긴 대기 불필요)
