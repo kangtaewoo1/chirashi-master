@@ -2548,8 +2548,8 @@ _KC_MODEL_B64=''   # ★서버 무SSH 배포용(2026-09-15): autodeploy는 app.p
 # ★서버 전용모델 자동 수급(2026-10-03 대표님 '1번 바로 진행'): 진단로그 model=off — autodeploy가 app.py만 받아 서버엔
 #   모델 파일이 없었고 범용 ddddocr만 써서 서버 캡차 정확도가 낮았음. 공개 저장소의 SHA 고정 raw URL(불변)에서 1회
 #   내려받아 md5 검증 후 저장. 실패해도 조용히 기존 ddddocr 폴백. 노드는 git 로컬파일이 있어 다운로드 안 함.
-_KC_MODEL_URL='https://raw.githubusercontent.com/kangtaewoo1/chirashi-master/31a9d72065651bb2d64cab0abf3cc534d46d791a/chirashi/captcha_retrain/kcaptcha_model.onnx'
-_KC_MODEL_MD5='a95b9c0ab49346f29da3088145a69cd4'   # 위 커밋의 kcaptcha_model.onnx(wide192, 3,233,125B) 무결성 검증용
+_KC_MODEL_URL='https://raw.githubusercontent.com/kangtaewoo1/chirashi-master/599200867cd4cb3e08b7663c17fb6182ee042959/chirashi/captcha_retrain/kcaptcha_model.onnx'
+_KC_MODEL_MD5='d103961baeb937df96a95c6c726c0a7c'   # 위 커밋의 kcaptcha_model.onnx(v3a 재학습 2026-11-09, wide192, 3,227,423B) 무결성 검증용
 def _kc_model_download():
     """전용 kcaptcha 모델이 디스크에 없을 때 raw GitHub에서 내려받는다. 성공 True / 실패 False(로그만)."""
     try:
