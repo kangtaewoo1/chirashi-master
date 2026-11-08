@@ -10033,7 +10033,7 @@ def auto_pipeline_once(limit=5):
             _login_first = (not _has_account) and bool(c.get('login_required')) and not c.get('write_form')
             if _login_first:
                 # 게시판 자체가 로그인 필수 + 저장된 계정 없음 → 자동가입으로 계정 생성(성공시 저장·재사용)
-                ok_su,msg_su=auto_signup_guarded(tmp,submit=True)
+                ok_su,msg_su=auto_signup_guarded(tmp,submit=True,timeout=int(load_config().get('pipeline_signup_timeout',150) or 150))
                 if ok_su:
                     with _pipe_lock: signed+=1
                     _just_signed=True
@@ -10055,7 +10055,7 @@ def auto_pipeline_once(limit=5):
             if (not ok) and (not tmp.get('mb_id')) and _need_su:
                 reset_driver(); time.sleep(1)
                 add_log(f'[파이프라인] {name} 로그인필요 → 자동가입 시도')
-                ok_su,msg_su=auto_signup_guarded(tmp,submit=True)
+                ok_su,msg_su=auto_signup_guarded(tmp,submit=True,timeout=int(load_config().get('pipeline_signup_timeout',150) or 150))
                 if ok_su:
                     with _pipe_lock: signed+=1
                     add_log(f'[파이프라인] {name} 자동가입 성공 → 세션 재사용 재발행')
