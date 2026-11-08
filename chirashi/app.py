@@ -14583,13 +14583,53 @@ def api_ops_control():
         add_log('[운영실 설정] '+', '.join(f'{k} {o}→{n}' for k,o,n in changed))
     return jsonify({'ok':True,'changed':[k for k,_,_ in changed],'switches':{k:cfg.get(k) for k in _OPS_CONTROL_SPEC}})
 
+def _ops_probe_guest(ids=None):
+    """★회원 전용 오표시 실측 교정(2026-11-09 대표님 '계정없음은 뭐냐'): '계정 없음' 63곳을 HTTP로 열어 보니 10곳이
+       비회원 글쓰기 폼(wr_name+wr_subject)을 그대로 보여 줌 — 과거 일시 실패 문구로 login_required가 찍힌 것.
+       그누보드 write.php를 기본 requests로 열어 비회원 폼이 보이고 '권한 없음' 알림이 없으면 login_required를 푼다.
+       ids=None이면 계정 없는 회원 표시 사이트 전체. 네트워크는 락 밖에서, 반영만 락 안에서."""
+    import requests as _rq, concurrent.futures as _cf
+    cand=[s for s in load_sites() if s.get('login_required') and not str(s.get('mb_id') or '').strip()
+          and s.get('status')!='rejected' and resolve_platform(s)=='gnuboard' and (ids is None or str(s.get('id')) in ids)]
+    def _probe(s):
+        m=re.match(r'(https?://[^/]+)',s.get('site_url') or '')
+        if not m: return s.get('id'),'',''
+        try:
+            r=_rq.get(m.group(1)+'/bbs/write.php',params={'bo_table':s.get('bo_table') or 'free'},timeout=12)
+            t=r.text or ''
+            al=re.findall(r"alert\(\s*['\"]([^'\"]{2,80})",t)
+            if r.status_code<400 and 'wr_subject' in t and 'wr_name' in t and not any('권한' in a or '로그인' in a for a in al):
+                return s.get('id'),'guest',''
+            return s.get('id'),'member',(al[0] if al else f'HTTP {r.status_code}')
+        except Exception as e:
+            return s.get('id'),'error',str(e)[:60]
+    with _cf.ThreadPoolExecutor(8) as ex: res=list(ex.map(_probe,cand))
+    guest={i for i,k,_ in res if k=='guest'}
+    fixed=[]
+    if guest:
+        with POST_LOCK:
+            sites=load_sites()
+            for s in sites:
+                if s.get('id') in guest and s.get('login_required') and not str(s.get('mb_id') or '').strip():
+                    s['login_required']=False; s['fail_streak']=0; s['signup_fail_count']=0; s['signup_exhausted']=False
+                    s.pop('cooldown_until',None)
+                    if s.get('status')=='failed': s['status']='idle'
+                    s['guest_probe_at']=_kst_now().strftime('%Y-%m-%d %H:%M')
+                    fixed.append((s.get('name') or s.get('site_url') or '')[:34])
+            if fixed: save_sites(sites)
+    add_log(f'[비회원 가능 재확인] {len(cand)}곳 확인 → {len(fixed)}곳 회원 전용 표시 해제(가입 없이 발행 대상)','정리')
+    return {'ok':True,'checked':len(cand),'changed':len(fixed),'sites':fixed,
+            'member_only':sum(1 for _,k,_ in res if k=='member'),'errors':sum(1 for _,k,_ in res if k=='error')}
+
 @app.route('/api/ops/sites/action',methods=['POST'])
 def api_ops_sites_action():
     d=request.get_json(silent=True) or {}; act=str(d.get('action') or '')
     ids={str(i).strip() for i in (d.get('ids') or [])[:2000] if str(i).strip()}
-    labels={'clear_cooldown':'대기 풀기','hold':'보류','unhold':'보류 해제'}
+    labels={'clear_cooldown':'대기 풀기','hold':'보류','unhold':'보류 해제','probe_guest':'비회원 가능 재확인'}
     if act not in labels or not ids:
         return jsonify({'ok':False,'error':'action과 ids가 필요합니다'}),400
+    if act=='probe_guest':
+        return jsonify(_ops_probe_guest(ids))
     n=0; skipped=[]
     with POST_LOCK:
         sites=load_sites()
@@ -16179,10 +16219,12 @@ input[type=date]{border:1px solid var(--line);background:var(--surface);padding:
   </div>
   <div class="bar">
     <span class="note" id="signupState"></span><span class="spacer"></span>
+    <button class="btn" id="btnProbe">계정 없음 전체: 비회원 가능 재확인</button>
     <button class="btn" id="btnSignup">계정 없는 회원 게시판 자동가입</button>
     <button class="btn" id="btnSitesReload">새로고침</button>
   </div>
   <div class="bulk" id="bulk"><span id="bulkN"></span><span class="spacer"></span>
+    <button class="btn" data-act="probe_guest">비회원 가능 재확인</button>
     <button class="btn" data-act="clear_cooldown">대기 풀기</button>
     <button class="btn" data-act="hold">보류</button>
     <button class="btn" data-act="unhold">보류 해제</button>
@@ -16387,11 +16429,19 @@ $$('#bulk .btn').forEach(b=>b.onclick=async()=>{
     }else{
       if(act==='hold'&&!confirm(`${ids.length}곳을 보류합니다. 보류한 사이트에는 글을 올리지 않습니다.`))return;
       const j=await post('/api/ops/sites/action',{action:act,ids});
-      toast(`${j.changed}곳 처리`+(j.skipped?.length?` · 중복 글 위험으로 ${j.skipped.length}곳 제외`:''));
+      toast(act==='probe_guest'?`${j.checked}곳 확인 → ${j.changed}곳 회원 전용 표시 해제 · 회원 전용 ${j.member_only}곳`
+        :`${j.changed}곳 처리`+(j.skipped?.length?` · 중복 글 위험으로 ${j.skipped.length}곳 제외`:''));
     }
     SEL.clear(); loadSites();
   }catch(e){toast(e.message,true)}
 });
+$('#btnProbe').onclick=async()=>{
+  const ids=SITES.filter(match.noacct).map(r=>r.id); if(!ids.length){toast('계정 없는 사이트가 없습니다');return}
+  $('#btnProbe').disabled=true; toast(`${ids.length}곳 글쓰기 화면을 확인하는 중…`);
+  try{const j=await post('/api/ops/sites/action',{action:'probe_guest',ids});
+    toast(`${j.checked}곳 확인 → ${j.changed}곳은 비회원 글쓰기가 가능해 회원 전용 표시를 풀었습니다 · 회원 전용 ${j.member_only}곳`);loadSites()}
+  catch(e){toast(e.message,true)} finally{$('#btnProbe').disabled=false}
+};
 $('#btnSignup').onclick=async()=>{
   try{const d=await post('/api/sites/signup-member-boards',{dry_run:true});
     if(!d.count){toast('지금 가입할 대상이 없습니다');return}
