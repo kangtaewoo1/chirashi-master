@@ -9888,6 +9888,17 @@ def auto_pipeline_once(limit=5):
                 c['signup_retry_date']=today_s; revived+=1
         if revived:
             save_cands(cands); add_log(f'[자동가입 재시도] 이전 실패 게시판 {revived}곳 재시도 대상 복원')
+        # ★서버 IP 차단 때문에 떨어진 cafe24 후보 복원(2026-11-09): 실제론 사람 확인이 아니라 Hetzner IP 차단 화면이었음.
+        #   노트북(한국 IP) 노드가 처리하도록 ready로 되돌리고 표시만 남긴다(1회).
+        if not cfg.get('server_cafe24_ok'):
+            _c24=0
+            for c in cands:
+                if (c.get('platform')=='cafe24' and c.get('status') in ('manual_review','rejected') and not c.get('cafe24_ip_restored')
+                        and '사람 확인 필요' in str(c.get('reject_reason') or '') and c.get('posting_authorized') is True):
+                    c['status']='ready'; c['cafe24_ip_restored']=True; c.pop('write_access_state',None)
+                    c['reject_reason']='서버 IP 차단(cafe24) — 노트북(한국 IP) 노드 대기'; _c24+=1
+            if _c24:
+                save_cands(cands); add_log(f'[cafe24 후보 복원] 서버 IP 차단으로 떨어진 {_c24}곳 → 노트북 노드 대기로 되돌림','정리')
         # ★빡센검수 소급 적용(대표님 지시 2026-09-09 '대기 너무 쌓임'): strict_screen 켜져 있으면,
         #   기존 backlog의 ready 후보 중 '홍보 흔적 없는 것'(방치·개방 게시판 아님)을 대기줄에서 탈락.
         #   (예전 느슨한 검수로 통과된 것들이 가입 안 되며 대기만 쌓이던 문제 — 될 만한 것만 남긴다.)
@@ -9940,7 +9951,9 @@ def auto_pipeline_once(limit=5):
           and (c.get('domain') or '').lower() not in site_domains
           and c.get('reachable') and _has_write_path(c)
           and not _claim_active(c)   # ★PC 노드가 잡고 있는(만료 전) 후보는 서버가 건드리지 않음
-          and not (c.get('platform')=='cafe24' and _pc_node_alive())   # ★cafe24는 PC(로컬크롬)만 — 서버(DC IP)는 Turnstile 못넘어 탈락만 냄. 노드 다 죽으면 폴백.
+          # ★cafe24는 PC(한국 IP)만. 2026-11-09 실측: Hetzner IP는 cafe24가 통째로 차단('잠시 접속이 제한') → 서버가 시도하면
+          #   차단 화면을 '사람 확인 필요'로 보고 탈락시켜 대기 후보 353곳을 버리게 됨. config server_cafe24_ok=True일 때만 서버가 시도.
+          and not (c.get('platform')=='cafe24' and (_pc_node_alive() or not cfg.get('server_cafe24_ok')))
           # ★노드 발행 전담(2026-09-14): node_publish_all이면 서버는 신규후보 발행도 노드에 무조건 위임(서버 ddddocr 없음).
           and not cfg.get('node_publish_all',True)
           and float(c.get('last_pipeline_at',0) or 0) < _cool]
