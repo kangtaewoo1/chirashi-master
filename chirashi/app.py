@@ -8798,7 +8798,18 @@ def auto_signup(site, submit=True):
     try:
         profile=learn_signup_profile(site,force=False)
     except Exception as e:
-        return False,f'가입폼 측정 실패: {str(e)[:100]}'
+        _em=str(e)
+        # ★2026-11-08 회원게시판 자동가입 실측: GET 전용 측정은 약관에 동의하지 않으므로 그누보드 표준 2단계 가입
+        #   (register.php 약관 → register_form.php)을 agreement_required/form_unavailable로 실패시켜 브라우저 단계에
+        #   가지도 못했음(9건 중 8건). 아래 브라우저 단계가 약관 동의·제출과 표준 필드명 폴백(GNU_STD)을 이미 처리하므로,
+        #   그누보드는 측정 없이 표준 경로로 진행한다. 접속 오류 등 다른 측정 실패는 그대로 실패 처리.
+        if (site.get('platform') or 'gnuboard')=='gnuboard' and any(k in _em for k in ('agreement_required','form_unavailable')):
+            _b=_signup_origin(site)
+            profile={'signup_url':site.get('signup_url') or _b+'/bbs/register.php','form_url':_b+'/bbs/register_form.php',
+                     'fields':[],'rules':None,'email_verification_required':None}
+            add_log(f'[자동가입] {_snm} — 가입폼 사전측정 불가({_em[:30]}) → 그누보드 표준 약관·가입 경로로 진행')
+        else:
+            return False,f'가입폼 측정 실패: {_em[:100]}'
     if not profile:
         return False,'가입폼을 찾지 못함'
     fields=profile.get('fields') or []
