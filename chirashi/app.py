@@ -8918,7 +8918,9 @@ def auto_signup(site, submit=True):
         #   기다려 폼 렌더 전 조회→'비밀번호 칸 도달 실패' 오판. 단독 실측은 정상. 최대 ~6초 폴링해 완화).
         #   ★2026-11-08 Hetzner(싱가포르) 실측: 약관 제출 뒤 register_form 로딩이 6초를 넘겨 '도달 실패'가 가입 실패의
         #   2/3를 차지 → 최대 30초 폴링(폼이 뜨면 즉시 진행하므로 빠른 사이트엔 영향 없음).
-        for _ in range(60):
+        #   횟수가 아닌 경과시간 기준: find_elements가 암묵적 대기로 회당 수 초씩 걸려 60회 폴링이 180초 타임아웃을 넘겼음.
+        _agree_deadline=time.time()+30
+        while time.time()<_agree_deadline:
             dismiss_alerts(d)
             if _has_pw_field(): break
             time.sleep(0.5)
