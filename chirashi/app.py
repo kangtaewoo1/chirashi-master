@@ -2566,8 +2566,11 @@ def _kc_model_download():
         return True
     except Exception as _e:
         add_log(f'[kcaptcha 전용모델] 다운로드 실패 — ddddocr 유지: {str(_e)[:60]}'); return False
+_KC_LAST_CONF=threading.local()   # 마지막 전용모델 예측의 신뢰도(글자별 최대확률의 최솟값) — 스레드별
 def _kcaptcha_model_predict(image_bytes):
-    """전용 CRNN onnx로 kcaptcha 예측 → 숫자문자열(6자리 기대). 모델 없거나 실패면 ''."""
+    """전용 CRNN onnx로 kcaptcha 예측 → 숫자문자열(6자리 기대). 모델 없거나 실패면 ''.
+       신뢰도는 _KC_LAST_CONF.v에 남긴다(2026-11-09 실측: 신뢰도 0.8↑ 답 정답률 92% vs 그 아래 70%)."""
+    _KC_LAST_CONF.v=0.0
     global _KC_SESS,_KC_TRIED
     if _KC_SESS is None:
         if _KC_TRIED: return ''
@@ -2601,10 +2604,12 @@ def _kcaptcha_model_predict(image_bytes):
         inp=_ins.name
         logits=_KC_SESS.run(None,{inp:a})[0][0]   # (W,C)
         idx=logits.argmax(-1); prev=0; s=''
-        for v in idx:
+        _ex=_np.exp(logits-logits.max(-1,keepdims=True)); _pr=_ex/_ex.sum(-1,keepdims=True); _cf=[]
+        for _t,v in enumerate(idx):
             v=int(v)
-            if v!=prev and v!=0: s+=str(v-1)   # blank=0, '0'->1..'9'->10
+            if v!=prev and v!=0: s+=str(v-1); _cf.append(float(_pr[_t,v]))   # blank=0, '0'->1..'9'->10
             prev=v
+        _KC_LAST_CONF.v=(min(_cf) if _cf else 0.0)
         return s
     except Exception:
         return ''
@@ -2683,7 +2688,7 @@ def _extract_colored_glyphs(image_bytes):
     except Exception:
         return None
 
-def _ocr_kcaptcha(image_bytes):
+def _ocr_kcaptcha(image_bytes, min_conf=0.0):
     """kcaptcha 이미지(bytes) → OCR 텍스트. ★전용 재학습모델 우선(2026-09-15) → ddddocr 폴백.
        ★색상 캡차(빨간글자만) 전처리(2026-10-23): 빨강만 남긴 이미지가 나오면 그걸로 OCR."""
     global _DDDD_OCR,_DDDD_TRIED
@@ -2696,6 +2701,8 @@ def _ocr_kcaptcha(image_bytes):
     try:
         _m=_kcaptcha_model_predict(image_bytes)
         if _m and len(_m)==6 and _m.isdigit():
+            # ★신뢰도 낮은 답은 버리고 새 그림을 받게(2026-11-09 대표님 'OCR 최신화'). min_conf=0이면 종전대로 즉시 채택.
+            if min_conf>0 and float(getattr(_KC_LAST_CONF,'v',1.0) or 0.0)<min_conf: return ''
             return _m
     except Exception: pass
     # ② 전용모델 없거나 6자리 아니면 기존 ddddocr 경로로 폴백
@@ -3906,13 +3913,15 @@ def _verify_post_by_title(d, bbs, bo, title):
 #   비회원 글쓰기(로그인 불필요) 그누보드가 대상. 실패 시 셀레늄으로 폴백.
 _HTTP_UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
 
-def _solve_kcaptcha_bytes(img_bytes, cfg):
+def _solve_kcaptcha_bytes(img_bytes, cfg, min_conf=0.0):
     """kcaptcha 이미지 바이트 → 답(숫자). ★무료 OCR(ddddocr) 우선(2026-09-14 대표님 '돈 없음·무료화').
        HTTP 초고속발행 경로가 여태 2captcha만 써서 잔액0→'2captcha 풀이 실패' 791건의 주범이었다.
        셀레늄 경로의 _ocr_kcaptcha와 동일하게 ddddocr로 무료 해결, 실패 시에만 2captcha(설정·잔액 있을 때)."""
     # ① 무료 자체 OCR(ddddocr) — 비용 0
     try:
-        _ocr=_ocr_kcaptcha(img_bytes)
+        _ocr=_ocr_kcaptcha(img_bytes,min_conf=min_conf)
+        if not _ocr and min_conf>0 and _KC_SESS is not None:
+            return ''   # 전용모델이 확신 못 함 → 새 그림으로 다시(2captcha 비용·오답 제출 없이)
         if _ocr and 3<=len(_ocr)<=8:
             _record_captcha_usage('kcaptcha_ocr',True,cfg)
             _save_captcha_sample(img_bytes,_ocr,verified=False)   # 학습데이터(성공 시 verified 승격)
@@ -4118,7 +4127,8 @@ def _gnuboard_signup_http(site, cfg, vals):
     needs_cap=bool(cap_m) or 'captcha_key' in low
     cap_base=cap_m.group(1) if cap_m else base+'/plugin/kcaptcha'
     last=''; img=None; ans=''
-    for attempt in range(1,4):
+    _mc=float(cfg.get('kcaptcha_min_conf',0.8) or 0)
+    for attempt in range(1,7):   # 그림 새로 받기는 공짜 — 앞 4번은 확신 높은 답만 제출
         if needs_cap:
             try:
                 s.post(cap_base+'/kcaptcha_session.php',timeout=12,headers={'Referer':r2.url,'X-Requested-With':'XMLHttpRequest'})
@@ -4127,8 +4137,8 @@ def _gnuboard_signup_http(site, cfg, vals):
             except Exception: img=None
             if not img: return False,'HTTP 가입 실패 — 캡차 이미지 수신 실패'
             if len(img)<1200: return False,f'HTTP 가입 실패 — 캡차 세션 미생성(빈 이미지 {len(img)}B)'
-            ans=_solve_kcaptcha_bytes(img,cfg)
-            if not ans: last='캡차 OCR 빈값'; continue
+            ans=_solve_kcaptcha_bytes(img,cfg,min_conf=(_mc if attempt<=4 else 0.0))
+            if not ans: last='캡차 OCR 빈값/신뢰도 낮음'; continue
             data['captcha_key']=ans
         try:
             body=urllib.parse.urlencode(data,encoding=enc,errors='ignore')
@@ -4147,7 +4157,7 @@ def _gnuboard_signup_http(site, cfg, vals):
             return False,f'HTTP 가입 실패 — 아이디/이메일 중복({last[:50]})'
         return False,f'HTTP 가입 실패 — {last[:70]}'
     else:
-        return False,f'HTTP 가입 실패 — 캡차 3회 실패({last[:40]})'
+        return False,f'HTTP 가입 실패 — 캡차 6회 실패({last[:40]})'
     mid=data['mb_id']; pw=data['mb_password']
     if not _gnuboard_http_login(_rq.Session(),base,mid,pw):
         return False,'HTTP 가입 제출했으나 로그인 확인 실패(승인제·메일인증 가능)'
@@ -4280,7 +4290,7 @@ def gnuboard_post_http(site, title, content_html):
         if not _2c:
             return None,'캡차 사이트 — 무료 OCR 없는 환경(노드 위임)'
     _diag_key=f'{base}|{bo}'
-    def _fetch_captcha_answer():
+    def _fetch_captcha_answer(min_conf=0.0):
         """세션에 정답 심기 → 이미지 GET → OCR(무료) → 2captcha. (답, 사유). 실패시 ('',사유).
            ★2026-10-03 대표님 '실패 왜 많음' 규명: 서버 HTTP 경로가 15곳×5분마다 'OCR 불확실' 251건/2.5h(실패의 63%).
            같은 15곳 캡차를 PC(주거IP)에서 받아 전용모델에 넣으면 전부 6자리로 읽힘 → 서버가 받는 응답이 이미지가 아닐
@@ -4299,8 +4309,9 @@ def gnuboard_post_http(site, title, content_html):
             if not _is_img:
                 _http_cap_diag(_diag_key,site,f'비이미지 응답 ct={_ct[:30]} len={len(ci.content)} head={ci.content[:60]!r}')
                 return '','캡차 이미지 수신 실패(비이미지 응답)'
-            ans=_solve_kcaptcha_bytes(ci.content,cfg)
+            ans=_solve_kcaptcha_bytes(ci.content,cfg,min_conf=min_conf)
             if ans: return ans,''
+            if min_conf>0 and len(ci.content)>=1200: return '','kcaptcha 신뢰도 낮음 — 새 그림으로 재시도'
             _http_cap_diag(_diag_key,site,f'OCR 빈값 ct={_ct[:20]} len={len(ci.content)} model={"on" if _KC_SESS is not None else "off"} dddd={"on" if _DDDD_OCR is not None else "off"}')
             # ★빈 캡차 판정(2026-10-03 01:20 진단로그 실측): 서버가 받는 캡차는 전부 816~905B JPEG = 글자 없는 빈 이미지
             #   (PC에서 세션 없이 받으면 똑같이 816~941B, 정상 캡차는 2,100~4,900B). 서버에선 캡차 세션이 안 잡히는 사이트라
@@ -4315,7 +4326,7 @@ def gnuboard_post_http(site, title, content_html):
     last_reason='HTTP 발행 확인 불가'
     for attempt in range(CAP_TRIES):
         if needs_cap:
-            ans,why=_fetch_captcha_answer()
+            ans,why=_fetch_captcha_answer(min_conf=(float(cfg.get('kcaptcha_min_conf',0.8) or 0) if attempt<CAP_TRIES-2 else 0.0))
             if not ans:
                 last_reason=why
                 if attempt+1<CAP_TRIES: time.sleep(1); continue
