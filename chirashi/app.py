@@ -4367,7 +4367,8 @@ def gnuboard_post_http(site, title, content_html):
         #     올라갔으면 True(셀레늄 재발행 안 함), 안 올라갔으면 None(안전 폴백 — 중복 위험 없음).
         landed=_http_verify_title_on_board(s,bbs,bo,title)
         if landed: return True,landed
-        return None,'HTTP 발행 확인 불가 — 폴백'
+        _hint=(alerts[0][:60] if alerts else re.sub(r'\s+',' ',re.sub(r'<[^>]+>',' ',body))[:80].strip())
+        return None,f'HTTP 발행 확인 불가 — 폴백 (응답 {pr.status_code} {fin[-50:]} | {_hint})'
     return None,last_reason+' — 폴백'
 
 def _http_verify_title_on_board(sess, bbs, bo, title):
