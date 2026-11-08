@@ -11356,7 +11356,9 @@ def api_sites_signup_member_boards():
         try:
             for s in targets:
                 nm=(s.get('name') or s.get('site_url') or '')[:34]
-                try: ok_su,msg=auto_signup_guarded(s,submit=True)
+                # 순차 1개라 여유 있게 180초(2026-11-08 실측: 싱가포르 서버에서 약관→입력→제출까지 60초를 넘겨
+                #   제출 직후 타임아웃으로 끊김).
+                try: ok_su,msg=auto_signup_guarded(s,submit=True,timeout=180)
                 except Exception as e: ok_su,msg=False,f'가입 처리 예외: {str(e)[:80]}'
                 fresh=next((x for x in load_sites() if x.get('id')==s.get('id')),s)
                 att=int(fresh.get('member_signup_attempts',0) or 0)+1
