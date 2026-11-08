@@ -10020,7 +10020,9 @@ def auto_pipeline_once(limit=5):
             kw,_wid=_test_kw()
             if not kw:
                 _cand_set(c['id'],pipeline_note='키워드 없음 — 시험 발행 보류'); return
-            html,title=generate_article(kw,cfg,unique=True,workroom_id=(_wid or None))
+            # ★시험 발행 글은 템플릿으로(2026-11-09 py-spy 실측: 전환 스레드가 무료 LLM 분당 한도(_free_slot)를 발행 워커와
+            #   나눠 쓰느라 한 시간 동안 대기만 함 → 후보 0곳 진행). 시험 글은 '올라가는지' 확인용이라 AI 품질이 필요 없다.
+            html,title=generate_article(kw,dict(cfg,use_gpt=False),unique=True,workroom_id=(_wid or None))
             # 대표님 파이프라인 순서:
             #  ① 접속은 검수/발굴 단계에서 이미 확인(reachable) → 여기선 통과한 것만 옴
             #  ② 먼저 '비회원 글쓰기'로 바로 발행 시도 — 로그인 명백히 필요한 게 아니면 가입 없이 시도.
@@ -10152,7 +10154,7 @@ def auto_pipeline_once(limit=5):
             if not _wid:
                 try: _timg=load_image_urls() or None
                 except Exception: _timg=None
-            html,title=generate_article(kw,cfg,unique=True,workroom_id=_wid or None,image_urls=_timg)
+            html,title=generate_article(kw,dict(cfg,use_gpt=False),unique=True,workroom_id=_wid or None,image_urls=_timg)   # 시험 글=템플릿(위와 같은 이유)
             # 가입 직후 로그인된 세션 그대로 발행(재로그인 생략) — 비표준 로그인폼 사이트 구제
             ok,msg=do_post(fresh,title,html,skip_login=True)
             if (not ok) and re.search(r'(로그인|login)',str(msg)):
