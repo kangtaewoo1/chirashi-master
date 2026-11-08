@@ -10768,7 +10768,7 @@ def chk():
     #  /api/test/* = 발행 테스트 트리거(등록 사이트에 실제 글1건 발행해 검증).
     _p=request.path
     if _p=='/api/version': return  # 배포 SHA 확인 — 공개(민감정보 없음)
-    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/sites/unlock-cafe24','/api/sites/unlock-verified','/api/sites/purge-fake-cafe24','/api/sites/mark-login-required','/api/sites/unmark-login-required','/api/sites/retry-signup','/api/candidates/rescreen-cafe24','/api/candidates/revive-rejected','/api/candidates/unrevive-nonillegal','/api/regions/normalize-existing','/api/site-board','/api/history','/api/ops-dashboard','/api/imap/test','/api/openai/usage','/api/twocaptcha/usage','/api/config/clear-key','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/candidates/reject-unworkable','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/pc-queue/claim','/api/pipeline/pc-queue/audit','/api/pipeline/pc-queue/start','/api/pipeline/pc-queue/report','/api/pipeline/report-site','/api/pipeline/node-beat','/api/unlocker/test','/api/sbr/test','/api/diag') or _p.startswith('/api/test/'):
+    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/sites/unlock-cafe24','/api/sites/unlock-verified','/api/sites/purge-fake-cafe24','/api/sites/mark-login-required','/api/sites/unmark-login-required','/api/sites/retry-signup','/api/sites/signup-member-boards','/api/candidates/rescreen-cafe24','/api/candidates/revive-rejected','/api/candidates/unrevive-nonillegal','/api/regions/normalize-existing','/api/site-board','/api/history','/api/ops-dashboard','/api/imap/test','/api/openai/usage','/api/twocaptcha/usage','/api/config/clear-key','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/candidates/reject-unworkable','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/pc-queue/claim','/api/pipeline/pc-queue/audit','/api/pipeline/pc-queue/start','/api/pipeline/pc-queue/report','/api/pipeline/report-site','/api/pipeline/node-beat','/api/unlocker/test','/api/sbr/test','/api/diag') or _p.startswith('/api/test/'):
         tok=(request.args.get('token') or '').strip()
         cfgtok=(load_config().get('log_token') or '').strip()
         if cfgtok and tok==cfgtok:
@@ -11314,6 +11314,54 @@ def api_sites_retry_signup():
         if hit and not dry: save_sites(sites)
     add_log(f'[자동가입 재시도] {"(미리보기)" if dry else ""} {len(hit)}곳 가입포기 해제 → 노드 재시도','정리')
     return jsonify({'ok':True,'dry_run':dry,'retried':len(hit),'sites':hit})
+
+_MEMBER_SIGNUP_STATE={'running':False,'done':0,'total':0,'ok':0}
+
+def _member_signup_targets(sites,limit=60):
+    """게시 허가 체크됐고 로그인 필요인데 계정이 없는 회원 게시판(사람확인·관리자전용·보류·탈락 제외)."""
+    return [s for s in sites
+            if s.get('posting_authorized') is True and s.get('login_required')
+            and not str(s.get('mb_id') or '').strip() and s.get('status')!='rejected'
+            and not s.get('manual_review_only') and not s.get('maintenance_hold') and not s.get('has_captcha')
+            and s.get('write_access_state') not in ('admin_only','human_verification_required')][:limit]
+
+@app.route('/api/sites/signup-member-boards',methods=['POST'])
+def api_sites_signup_member_boards():
+    """★대표님 지시 2026-11-08 '회원 게시판 62개도 무인 발행 — 자동가입': 대상 사이트에 자동가입을 한 곳씩 순차 시도.
+       실패해도 탈락·발행허용 해제 없이 member_signup_attempts/member_signup_last 만 기록(파이프라인 3회 실패 탈락 규칙과 분리).
+       성공하면 auto_signup이 mb_id/mb_pass·signup_status=complete 저장 → 다음 발행부터 회원으로 발행. body {dry_run?, limit?(60)}."""
+    d=request.get_json(silent=True) or {}
+    dry=bool(d.get('dry_run'))
+    try: limit=max(1,min(200,int(d.get('limit',60) or 60)))
+    except (TypeError,ValueError): limit=60
+    targets=_member_signup_targets(load_sites(),limit)
+    names=[(s.get('name') or s.get('site_url') or '')[:34] for s in targets]
+    if dry or not targets:
+        return jsonify({'ok':True,'dry_run':dry,'count':len(targets),'sites':names})
+    if _MEMBER_SIGNUP_STATE['running']:
+        return jsonify({'ok':False,'error':'회원 게시판 자동가입이 이미 진행 중입니다','state':_MEMBER_SIGNUP_STATE}),409
+    _MEMBER_SIGNUP_STATE.update(running=True,done=0,total=len(targets),ok=0)
+    def _run():
+        try:
+            for s in targets:
+                nm=(s.get('name') or s.get('site_url') or '')[:34]
+                try: ok_su,msg=auto_signup_guarded(s,submit=True)
+                except Exception as e: ok_su,msg=False,f'가입 처리 예외: {str(e)[:80]}'
+                fresh=next((x for x in load_sites() if x.get('id')==s.get('id')),s)
+                att=int(fresh.get('member_signup_attempts',0) or 0)+1
+                set_site_flag(s.get('id'),member_signup_attempts=att,
+                              member_signup_last=f"{_kst_now().strftime('%Y-%m-%d %H:%M')} {'성공' if ok_su else '실패'}: {str(msg)[:90]}")
+                _MEMBER_SIGNUP_STATE['done']+=1
+                if ok_su: _MEMBER_SIGNUP_STATE['ok']+=1
+                add_log(f"[회원게시판 자동가입 {_MEMBER_SIGNUP_STATE['done']}/{_MEMBER_SIGNUP_STATE['total']}] {'성공' if ok_su else '실패'} {nm} — {str(msg)[:70]}",'가입')
+                try: reset_driver()
+                except Exception: pass
+        finally:
+            _MEMBER_SIGNUP_STATE['running']=False
+            add_log(f"[회원게시판 자동가입 완료] {_MEMBER_SIGNUP_STATE['ok']}/{_MEMBER_SIGNUP_STATE['total']}곳 계정 생성",'가입')
+    threading.Thread(target=_run,name='MEMBER-SIGNUP',daemon=True).start()
+    add_log(f'[회원게시판 자동가입 시작] {len(targets)}곳 순차 시도','가입')
+    return jsonify({'ok':True,'started':True,'count':len(targets),'sites':names})
 
 @app.route('/api/sites/unlock-verified',methods=['POST'])
 def api_sites_unlock_verified():
