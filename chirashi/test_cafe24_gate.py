@@ -231,6 +231,8 @@ class GateTests(unittest.TestCase):
         stop_on_alerts(['관리자만 글쓰기'])
 
 
+@unittest.skipUnless((Path(__file__).with_name('pc_queue_engine') / 'cafe24_gate.py').exists(),
+                     'PC queue engine is not deployed here (server-only install)')
 class QueueEngineGateTests(unittest.TestCase):
     """The actual PC queue loads its own gate; test that path as well."""
     @classmethod
