@@ -3393,7 +3393,32 @@ def verify_once(limit=40):
                     rec['alive']=results[rec['id']]; rec['verified_at']=vat
             save_json(HISTORY_FILE,h)
         add_log(f'[검증] {len(results)}건 확인 (생존 {sum(1 for v in results.values() if v=="yes")}·삭제 {sum(1 for v in results.values() if v=="no")})')
+        try: _auto_hold_deleting_sites()
+        except Exception as _e: add_log(f'[삭제 사이트 자동보류 오류] {str(_e)[:80]}')
     return len(results)
+
+def _auto_hold_deleting_sites(min_checked=20):
+    """★올린 글을 전부 지우는 사이트 자동 보류(2026-11-09 실측: 3곳이 309·202·195건 전부 삭제 — 헛발행으로 일꾼만 소모).
+       최근 확인 min_checked건 이상인데 생존 0이면 maintenance_hold. 운영실 '사이트' 탭에서 언제든 해제 가능."""
+    from collections import defaultdict
+    with JOB_LOCK:
+        h=load_json(HISTORY_FILE,[])
+    per=defaultdict(lambda:[0,0])
+    for r in h:
+        a=r.get('alive')
+        if a in ('yes','no') and r.get('site_id'): per[r['site_id']][0 if a=='yes' else 1]+=1
+    bad={sid for sid,(al,de) in per.items() if al==0 and de>=min_checked}
+    if not bad: return 0
+    held=[]
+    with POST_LOCK:
+        sites=load_sites()
+        for s in sites:
+            if s.get('id') in bad and not s.get('maintenance_hold'):
+                s['maintenance_hold']=True; s['auto_hold_reason']=f'올린 글 {per[s["id"]][1]}건 전부 삭제됨 — 자동 보류'
+                held.append((s.get('name') or s.get('site_url') or '')[:30])
+        if held: save_sites(sites)
+    if held: add_log(f'[삭제 사이트 자동보류] {len(held)}곳 — 올린 글이 전부 삭제됨: {", ".join(held)[:120]}','정리')
+    return len(held)
 
 def verify_loop():
     while True:
