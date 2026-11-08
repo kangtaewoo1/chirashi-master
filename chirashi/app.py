@@ -3946,6 +3946,195 @@ def _http_cap_diag(key, site, detail):
         add_log(f'[HTTP캡차진단] {(site.get("name") or site.get("site_url") or "")[:28]} — {detail}')
     except Exception: pass
 
+# ★브라우저 없는 그누보드 가입·로그인(2026-11-08 대표님 '진행'): Hetzner 실측에서 다수 그누보드가 서버 headless
+#   크롬에는 39바이트 빈 페이지를 주지만 일반 HTTP 요청에는 정상 register.php를 준다(가입 실패 1위 18곳).
+#   → 브라우저 가입이 '가입 폼 도달 실패'일 때 requests로 표준 2단계 가입을 하고, 그렇게 만든 계정(http_member)은
+#   발행도 requests 로그인 세션으로 한다. 접속 정체는 requests 기본값 그대로 둔다(UA·지문 위장 없음).
+def _html_form(html, form_pat):
+    """html에서 name/id/action이 form_pat에 맞는 첫 폼의 {'attrs','fields'}를 돌려준다. 없으면 None."""
+    from html.parser import HTMLParser
+    class _P(HTMLParser):
+        def __init__(self):
+            super().__init__(convert_charrefs=True); self.forms=[]; self.cur=None; self.sel=None
+        def handle_starttag(self, tag, attrs):
+            a={k:(v if v is not None else '') for k,v in attrs}
+            if tag=='form':
+                self.cur={'attrs':a,'fields':[]}; self.forms.append(self.cur); return
+            if self.cur is None: return
+            if tag=='input': self.cur['fields'].append(('input',a))
+            elif tag=='select':
+                self.sel={'attrs':a,'options':[]}; self.cur['fields'].append(('select',self.sel))
+            elif tag=='option' and self.sel is not None: self.sel['options'].append(a)
+            elif tag=='textarea': self.cur['fields'].append(('textarea',a))
+        def handle_endtag(self, tag):
+            if tag=='form': self.cur=None
+            elif tag=='select': self.sel=None
+    p=_P()
+    try: p.feed(html or ''); p.close()
+    except Exception: pass
+    for f in p.forms:
+        key=' '.join(f['attrs'].get(k,'') for k in ('name','id','action'))
+        if re.search(form_pat,key,re.I): return f
+    return None
+
+def _html_form_defaults(form):
+    """폼의 기본 제출값(hidden·체크된 항목·선택값)과 필수 필드 이름 목록."""
+    data={}; required=set(); radios={}
+    for kind,a in form['fields']:
+        if kind=='select':
+            n=a['attrs'].get('name')
+            if not n: continue
+            if 'required' in a['attrs']: required.add(n)
+            opts=a['options']
+            o=next((x for x in opts if 'selected' in x),None) or next((x for x in opts if (x.get('value') or '')!=''),None)
+            data[n]=(o or {}).get('value','')
+            continue
+        n=a.get('name')
+        if not n: continue
+        if 'required' in a: required.add(n)
+        if kind=='textarea': data.setdefault(n,''); continue
+        t=(a.get('type') or 'text').lower()
+        if t in ('submit','button','image','reset','file'): continue
+        if t=='radio':
+            radios.setdefault(n,a.get('value') or 'on')
+            if 'checked' in a: data[n]=a.get('value') or 'on'
+            continue
+        if t=='checkbox':
+            if 'checked' in a or 'required' in a: data[n]=a.get('value') or '1'
+            continue
+        data[n]=a.get('value','')
+    for n,v in radios.items(): data.setdefault(n,v)   # 필수 라디오(성별 등) 미선택 반려 방지 → 첫 값
+    return data,required
+
+def _html_charset(resp):
+    m=re.search(rb'<meta[^>]+charset=["\']?([A-Za-z0-9_-]+)',resp.content[:4000] or b'',re.I)
+    enc=(m.group(1).decode('ascii','ignore') if m else '') or resp.encoding or 'utf-8'
+    try:
+        import codecs; codecs.lookup(enc); return enc
+    except Exception: return 'utf-8'
+
+def _http_alerts(body):
+    return [x.strip() for x in re.findall(r"alert\(\s*['\"]([^'\"]{2,200})['\"]",body or '')]
+
+def _gnuboard_http_login(s, base, mb_id, mb_pass, verify=False):
+    """requests 세션 s로 그누보드 로그인. 로그인 상태가 확인되면 True."""
+    bbs=base+'/bbs'
+    try:
+        s.get(f'{bbs}/login.php',timeout=15,verify=verify)
+        r=s.post(f'{bbs}/login_check.php',data={'mb_id':mb_id,'mb_password':mb_pass,'url':base+'/'},
+                 headers={'Referer':f'{bbs}/login.php'},timeout=15,verify=verify,allow_redirects=True)
+        if any(re.search(r'아이디|비밀번호|인증|차단|탈퇴|없는',a) for a in _http_alerts(r.text)):
+            return False
+        for u in (r.url, base+'/'):
+            h=s.get(u,timeout=15,verify=verify).text or ''
+            if re.search(r'logout\.php|로그아웃',h): return True
+        return False
+    except Exception:
+        return False
+
+def _gnuboard_signup_http(site, cfg, vals):
+    """requests로 그누보드 표준 가입(register.php 약관 → register_form.php → register_form_update.php → 로그인 확인).
+       vals: auto_signup의 vals_by_role. 반환 (True,msg) 성공 / (False,msg) 시도했으나 실패 / (None,사유) 적용 불가."""
+    import requests as _rq
+    base=_signup_origin(site); bbs=base+'/bbs'; nm=site.get('name') or site.get('site_url','')
+    s=_rq.Session()   # requests 기본 UA 그대로(위장 안 함)
+    try:
+        r=s.get(f'{bbs}/register.php',timeout=20)
+    except Exception as e:
+        return None,f'HTTP 가입 접속 실패({str(e)[:40]})'
+    agree=_html_form(r.text,r'fregister\b|register_form\.php')
+    if r.status_code>=400 or not agree:
+        return None,f'HTTP 가입 불가 — 표준 약관 화면 아님(HTTP {r.status_code}, {len(r.content)}B)'
+    adata,_=_html_form_defaults(agree)
+    for k in ('agree','agree2'): adata[k]=adata.get(k) or '1'
+    for kind,a in agree['fields']:   # 약관 체크박스 전부 동의
+        if kind=='input' and (a.get('type') or '').lower()=='checkbox' and a.get('name'):
+            adata[a['name']]=a.get('value') or '1'
+    act=urllib.parse.urljoin(r.url,agree['attrs'].get('action') or 'register_form.php')
+    def _open_form():
+        r2=s.post(act,data=adata,headers={'Referer':r.url},timeout=20)
+        enc=_html_charset(r2); r2.encoding=enc
+        return r2,enc,_html_form(r2.text,r'fregisterform|register_form_update')
+    try: r2,enc,form=_open_form()
+    except Exception as e: return None,f'HTTP 가입 폼 열기 실패({str(e)[:40]})'
+    if not form or 'mb_password' not in (r2.text or ''):
+        return None,'HTTP 가입 불가 — 약관 동의 후 가입 폼 없음'
+    low=(r2.text or '').lower()
+    if re.search(r'recaptcha|hcaptcha|h-captcha|turnstile|data-sitekey',low):
+        return False,'HTTP 가입 실패 — 사람 확인 장치(자동가입 불가)'
+    if re.search(r'본인인증|휴대폰\s*인증|실명인증',r2.text or '') and re.search(r'cert_req|본인인증\s*(?:을|이)?\s*(?:필수|하셔야|해야)',r2.text or ''):
+        return False,'HTTP 가입 실패 — 본인인증 필수(자동가입 불가)'
+    def _fill(form):
+        data,required=_html_form_defaults(form)
+        role_by_name={'mb_id':'id','mb_password':'password','mb_password_re':'password_confirm','mb_name':'name',
+                      'mb_nick':'nickname','mb_email':'email','mb_hp':'phone','mb_birth':'birth'}
+        names={a['attrs'].get('name') if k=='select' else a.get('name') for k,a in form['fields']}
+        types={a.get('name'):(a.get('type') or 'text').lower() for k,a in form['fields'] if k=='input'}
+        page=r2.text or ''
+        for n in names:
+            if not n or n=='captcha_key': continue
+            if n in role_by_name: data[n]=vals.get(role_by_name[n],'')
+            elif n=='mb_tel' and n in required: data[n]=vals.get('phone','')
+            elif n in required and not data.get(n) and types.get(n,'text') in ('text','tel','date','number','email'):
+                # 여분필드(mb_1~mb_10 등) 필수 칸은 바로 앞 라벨 글자로 용도를 추정해 채운다(실측 nwsports mb_2=생년월일).
+                i=page.find(f'name="{n}"'); i=i if i>=0 else page.find(f"name='{n}'")
+                lab=re.sub(r'<[^>]+>',' ',page[max(0,i-400):i])[-60:] if i>=0 else ''
+                if re.search(r'생년월일|생일|birth',lab,re.I):
+                    b=vals.get('birth','19900315'); data[n]=f'{b[:4]}-{b[4:6]}-{b[6:8]}' if types.get(n)=='date' else b
+                elif re.search(r'전화|휴대|연락처|핸드폰',lab): data[n]=vals.get('phone','')
+                elif re.search(r'이름|성명',lab): data[n]=vals.get('name','')
+                elif re.search(r'닉네임|별명',lab): data[n]=vals.get('nickname','')
+        data.pop('captcha_key',None); data.pop('mb_mailling',None)   # 메일 수신 동의는 하지 않음
+        return data
+    data=_fill(form)
+    if not data.get('mb_id') or not data.get('mb_password'):
+        return None,'HTTP 가입 불가 — 표준 아이디/비밀번호 칸 없음'
+    target=urllib.parse.urljoin(r2.url,form['attrs'].get('action') or 'register_form_update.php')
+    cap_m=re.search(r'g5_captcha_url\s*=\s*["\']([^"\']+)["\']',r2.text or '')
+    needs_cap=bool(cap_m) or 'captcha_key' in low
+    cap_base=cap_m.group(1) if cap_m else base+'/plugin/kcaptcha'
+    last=''; img=None; ans=''
+    for attempt in range(1,4):
+        if needs_cap:
+            try:
+                s.post(cap_base+'/kcaptcha_session.php',timeout=12,headers={'Referer':r2.url,'X-Requested-With':'XMLHttpRequest'})
+                ci=s.get(cap_base+f'/kcaptcha_image.php?t={int(time.time()*1000)}',timeout=12,headers={'Referer':r2.url})
+                img=ci.content if (ci.status_code<400 and ci.content and len(ci.content)>200) else None
+            except Exception: img=None
+            if not img: return False,'HTTP 가입 실패 — 캡차 이미지 수신 실패'
+            if len(img)<1200: return False,f'HTTP 가입 실패 — 캡차 세션 미생성(빈 이미지 {len(img)}B)'
+            ans=_solve_kcaptcha_bytes(img,cfg)
+            if not ans: last='캡차 OCR 빈값'; continue
+            data['captcha_key']=ans
+        try:
+            body=urllib.parse.urlencode(data,encoding=enc,errors='ignore')
+            pr=s.post(target,data=body,timeout=25,allow_redirects=True,
+                      headers={'Referer':r2.url,'Content-Type':'application/x-www-form-urlencoded'})
+        except Exception as e:
+            return False,f'HTTP 가입 제출 오류({str(e)[:40]})'
+        alerts=_http_alerts(pr.text)
+        if 'register_result' in (pr.url or '') or not alerts:
+            break
+        last=alerts[0]
+        if needs_cap and re.search(r'자동등록방지|보안문자|숫자가\s*틀',last):
+            add_log(f'[HTTP 가입 캡차재시도] {nm[:30]} — {last[:40]} {attempt}/3')
+            continue
+        if re.search(r'이미\s*(?:사용|등록|가입|존재)|중복',last):
+            return False,f'HTTP 가입 실패 — 아이디/이메일 중복({last[:50]})'
+        return False,f'HTTP 가입 실패 — {last[:70]}'
+    else:
+        return False,f'HTTP 가입 실패 — 캡차 3회 실패({last[:40]})'
+    mid=data['mb_id']; pw=data['mb_password']
+    if not _gnuboard_http_login(_rq.Session(),base,mid,pw):
+        return False,'HTTP 가입 제출했으나 로그인 확인 실패(승인제·메일인증 가능)'
+    site['mb_id']=mid; site['mb_pass']=pw; site['http_member']=True
+    set_site_flag(site.get('id'),mb_id=mid,mb_pass=pw,signup_status='complete',login_saved=True,no_verify=True,
+                  http_member=True,signup_via='http',signup_updated_at=datetime.now().isoformat(timespec='seconds'))
+    if needs_cap and img and ans:
+        _save_captcha_sample(img,ans,verified=True)
+    add_log(f'[자동가입 성공] 🌐HTTP {nm} — {mid}')
+    return True,f'자동가입 성공(HTTP) — {mid}'
+
 def gnuboard_post_http(site, title, content_html):
     """requests 기반 초고속 그누보드 발행(비회원 글쓰기). 성공: (True, 글URL).
        불가/폴백 필요: (None, 사유) → 호출측이 셀레늄으로 폴백. 실패: (False, 사유)."""
@@ -3959,9 +4148,16 @@ def gnuboard_post_http(site, title, content_html):
     bbs=base+'/bbs'
     bo=site.get('bo_table','free')
     # 로그인 필요 사이트(mb_id 저장됨)는 requests 로그인까지 필요 → 일단 셀레늄 폴백.
-    if str(site.get('mb_id') or '').strip():
+    #   ★예외: HTTP로 가입한 계정(http_member — 서버 크롬엔 빈 페이지를 주는 사이트)은 requests로 로그인해 발행.
+    _mb=str(site.get('mb_id') or '').strip()
+    if _mb and not site.get('http_member'):
         return None,'로그인 사이트 — 셀레늄 폴백'
-    s=_rq.Session(); s.headers.update({'User-Agent':_HTTP_UA})
+    s=_rq.Session()
+    if _mb:
+        if not _gnuboard_http_login(s,base,_mb,str(site.get('mb_pass') or ''),verify=bool(site.get('_unattended_job'))):
+            return None,'HTTP 로그인 실패 — 셀레늄 폴백'
+    else:
+        s.headers.update({'User-Agent':_HTTP_UA})
     try:
         r=s.get(f'{bbs}/write.php',params={'bo_table':bo},timeout=15,verify=bool(site.get('_unattended_job')))
     except Exception as e:
@@ -8935,6 +9131,12 @@ def auto_signup(site, submit=True):
                 if _has_pw_field(): break
             except Exception: pass
     if not _has_pw_field():
+        # ★브라우저가 가입 폼에 못 가면(서버 크롬에 빈 페이지 주는 그누보드) requests로 표준 가입 시도.
+        if (site.get('platform') or 'gnuboard')=='gnuboard' and submit:
+            try: _hok,_hmsg=_gnuboard_signup_http(site,cfg,vals_by_role)
+            except Exception as _he: _hok,_hmsg=False,f'HTTP 가입 오류({str(_he)[:50]})'
+            if _hok is not None: return _hok,_hmsg
+            add_log(f'[자동가입] {_snm} — {_hmsg}')
         return False,'가입 폼(비밀번호 입력칸)에 도달 실패 — 약관/인증 단계 확인'
     # 2.5) 휴대폰 본인인증(SMS) 폼은 자동가입 불가 — 임시메일·캡차 비용 쓰기 전에 조기 제외.
     # (본인인증을 통과해야 아이디/이름 칸이 활성화되는 폼. win_hp_cert 등 본인인증 버튼 존재.)
