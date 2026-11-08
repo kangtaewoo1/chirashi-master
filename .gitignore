@@ -58,3 +58,14 @@ chirashi/captcha_retrain/kcaptcha_big_*.onnx
 chirashi/captcha_retrain/kcaptcha_padright.onnx
 chirashi/captcha_retrain/kcaptcha_small_*.onnx
 chirashi/captcha_retrain/kcaptcha_wide192.onnx
+
+# 2026-11-08 실수로 커밋된 런타임·비밀 파일 재발 방지
+.webui_secret_key
+__pycache__/
+chirashi/.node_heartbeat
+chirashi/.pc_discovery_crtsh
+chirashi/.pc_discovery_crtsh_seen
+chirashi/data/c24_cookies.json
+chirashi/data/manual_action_states.json
+chirashi/data/pc-queue.*.log
+chirashi/data/pc_queue_jobs/
