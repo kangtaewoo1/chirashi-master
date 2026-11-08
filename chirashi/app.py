@@ -4242,7 +4242,9 @@ def gnuboard_post_http(site, title, content_html):
     # ── 캡차 ──
     capm=re.search(r'g5_captcha_url\s*=\s*["\']([^"\']+)["\']',html)
     needs_cap=human_challenge_present(html)
-    if needs_cap: return False,'사람 확인 필요 — 자동 제출 중단'
+    # ★대표님 승인 2026-11-09('그래그래'): HTTP 가입 회원 사이트(http_member)만 그누보드 숫자 캡차를 아래 OCR 경로로 푼다.
+    #   진짜 사람 확인(recaptcha 등)은 아래 _hard_human에서 계속 차단. 비회원 발행의 기존 안전장치·테스트는 그대로.
+    if needs_cap and not (_mb and site.get('http_member')): return False,'사람 확인 필요 — 자동 제출 중단'
     # ★kcaptcha는 자동 OCR로 풀므로 '사람 확인 제외'에서 뺀다(2026-10-18 대표님 '서버 워커 깔끔하게' 실측:
     #   자율AI가 human_challenge_present True면 무조건 return False로 막아, 전용 OCR로 풀 수 있는 그누보드 kcaptcha
     #   55건이 '사람 확인 필요'로 전부 버려짐). 진짜 사람 확인(recaptcha·turnstile·hcaptcha·veritas-hub·'사람인지
