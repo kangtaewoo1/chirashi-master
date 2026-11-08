@@ -14396,7 +14396,12 @@ def _ops_fail_key(h):
     if not cat:
         try: cat=classify_fail(msg)[1]
         except Exception: cat=''
-    key=re.sub(r'\s*[\(\[].*$','',msg)
+    if 'ConnectionPool' in msg or 'Max retries' in msg:
+        _to=re.search(r'timed out|Timeout',msg,re.I)
+        return (cat or '타임아웃/브라우저오류'),('사이트 연결 실패 — '+('응답 시간 초과' if _to else '접속 불가'))
+    # 괄호 안 상세만 지우고 뒷말은 살린다('글쓰기 폼(wr_subject) 없음 — …'이 '글쓰기 폼'으로 잘리던 것). 닫히지 않은 괄호는 그 뒤 전부.
+    key=re.sub(r'\([^()]*\)|\[[^\[\]]*\]','',msg)
+    key=re.sub(r'\s*[\(\[].*$','',key)
     key=re.sub(r'https?://\S+|\d+','',key)
     key=re.sub(r'\s+',' ',key).strip(' —-:·|')
     return (cat or '기타'),(key[:70] or cat or '기타')
