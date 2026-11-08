@@ -4164,13 +4164,17 @@ def gnuboard_post_http(site, title, content_html):
     bo=site.get('bo_table','free')
     # 로그인 필요 사이트(mb_id 저장됨)는 requests 로그인까지 필요 → 일단 셀레늄 폴백.
     #   ★예외: HTTP로 가입한 계정(http_member — 서버 크롬엔 빈 페이지를 주는 사이트)은 requests로 로그인해 발행.
+    #   ★2026-11-09 자율개선: 브라우저로 가입한 회원 사이트도 HTTP 로그인을 먼저 시도한다(서버 크롬이 빈 페이지를 받아
+    #   '로그인 입력칸을 찾지 못함'으로 막히던 사이트 구제 + 브라우저 없이 수 초 만에 발행 = 속도↑). HTTP 로그인이 안 되거나
+    #   글쓰기 캡차·접근 거부면 종전대로 셀레늄 폴백(_mb_try) — 그 사이트들의 기존 동작은 그대로다.
     _mb=str(site.get('mb_id') or '').strip()
-    if _mb and not site.get('http_member'):
+    _mb_try=bool(_mb) and not site.get('http_member')
+    if _mb_try and resolve_platform(site)!='gnuboard':
         return None,'로그인 사이트 — 셀레늄 폴백'
     s=_rq.Session()
     if _mb:
         if not _gnuboard_http_login(s,base,_mb,str(site.get('mb_pass') or ''),verify=bool(site.get('_unattended_job'))):
-            return None,'HTTP 로그인 실패 — 셀레늄 폴백'
+            return None,('로그인 사이트 — 셀레늄 폴백' if _mb_try else 'HTTP 로그인 실패 — 셀레늄 폴백')
     else:
         s.headers.update({'User-Agent':_HTTP_UA})
     try:
@@ -4189,6 +4193,7 @@ def gnuboard_post_http(site, title, content_html):
     from form_schema import measure_html
     measured=measure_html(html,r.url,'write')
     if measured['state']=='access_denied':
+        if _mb_try: return None,'회원 HTTP 접근 거부 — 셀레늄 폴백'
         return False,'보안 차단 — 접근 불가 응답, 사이트 관리자 확인 필요'
     from form_schema import human_challenge_present
     if site.get('_unattended_job'):
@@ -4244,6 +4249,7 @@ def gnuboard_post_http(site, title, content_html):
     needs_cap=human_challenge_present(html)
     # ★대표님 승인 2026-11-09('그래그래'): HTTP 가입 회원 사이트(http_member)만 그누보드 숫자 캡차를 아래 OCR 경로로 푼다.
     #   진짜 사람 확인(recaptcha 등)은 아래 _hard_human에서 계속 차단. 비회원 발행의 기존 안전장치·테스트는 그대로.
+    if needs_cap and _mb_try: return None,'회원 글쓰기 캡차 — 셀레늄 폴백'   # 브라우저 가입 회원 사이트의 캡차는 종전대로 셀레늄 경로
     if needs_cap and not (_mb and site.get('http_member')): return False,'사람 확인 필요 — 자동 제출 중단'
     # ★kcaptcha는 자동 OCR로 풀므로 '사람 확인 제외'에서 뺀다(2026-10-18 대표님 '서버 워커 깔끔하게' 실측:
     #   자율AI가 human_challenge_present True면 무조건 return False로 막아, 전용 OCR로 풀 수 있는 그누보드 kcaptcha
@@ -11023,7 +11029,7 @@ def chk():
     #  /api/test/* = 발행 테스트 트리거(등록 사이트에 실제 글1건 발행해 검증).
     _p=request.path
     if _p=='/api/version': return  # 배포 SHA 확인 — 공개(민감정보 없음)
-    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/sites/unlock-cafe24','/api/sites/unlock-verified','/api/sites/purge-fake-cafe24','/api/sites/mark-login-required','/api/sites/unmark-login-required','/api/sites/retry-signup','/api/sites/signup-member-boards','/api/candidates/rescreen-cafe24','/api/candidates/revive-rejected','/api/candidates/unrevive-nonillegal','/api/regions/normalize-existing','/api/site-board','/api/history','/api/ops-dashboard','/api/imap/test','/api/openai/usage','/api/twocaptcha/usage','/api/config/clear-key','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/candidates/reject-unworkable','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/pc-queue/claim','/api/pipeline/pc-queue/audit','/api/pipeline/pc-queue/start','/api/pipeline/pc-queue/report','/api/pipeline/report-site','/api/pipeline/node-beat','/api/unlocker/test','/api/sbr/test','/api/diag','/api/ops/overview','/api/ops/sites','/api/ops/failures') or _p.startswith('/api/test/'):
+    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/sites/unlock-cafe24','/api/sites/unlock-verified','/api/sites/purge-fake-cafe24','/api/sites/mark-login-required','/api/sites/unmark-login-required','/api/sites/retry-signup','/api/sites/signup-member-boards','/api/candidates/rescreen-cafe24','/api/candidates/revive-rejected','/api/candidates/unrevive-nonillegal','/api/regions/normalize-existing','/api/site-board','/api/history','/api/ops-dashboard','/api/imap/test','/api/openai/usage','/api/twocaptcha/usage','/api/config/clear-key','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/candidates/reject-unworkable','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/pc-queue/claim','/api/pipeline/pc-queue/audit','/api/pipeline/pc-queue/start','/api/pipeline/pc-queue/report','/api/pipeline/report-site','/api/pipeline/node-beat','/api/unlocker/test','/api/sbr/test','/api/diag','/api/ops/overview','/api/ops/sites','/api/ops/failures','/api/ops/sites/action') or _p.startswith('/api/test/'):
         tok=(request.args.get('token') or '').strip()
         cfgtok=(load_config().get('log_token') or '').strip()
         if cfgtok and tok==cfgtok:
