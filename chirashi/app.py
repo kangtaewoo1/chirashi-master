@@ -8916,7 +8916,9 @@ def auto_signup(site, submit=True):
             _safe_js(d,"var f=document.getElementById('fregister')||document.forms['fregister'];if(f){if(f.requestSubmit)f.requestSubmit();else f.submit();}")
         # ★약관 제출 후 register_form 렌더 폴링(2026-09-17 대표님 '전체 실측' — 병렬발행 부하로 2초만
         #   기다려 폼 렌더 전 조회→'비밀번호 칸 도달 실패' 오판. 단독 실측은 정상. 최대 ~6초 폴링해 완화).
-        for _ in range(12):
+        #   ★2026-11-08 Hetzner(싱가포르) 실측: 약관 제출 뒤 register_form 로딩이 6초를 넘겨 '도달 실패'가 가입 실패의
+        #   2/3를 차지 → 최대 30초 폴링(폼이 뜨면 즉시 진행하므로 빠른 사이트엔 영향 없음).
+        for _ in range(60):
             dismiss_alerts(d)
             if _has_pw_field(): break
             time.sleep(0.5)
