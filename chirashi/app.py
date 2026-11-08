@@ -4204,6 +4204,8 @@ def gnuboard_post_http(site, title, content_html):
     cfg=load_config()
     url=site.get('site_url','').rstrip('/')
     m=re.match(r'(https?://[^/]+)',url); base=m.group(1) if m else url
+    # ★하위 폴더 설치 그누보드(예: /gnuboard4/bbs/) — 주소에 /bbs/가 있으면 그 앞까지를 기본 경로로(2026-11-09 kicm.org 404 실측).
+    if '/bbs/' in url+'/': base=(url+'/').split('/bbs/')[0]
     bbs=base+'/bbs'
     bo=site.get('bo_table','free')
     # 로그인 필요 사이트(mb_id 저장됨)는 requests 로그인까지 필요 → 일단 셀레늄 폴백.
@@ -4262,6 +4264,11 @@ def gnuboard_post_http(site, title, content_html):
         return False,'사이트 사람 확인 페이지 — 구조적 차단(자동 발행 불가)'
     if _structural and len(html)<1200 and '<script' in low and '<form' not in low:
         return False,'호스팅 보안 검사 페이지 — 구조적 차단(자동 발행 불가)'
+    # ★회원 전용 명확 판정(2026-11-09 실측: '글을 쓸 권한이 없습니다…로그인 후 이용' 알림 게시판이 셀레늄으로 넘어가
+    #   '글쓰기 폼 없음'으로 탈락 → 파이프라인이 자동가입을 시도 못 함). 비회원이면 '로그인 필요'로 돌려 가입 경로를 타게 한다.
+    _al0=re.findall(r"alert\(\s*['\"]([^'\"]{2,120})",html)
+    if (not _mb) and 'wr_subject' not in low and any(('권한이 없' in a or '로그인 후' in a) for a in _al0):
+        return False,'로그인이 필요한 게시판입니다 — 비회원 글쓰기 불가(권한 alert)'
     if ('mb_password' in low and 'login' in low and 'wr_subject' not in low) or measured['state']!='measured':
         return None,'비회원 글쓰기 폼 아님 — 폴백'
     # 폼의 write_update 액션 확인
@@ -9899,6 +9906,16 @@ def auto_pipeline_once(limit=5):
                     c['reject_reason']='서버 IP 차단(cafe24) — 노트북(한국 IP) 노드 대기'; _c24+=1
             if _c24:
                 save_cands(cands); add_log(f'[cafe24 후보 복원] 서버 IP 차단으로 떨어진 {_c24}곳 → 노트북 노드 대기로 되돌림','정리')
+        # ★'글쓰기 폼 없음' 오판 탈락 1회 재검토(2026-11-09: 회원전용 권한 alert·bo_table 어긋남·하위폴더 설치를 폼없음으로 잘못
+        #   탈락시켰음 — 판정 수정 후 허가된 후보만 한 번 다시 대기로).
+        _rv=0
+        for c in cands:
+            if (c.get('status')=='rejected' and c.get('posting_authorized') is True and not c.get('noform_rechecked')
+                    and 'wr_subject' in str(c.get('reject_reason') or '') and c.get('platform','gnuboard')!='cafe24'):
+                c['status']='ready'; c['noform_rechecked']=True; c['pipeline_attempts']=0
+                c['reject_reason']='글쓰기 폼 없음 판정 재검토(회원전용·게시판주소·설치경로 판정 수정 후)'; _rv+=1
+        if _rv:
+            save_cands(cands); add_log(f'[후보 재검토] 글쓰기 폼 없음으로 탈락한 허가 후보 {_rv}곳 다시 확인','정리')
         # ★빡센검수 소급 적용(대표님 지시 2026-09-09 '대기 너무 쌓임'): strict_screen 켜져 있으면,
         #   기존 backlog의 ready 후보 중 '홍보 흔적 없는 것'(방치·개방 게시판 아님)을 대기줄에서 탈락.
         #   (예전 느슨한 검수로 통과된 것들이 가입 안 되며 대기만 쌓이던 문제 — 될 만한 것만 남긴다.)
@@ -10003,9 +10020,17 @@ def auto_pipeline_once(limit=5):
         # 임시 site dict(발행 함수는 site 형태를 기대) — 후보 정보로 구성
         _curl=c.get('url','')
         m=re.match(r'(https?://[^/]+)',_curl); base=m.group(1) if m else _curl
+        # ★실제 발견한 글쓰기 주소 우선(2026-11-09 실측: 후보 bo_table이 주소와 어긋나 table40→table44·빈값으로 시도해 탈락,
+        #   /gnuboard4/bbs/ 하위 폴더 설치를 도메인 루트로 잘라 404).
+        _wurl=str(c.get('write_url') or '') or _curl
+        _bom=re.search(r'[?&]bo_table=([^&#]+)',_wurl) or re.search(r'[?&]bo_table=([^&#]+)',_curl)
+        _bo=(_bom.group(1) if _bom else '') or c.get('bo_table') or 'free'
+        if (c.get('platform') or 'gnuboard')=='gnuboard':
+            _gb=re.match(r'(https?://.+?)/bbs/',_wurl) or re.match(r'(https?://.+?)/bbs/',_curl)
+            if _gb: base=_gb.group(1)
         tmp={'id':'cand_'+c.get('id',''),'site_url':base,'platform':c.get('platform','gnuboard'),
              'posting_authorized':c.get('posting_authorized') is True,
-             'bo_table':c.get('bo_table') or 'free','name':name,'mb_id':'','mb_pass':''}
+             'bo_table':_bo,'name':name,'mb_id':'','mb_pass':''}
         # ★Cafe24: 처음 발굴한 URL(글목록 /article|/board/{명}/{no}/)을 진입점으로(대표님 지시 2026-09-11
         #   '처음 발굴한 사이트로 접속→로그인→진짜 글쓰기 링크'). 이게 없으면 write.html 추측→404.
         if c.get('platform')=='cafe24':
