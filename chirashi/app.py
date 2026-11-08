@@ -1952,7 +1952,7 @@ def generate_post_gpt(keywords, cfg, workroom_id=None, image_urls=None, model_ov
                 _wait=_FREE_RL[0]+60-_now
             if time.time()>=_t_end: return False
             time.sleep(min(max(0.2,_wait),3))
-    _is_free=(_prov=='openrouter' and str(model).endswith(':free'))
+    _is_free=(_prov=='openrouter' and (str(model).endswith(':free') or str(model)=='openrouter/free'))
     if _is_free: _free_slot()
     def _post_once():
         return _rq.post(_url,headers=_hdr,json=_body,timeout=_to)
@@ -1978,6 +1978,15 @@ def generate_post_gpt(keywords, cfg, workroom_id=None, image_urls=None, model_ov
         else:
             time.sleep(3); resp=_post_once()   # 분당 한도 — 3초 뒤 1회 재시도
             if resp.status_code==429: raise RuntimeError(f'{_prov.upper()} 분당 한도(429) — 잠시 후 재개')
+    # ★추론 필수 모델(2026-11-09 실측: 'openrouter/free' → 400 "Reasoning is mandatory for this endpoint and cannot be
+    #   disabled"): 위에서 넣은 reasoning={'enabled':False}를 빼고 1회 재요청. 안 그러면 매 글 400 → 30분 무료폴백 반복.
+    if _prov=='openrouter' and resp.status_code==400 and 'reasoning' in _body:
+        try: _em0=str(((resp.json() or {}).get('error') or {}).get('message') or '')
+        except Exception: _em0=''
+        if 'reasoning is mandatory' in _em0.lower() or 'cannot be disabled' in _em0.lower():
+            _body.pop('reasoning',None); _body['max_tokens']=max(int(_body.get('max_tokens') or 0),8000)   # 사고 토큰 몫까지
+            if _is_free: _free_slot(60)
+            resp=_post_once()
     if _prov=='openrouter' and resp.status_code==402:   # OpenRouter는 크레딧 바닥을 402로 줌(OpenAI의 429/insufficient_quota와 다름)
         raise RuntimeError('OPENROUTER 잔액 소진(402) — openrouter.ai/settings/credits 충전 필요')
     # ★잔액 소진 구분(대표님 2026-09-11 '이거 맞아?' — 잔액 -$1.44인데 로그는 '레이트리밋'): OpenAI는 크레딧 바닥도
@@ -9179,6 +9188,7 @@ def auto_signup(site, submit=True):
             except Exception as _he: _hok,_hmsg=False,f'HTTP 가입 오류({str(_he)[:50]})'
             if _hok is not None: return _hok,_hmsg
             add_log(f'[자동가입] {_snm} — {_hmsg}')
+            return False,f'가입 폼(비밀번호 입력칸)에 도달 실패 — {_hmsg}'   # HTTP 사유를 남겨 구조적 실패 판정에 쓴다
         return False,'가입 폼(비밀번호 입력칸)에 도달 실패 — 약관/인증 단계 확인'
     # 2.5) 휴대폰 본인인증(SMS) 폼은 자동가입 불가 — 임시메일·캡차 비용 쓰기 전에 조기 제외.
     # (본인인증을 통과해야 아이디/이름 칸이 활성화되는 폼. win_hp_cert 등 본인인증 버튼 존재.)
@@ -11029,7 +11039,7 @@ def chk():
     #  /api/test/* = 발행 테스트 트리거(등록 사이트에 실제 글1건 발행해 검증).
     _p=request.path
     if _p=='/api/version': return  # 배포 SHA 확인 — 공개(민감정보 없음)
-    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/sites/unlock-cafe24','/api/sites/unlock-verified','/api/sites/purge-fake-cafe24','/api/sites/mark-login-required','/api/sites/unmark-login-required','/api/sites/retry-signup','/api/sites/signup-member-boards','/api/candidates/rescreen-cafe24','/api/candidates/revive-rejected','/api/candidates/unrevive-nonillegal','/api/regions/normalize-existing','/api/site-board','/api/history','/api/ops-dashboard','/api/imap/test','/api/openai/usage','/api/twocaptcha/usage','/api/config/clear-key','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/candidates/reject-unworkable','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/pc-queue/claim','/api/pipeline/pc-queue/audit','/api/pipeline/pc-queue/start','/api/pipeline/pc-queue/report','/api/pipeline/report-site','/api/pipeline/node-beat','/api/unlocker/test','/api/sbr/test','/api/diag','/api/ops/overview','/api/ops/sites','/api/ops/failures','/api/ops/sites/action') or _p.startswith('/api/test/'):
+    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/sites/unlock-cafe24','/api/sites/unlock-verified','/api/sites/purge-fake-cafe24','/api/sites/mark-login-required','/api/sites/unmark-login-required','/api/sites/retry-signup','/api/sites/signup-member-boards','/api/candidates/rescreen-cafe24','/api/candidates/revive-rejected','/api/candidates/unrevive-nonillegal','/api/regions/normalize-existing','/api/site-board','/api/history','/api/ops-dashboard','/api/imap/test','/api/openai/usage','/api/twocaptcha/usage','/api/config/clear-key','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/candidates/reject-unworkable','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/pc-queue/claim','/api/pipeline/pc-queue/audit','/api/pipeline/pc-queue/start','/api/pipeline/pc-queue/report','/api/pipeline/report-site','/api/pipeline/node-beat','/api/unlocker/test','/api/sbr/test','/api/diag','/api/ops/overview','/api/ops/sites','/api/ops/failures','/api/ops/sites/action','/api/ops/posts') or _p.startswith('/api/test/'):
         tok=(request.args.get('token') or '').strip()
         cfgtok=(load_config().get('log_token') or '').strip()
         if cfgtok and tok==cfgtok:
@@ -11584,13 +11594,22 @@ def api_sites_retry_signup():
 
 _MEMBER_SIGNUP_STATE={'running':False,'done':0,'total':0,'ok':0}
 
-def _member_signup_targets(sites,limit=60):
+# 구조적으로 막힌 가입 실패(해외IP 403·호스팅 JS 검사·사람 확인·사이트 다운) — 3회 이상이면 자동 실행에서 건너뜀.
+#   (2026-11-09 실측: 매 실행 49곳 중 30곳 이상이 같은 이유로 곳당 최대 180초씩 헛시도 → 한 바퀴가 1시간 넘게 걸림)
+_SIGNUP_STRUCTURAL=('HTTP 403','표준 약관 화면 아님','human_verification','사람 확인 장치','Max retries','ConnectionPool',
+                    'tls_','캡차 세션 미생성','본인인증')
+def _member_signup_targets(sites,limit=60,force=False):
     """게시 허가 체크됐고 로그인 필요인데 계정이 없는 회원 게시판(사람확인·관리자전용·보류·탈락 제외)."""
+    def _stuck(s):
+        if force: return False
+        last=str(s.get('member_signup_last') or '')
+        return int(s.get('member_signup_attempts',0) or 0)>=3 and any(k in last for k in _SIGNUP_STRUCTURAL)
     return [s for s in sites
             if s.get('posting_authorized') is True and s.get('login_required')
             and not str(s.get('mb_id') or '').strip() and s.get('status')!='rejected'
             and not s.get('manual_review_only') and not s.get('maintenance_hold') and not s.get('has_captcha')
-            and s.get('write_access_state') not in ('admin_only','human_verification_required')][:limit]
+            and s.get('write_access_state') not in ('admin_only','human_verification_required')
+            and not _stuck(s)][:limit]
 
 @app.route('/api/sites/signup-member-boards',methods=['POST'])
 def api_sites_signup_member_boards():
@@ -11601,7 +11620,7 @@ def api_sites_signup_member_boards():
     dry=bool(d.get('dry_run'))
     try: limit=max(1,min(200,int(d.get('limit',60) or 60)))
     except (TypeError,ValueError): limit=60
-    targets=_member_signup_targets(load_sites(),limit)
+    targets=_member_signup_targets(load_sites(),limit,force=bool(d.get('force')))
     names=[(s.get('name') or s.get('site_url') or '')[:34] for s in targets]
     if dry or not targets:
         return jsonify({'ok':True,'dry_run':dry,'count':len(targets),'sites':names})
@@ -14514,6 +14533,31 @@ def api_ops_failures():
     out.sort(key=lambda g:-g['count'])
     return jsonify({'ok':True,'hours':hours,'total':total,'groups':out[:40]})
 
+@app.route('/api/ops/posts',methods=['GET'])
+def api_ops_posts():
+    """발행 기록(최신순): 올라간 글 링크·실패 사유. ?status=done|failed|all &q=검색 &limit=(최대 1000) &date=YYYY-MM-DD"""
+    st=(request.args.get('status') or 'all').strip(); q=(request.args.get('q') or '').strip().lower()
+    day=(request.args.get('date') or '').strip()
+    try: lim=max(1,min(1000,int(request.args.get('limit',300))))
+    except (TypeError,ValueError): lim=300
+    out=[]; counts={'done':0,'failed':0,'posting':0}
+    for x in reversed(load_json(HISTORY_FILE,[])):
+        t=str(x.get('time') or '')
+        if day and not t.startswith(day): continue
+        s=x.get('status') or ''
+        if s in counts: counts[s]+=1
+        if st!='all' and s!=st: continue
+        if q and q not in ' '.join(str(x.get(k) or '') for k in ('site_name','site_url','title','region','service','result_url')).lower(): continue
+        if len(out)<lim:
+            ru=str(x.get('result_url') or '')
+            out.append({'time':t,'updated':x.get('updated') or '','status':s,'site_id':x.get('site_id') or '',
+                        'site':x.get('site_name') or '','site_url':x.get('site_url') or '','domain':_domain_of(x.get('site_url') or '') or '',
+                        'title':x.get('title') or '','url':(ru if ru.startswith(('http://','https://')) else ''),
+                        'reason':str(x.get('fail_reason_ko') or '')[:60],'message':str(x.get('message') or '')[:240],
+                        'workroom':x.get('workroom_name') or '','region':x.get('region') or '','service':x.get('service') or '',
+                        'alive':x.get('alive'),'secret':bool(x.get('is_secret'))})
+    return jsonify({'ok':True,'rows':out,'counts':counts})
+
 @app.route('/api/ops/control',methods=['POST'])
 def api_ops_control():
     d=request.get_json(silent=True) or {}; cfg=load_config(); changed=[]
@@ -16044,6 +16088,16 @@ details pre{white-space:pre-wrap;font:12px/1.5 var(--mono);background:var(--surf
 .toast{position:fixed;left:calc(var(--u)*3);bottom:calc(var(--u)*3);max-width:min(520px,calc(100% - 48px));background:var(--ink);color:var(--paper);padding:calc(var(--u)*1.5) calc(var(--u)*2);font-size:14px;display:none;z-index:9}
 .toast.on{display:block} .toast.bad{background:var(--accent);color:#fff}
 .empty{padding:calc(var(--u)*4) 0;color:var(--muted)}
+.recent{list-style:none;margin:0;padding:0}
+.recent li{display:grid;grid-template-columns:56px 1fr;gap:calc(var(--u)*2);padding:var(--u) 0;border-bottom:1px solid var(--line);font-size:14px}
+.recent time{font-family:var(--mono);color:var(--muted);font-size:13px}
+a.post{color:var(--ink);text-decoration:none;border-bottom:1px solid var(--main)}
+a.post:hover{color:var(--main)}
+table.posts td.t{white-space:nowrap;font-family:var(--mono);color:var(--muted);font-size:13px}
+table.posts td.ti{max-width:520px}
+.why{display:block;font-size:12px;color:var(--accent);margin-top:4px}
+input[type=date]{border:1px solid var(--line);background:var(--surface);padding:4px 8px;border-radius:2px;min-height:32px;font-family:var(--mono)}
+.log a{color:var(--main)}
 @media (max-width:860px){
   .wrap{padding:0 16px}
   header.top .wrap{grid-template-columns:1fr auto;row-gap:var(--u)} .live{grid-column:1/-1;grid-row:2}
@@ -16059,6 +16113,10 @@ details pre{white-space:pre-wrap;font:12px/1.5 var(--mono);background:var(--surf
   .sub{max-width:none;white-space:normal}
   .fail-row{grid-template-columns:64px 1fr} .fail-row .acts{grid-column:1/-1;flex-direction:row;flex-wrap:wrap;min-width:0}
   .ctl .row{grid-template-columns:1fr;gap:var(--u)} .ctl .row .note{grid-column:1}
+  table.posts thead{display:none}
+  table.posts tr{display:grid;grid-template-columns:56px 1fr;gap:4px var(--u);padding:calc(var(--u)*1.5) 0;border-bottom:1px solid var(--line)}
+  table.posts td{border:0;padding:0} table.posts td.ti,table.posts td.c-st{grid-column:2}
+  table.posts td.c-site{grid-column:2;grid-row:1}
 }
 </style></head>
 <body>
@@ -16069,6 +16127,7 @@ details pre{white-space:pre-wrap;font:12px/1.5 var(--mono);background:var(--surf
 </div></header>
 <nav class="tabs" aria-label="화면"><div class="wrap" role="tablist">
   <button role="tab" data-v="now" aria-selected="true">현황</button>
+  <button role="tab" data-v="posts" aria-selected="false">발행 기록</button>
   <button role="tab" data-v="sites" aria-selected="false">사이트</button>
   <button role="tab" data-v="fail" aria-selected="false">실패 원인</button>
   <button role="tab" data-v="ctl" aria-selected="false">발행 제어</button>
@@ -16094,8 +16153,22 @@ details pre{white-space:pre-wrap;font:12px/1.5 var(--mono);background:var(--surf
       <p class="note" id="topNote"></p>
     </div>
   </div>
+  <h2>방금 올라간 글</h2>
+  <ul class="recent" id="recentPosts"></ul>
   <h2>최근 기록</h2>
   <ul class="log" id="logs"></ul>
+</section>
+
+<section class="view" id="v-posts">
+  <div class="bar">
+    <div class="seg" id="postFilters"></div>
+    <input type="date" id="postDate" aria-label="날짜">
+    <span class="spacer"></span>
+    <input type="search" id="postQ" placeholder="사이트·제목·지역 검색" aria-label="발행 기록 검색">
+  </div>
+  <table class="posts"><thead><tr><th>시각</th><th>사이트</th><th>글 제목 (누르면 새 창으로 열림)</th><th>상태</th></tr></thead><tbody id="postRows"></tbody></table>
+  <p class="empty" id="postEmpty" hidden>조건에 맞는 기록이 없습니다.</p>
+  <p class="note" id="postMore"></p>
 </section>
 
 <section class="view" id="v-sites">
@@ -16172,7 +16245,7 @@ function show(v){
   view=v; $$('nav.tabs button').forEach(b=>b.setAttribute('aria-selected',b.dataset.v===v));
   $$('section.view').forEach(s=>s.classList.toggle('on',s.id==='v-'+v));
   store.set('ops.view',v); history.replaceState(null,'','#'+v);
-  ({now:loadNow,sites:loadSites,fail:loadFail,ctl:loadCtl})[v]();
+  ({now:loadNow,posts:loadPosts,sites:loadSites,fail:loadFail,ctl:loadCtl})[v]();
 }
 $$('nav.tabs button').forEach(b=>b.onclick=()=>show(b.dataset.v));
 
@@ -16217,9 +16290,37 @@ async function loadNow(){
     const sh=x.done/tot, isHot=sh>=.4&&x.done>=10; if(isHot&&!hot)hot=x;
     return `<tr class="${isHot?'hot':''}"><td>${esc(dom(x.url)||x.name)}<span class="sub">${esc(x.name)}</span><div class="share"><i style="width:${(sh*100).toFixed(1)}%"></i></div></td><td class="num">${fmt(x.done)}</td><td class="num">${x.failed?`<span class="warn">${fmt(x.failed)}</span>`:'0'}</td></tr>`}).join(''):'<tr><td colspan="3" class="note">오늘 발행 기록이 아직 없습니다.</td></tr>';
   $('#topNote').innerHTML=hot?`<span class="warn">오늘 성공의 ${Math.round(hot.done/tot*100)}%가 ${esc(dom(hot.url)||hot.name)} 한 곳에 몰렸습니다.</span> 발행 제어에서 사이트당 간격·하루 한도를 걸 수 있습니다.`:'';
-  $('#logs').innerHTML=o.logs.map(l=>`<li><time>${esc(l.time.slice(0,5))}</time><span>${esc(l.msg)}</span></li>`).join('');
+  $('#logs').innerHTML=o.logs.map(l=>`<li><time>${esc(l.time.slice(0,5))}</time><span>${linkify(l.msg)}</span></li>`).join('');
+  api('/api/ops/posts?status=done&limit=8').then(p=>{
+    $('#recentPosts').innerHTML=p.rows.length?p.rows.map(r=>`<li><time>${esc(r.time.slice(11,16))}</time><span>${r.url?`<a class="post" href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.title||r.url)}</a>`:esc(r.title)}<span class="sub">${esc(r.domain||r.site)}${r.region?' · '+esc(r.region):''}</span></span></li>`).join(''):'<li class="note">아직 올라간 글이 없습니다.</li>';
+  }).catch(()=>{});
 }
 const dom=u=>{try{return new URL(u).hostname.replace(/^www\./,'')}catch(e){return ''}};
+
+const linkify=t=>esc(t).replace(/https?:\/\/[^\s<>"']+/g,u=>`<a href="${u}" target="_blank" rel="noopener">${u}</a>`);
+
+/* ---------- 발행 기록 ---------- */
+let PST=store.get('ops.postSt','done');
+const kst=()=>new Date(Date.now()+9*3600e3).toISOString().slice(0,10);
+async function loadPosts(){
+  if(!$('#postDate').value)$('#postDate').value=kst();
+  const q=encodeURIComponent($('#postQ').value.trim()), day=$('#postDate').value;
+  let j;try{j=await api(`/api/ops/posts?status=${PST}&limit=500&date=${day}&q=${q}`)}catch(e){toast(e.message,true);return}
+  const c=j.counts, all=(c.done||0)+(c.failed||0)+(c.posting||0);
+  $('#postFilters').innerHTML=[['done','성공',c.done],['failed','실패',c.failed],['all','전체',all]].map(([k,l,n])=>`<button data-s="${k}" aria-pressed="${PST===k}">${l}<span class="mono">${n||0}</span></button>`).join('');
+  $$('#postFilters button').forEach(b=>b.onclick=()=>{PST=b.dataset.s;store.set('ops.postSt',PST);loadPosts()});
+  $('#postEmpty').hidden=j.rows.length>0;
+  $('#postMore').textContent=j.rows.length>=500?'최근 500건만 보여 줍니다. 날짜나 검색으로 좁혀 보세요.':'';
+  $('#postRows').innerHTML=j.rows.map(r=>{
+    const st=r.status==='done'?['성공','ok']:(r.status==='failed'?['실패','bad']:['처리 중','dim']);
+    const title=r.url?`<a class="post" href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.title||r.url)}</a>`:esc(r.title||'(제목 없음)');
+    const why=r.status==='failed'?`<span class="why">${esc(r.message||r.reason)}</span>`:'';
+    return `<tr><td class="t">${esc(r.time.slice(11,16))}</td>
+      <td class="c-site"><a href="${esc(r.site_url)}" target="_blank" rel="noopener">${esc(r.domain||r.site)}</a><span class="sub">${esc([r.workroom,r.region,r.service].filter(Boolean).join(' · '))}</span></td>
+      <td class="ti">${title}${why}</td><td class="c-st"><span class="st ${st[1]}">${st[0]}</span>${r.secret?'<span class="tag">비밀글</span>':''}</td></tr>`}).join('');
+}
+$('#postDate').onchange=loadPosts;
+let _pq;$('#postQ').oninput=()=>{clearTimeout(_pq);_pq=setTimeout(loadPosts,300)};
 
 /* ---------- 사이트 ---------- */
 let SITES=[], SEL=new Set(), FILTER=store.get('ops.siteFilter','all');
@@ -16360,8 +16461,8 @@ $('#btnApply').onclick=async()=>{
 };
 
 /* ---------- 시작 ---------- */
-{api('/api/ops/overview').then(o=>{OV=o;liveText(o)}).catch(()=>{});const _v=(location.hash||'').slice(1)||store.get('ops.view','now');show(['now','sites','fail','ctl'].includes(_v)?_v:'now');}
-setInterval(()=>{if(document.hidden)return;if(view==='now')loadNow();else{api('/api/ops/overview').then(liveText).catch(()=>{});if(view==='sites'&&!SEL.size)loadSites()}},20000);
+{api('/api/ops/overview').then(o=>{OV=o;liveText(o)}).catch(()=>{});const _v=(location.hash||'').slice(1)||store.get('ops.view','now');show(['now','posts','sites','fail','ctl'].includes(_v)?_v:'now');}
+setInterval(()=>{if(document.hidden)return;if(view==='now')loadNow();else{api('/api/ops/overview').then(liveText).catch(()=>{});if(view==='sites'&&!SEL.size)loadSites();if(view==='posts')loadPosts()}},20000);
 </script>
 </body></html>'''
 
