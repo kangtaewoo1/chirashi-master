@@ -4269,6 +4269,9 @@ def gnuboard_post_http(site, title, content_html):
     _al0=re.findall(r"alert\(\s*['\"]([^'\"]{2,120})",html)
     if (not _mb) and 'wr_subject' not in low and any(('권한이 없' in a or '로그인 후' in a) for a in _al0):
         return False,'로그인이 필요한 게시판입니다 — 비회원 글쓰기 불가(권한 alert)'
+    # 글쓰기 대신 로그인 화면(로그인 폼·login.php로 이동)이 온 경우도 같은 신호(재검토 10곳이 여기서 셀레늄으로 넘어가 '폼 없음' 재탈락).
+    if (not _mb) and 'wr_subject' not in low and not any('존재하지' in a for a in _al0) and ('login.php' in str(r.url).lower() or ('mb_password' in low and 'mb_id' in low)):
+        return False,'로그인이 필요한 게시판입니다 — 비회원 글쓰기 불가(로그인 화면)'
     if ('mb_password' in low and 'login' in low and 'wr_subject' not in low) or measured['state']!='measured':
         return None,'비회원 글쓰기 폼 아님 — 폴백'
     # 폼의 write_update 액션 확인
@@ -9910,9 +9913,9 @@ def auto_pipeline_once(limit=5):
         #   탈락시켰음 — 판정 수정 후 허가된 후보만 한 번 다시 대기로).
         _rv=0
         for c in cands:
-            if (c.get('status')=='rejected' and c.get('posting_authorized') is True and not c.get('noform_rechecked')
+            if (c.get('status')=='rejected' and c.get('posting_authorized') is True and not c.get('noform_recheck_v2')
                     and 'wr_subject' in str(c.get('reject_reason') or '') and c.get('platform','gnuboard')!='cafe24'):
-                c['status']='ready'; c['noform_rechecked']=True; c['pipeline_attempts']=0
+                c['status']='ready'; c['noform_recheck_v2']=True; c['pipeline_attempts']=0
                 c['reject_reason']='글쓰기 폼 없음 판정 재검토(회원전용·게시판주소·설치경로 판정 수정 후)'; _rv+=1
         if _rv:
             save_cands(cands); add_log(f'[후보 재검토] 글쓰기 폼 없음으로 탈락한 허가 후보 {_rv}곳 다시 확인','정리')
