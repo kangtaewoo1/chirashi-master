@@ -168,10 +168,9 @@ def unattended_block(site):
     # ★대표님 지시 2026-11-08: '검증 마친 비회원 그누보드만 무인 발행' 규칙 제거 — 회원 게시판·비그누보드도
     #   무인 발행 허용, 사전 감사(audit ready) 요구도 제거. 위의 안전장치(수동검토 전용·사람확인/캡차·관리자 전용·
     #   하드 보류)와 아래 '계정 없는 회원 게시판 차단'·'실패 증거 보류'는 유지. 게시 허가 체크는 do_post/is_permitted가 담당.
-    #   계정 없이 실게시에 성공한 이력(verified_post_url+passed)이 있으면 login_required 표시는 오마킹으로 보고 비회원 발행
-    #   시도(진짜 로그인벽이면 첫 실패가 아래 실패 증거 보류로 다시 막는다).
-    if (site.get('login_required') and not str(site.get('mb_id') or '').strip()
-            and not str(site.get('verified_post_url') or '').startswith(('http://', 'https://'))):
+    #   계정 없는 회원 게시판은 과거 비회원 성공 이력이 있어도 차단(2026-11-08 실측: 9~10월 이후 비회원 글쓰기를 막은
+    #   사이트들이라 11건 시도 전부 '글쓰기 폼 없음/캡차' 실패). 자동가입으로 계정을 만든 뒤 발행.
+    if site.get('login_required') and not str(site.get('mb_id') or '').strip():
         return 'unattended_credentials_required'
     if audit_state and audit_state!='ready' and not _verified_post:
         return 'unattended_'+str(audit_state)

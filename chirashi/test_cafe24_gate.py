@@ -302,9 +302,9 @@ class UnattendedTests(unittest.TestCase):
         self.assertEqual(unattended_block(dict(site,platform='cafe24')),'')
         self.assertEqual(unattended_block(dict(site,login_required=True,mb_id='member')),'')
         self.assertEqual(unattended_block(dict(site,login_required=True,mb_id=' ')),'unattended_credentials_required')
-        # A board that already published without an account is retried as a guest board.
+        # Old guest-post evidence does not stand in for an account on a login-required board.
         verified=dict(site,login_required=True,verified_post_url='https://a.example/bbs/board.php?bo_table=free&wr_id=1')
-        self.assertEqual(unattended_block(verified),'')
+        self.assertEqual(unattended_block(verified),'unattended_credentials_required')
         # Failure evidence on an unverified board still holds it.
         self.assertEqual(unattended_block({'platform':'gnuboard','unattended_audit':{'state':'human_or_form_review'}}),'unattended_human_or_form_review')
 
