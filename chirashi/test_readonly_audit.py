@@ -9,11 +9,10 @@ from unittest.mock import patch
 from form_schema import measure_html
 
 class ReadOnlyAuditTest(unittest.TestCase):
-    def test_http_captcha_form_stops_before_solver_or_submission(self):
+    def _run_http(self,html):
         tree=ast.parse(Path(__file__).with_name('app.py').read_text(encoding='utf-8'))
         fn=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='gnuboard_post_http')
         calls=[]
-        html='<form action="write_update.php"><input name="wr_subject"><input name="captcha_key"><textarea name="wr_content"></textarea></form>'
         session=types.SimpleNamespace(headers={},get=lambda *a,**kw:(calls.append('GET') or types.SimpleNamespace(status_code=200,text=html,apparent_encoding='utf-8',encoding='utf-8',url="http://approved.example/bbs/write.php")),post=lambda *a,**kw:self.fail('No submission allowed'))
         fake=types.ModuleType('requests');fake.Session=lambda:session
         env={'re':re,'load_config':lambda:{},'_HTTP_UA':'test','_pick_writer':lambda s:'Test','_post_password':lambda c:'test',
@@ -21,6 +20,14 @@ class ReadOnlyAuditTest(unittest.TestCase):
         exec(compile(ast.Module(body=[fn],type_ignores=[]),'app.py','exec'),env)
         with patch.dict(sys.modules,{'requests':fake}):
             ok,message=env['gnuboard_post_http']({'site_url':'http://approved.example','bo_table':'free'},'Functional test','Test body')
+        return ok,message,calls
+    def test_http_captcha_form_stops_before_solver_or_submission(self):
+        # 2026-11-09 대표님 지시: 그누보드 숫자 캡차는 OCR 경로로 넘긴다. OCR이 없는 환경이면 제출 없이 위임(None).
+        ok,message,calls=self._run_http('<form action="write_update.php"><input name="wr_subject"><input name="captcha_key"><textarea name="wr_content"></textarea></form>')
+        self.assertIsNone(ok);self.assertIn('OCR',message);self.assertEqual(calls,['GET'])
+    def test_http_real_human_check_still_stops_before_submission(self):
+        # 진짜 사람 확인(recaptcha 등)은 계속 풀지도 제출하지도 않는다.
+        ok,message,calls=self._run_http('<form action="write_update.php"><input name="wr_subject"><textarea name="wr_content"></textarea><div class="g-recaptcha" data-sitekey="x"></div></form>')
         self.assertFalse(ok);self.assertIn('사람 확인',message);self.assertEqual(calls,['GET'])
     def test_uncertain_submission_and_human_wait_are_never_reposted(self):
         import threading
