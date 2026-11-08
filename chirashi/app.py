@@ -4090,6 +4090,21 @@ def _gnuboard_signup_http(site, cfg, vals):
     if not data.get('mb_id') or not data.get('mb_password'):
         return None,'HTTP 가입 불가 — 표준 아이디/비밀번호 칸 없음'
     target=urllib.parse.urljoin(r2.url,form['attrs'].get('action') or 'register_form_update.php')
+    # 브라우저의 jquery.register_form.js가 제출 전에 하는 중복확인(ajax.mb_*.php)을 같은 세션으로 똑같이 호출.
+    #   그누보드 5.4+는 이 확인 결과를 세션(ss_check_mb_*)에 남기고, 없으면 '올바른 방법으로 이용해 주십시오.'로 반려
+    #   (2026-11-08 동진나눔 실측). 응답이 빈 문자열이면 통과, 아니면 사이트의 검증 메시지.
+    _chk=[('ajax.mb_id.php',{'reg_mb_id':data.get('mb_id','')},'mb_id')]
+    if 'mb_nick' in data: _chk.append(('ajax.mb_nick.php',{'reg_mb_nick':data['mb_nick'],'reg_mb_id':data.get('mb_id','')},'mb_nick'))
+    if 'mb_email' in data: _chk.append(('ajax.mb_email.php',{'reg_mb_email':data['mb_email'],'reg_mb_id':data.get('mb_id','')},'mb_email'))
+    if data.get('mb_hp'): _chk.append(('ajax.mb_hp.php',{'reg_mb_hp':data['mb_hp'],'reg_mb_id':data.get('mb_id','')},'mb_hp'))
+    for _php,_dat,_fld in _chk:
+        try:
+            cr=s.post(f'{bbs}/{_php}',data=_dat,timeout=12,headers={'Referer':r2.url,'X-Requested-With':'XMLHttpRequest'})
+        except Exception:
+            continue
+        _msg=re.sub(r'<[^>]+>','',cr.text or '').strip()
+        if cr.status_code<400 and _msg and len(_msg)<200:
+            return False,f'HTTP 가입 실패 — {_fld} 확인 거절({_msg[:60]})'
     cap_m=re.search(r'g5_captcha_url\s*=\s*["\']([^"\']+)["\']',r2.text or '')
     needs_cap=bool(cap_m) or 'captcha_key' in low
     cap_base=cap_m.group(1) if cap_m else base+'/plugin/kcaptcha'
