@@ -11023,7 +11023,7 @@ def chk():
     #  /api/test/* = 발행 테스트 트리거(등록 사이트에 실제 글1건 발행해 검증).
     _p=request.path
     if _p=='/api/version': return  # 배포 SHA 확인 — 공개(민감정보 없음)
-    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/sites/unlock-cafe24','/api/sites/unlock-verified','/api/sites/purge-fake-cafe24','/api/sites/mark-login-required','/api/sites/unmark-login-required','/api/sites/retry-signup','/api/sites/signup-member-boards','/api/candidates/rescreen-cafe24','/api/candidates/revive-rejected','/api/candidates/unrevive-nonillegal','/api/regions/normalize-existing','/api/site-board','/api/history','/api/ops-dashboard','/api/imap/test','/api/openai/usage','/api/twocaptcha/usage','/api/config/clear-key','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/candidates/reject-unworkable','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/pc-queue/claim','/api/pipeline/pc-queue/audit','/api/pipeline/pc-queue/start','/api/pipeline/pc-queue/report','/api/pipeline/report-site','/api/pipeline/node-beat','/api/unlocker/test','/api/sbr/test','/api/diag') or _p.startswith('/api/test/'):
+    if _p in ('/api/logs','/api/worker-log','/api/sites','/api/sites/creds','/api/sites/purge-secret','/api/sites/reject','/api/sites/unlock-cafe24','/api/sites/unlock-verified','/api/sites/purge-fake-cafe24','/api/sites/mark-login-required','/api/sites/unmark-login-required','/api/sites/retry-signup','/api/sites/signup-member-boards','/api/candidates/rescreen-cafe24','/api/candidates/revive-rejected','/api/candidates/unrevive-nonillegal','/api/regions/normalize-existing','/api/site-board','/api/history','/api/ops-dashboard','/api/imap/test','/api/openai/usage','/api/twocaptcha/usage','/api/config/clear-key','/api/candidates','/api/candidates/ingest','/api/candidates/revive-cafe24','/api/candidates/reject-unworkable','/api/rejected-domains','/api/discovery/queries','/api/pipeline/claim','/api/pipeline/report','/api/pipeline/claim-sites','/api/pipeline/pc-queue/claim','/api/pipeline/pc-queue/audit','/api/pipeline/pc-queue/start','/api/pipeline/pc-queue/report','/api/pipeline/report-site','/api/pipeline/node-beat','/api/unlocker/test','/api/sbr/test','/api/diag','/api/ops/overview','/api/ops/sites','/api/ops/failures') or _p.startswith('/api/test/'):
         tok=(request.args.get('token') or '').strip()
         cfgtok=(load_config().get('log_token') or '').strip()
         if cfgtok and tok==cfgtok:
@@ -11066,6 +11066,12 @@ def logout():
 
 @app.route('/')
 def index():
+    # ★운영실(2026-11-09): 새 관리 화면. 키워드·이미지·세부 설정은 기존 화면(/classic)에 그대로.
+    from flask import Response
+    return Response(OPS_HTML,mimetype='text/html; charset=utf-8')
+
+@app.route('/classic')
+def index_classic():
     sites=load_sites()
     return R('대시보드',cfg=load_config(),sites=sites,
              publish_sites=[s for s in sites if is_publishable(s)],wk=wk_stats,wk_on=wk_active)
@@ -14360,6 +14366,193 @@ def compute_ops_dashboard(cfg=None):
 def api_ops_dashboard():
     return jsonify(compute_ops_dashboard())
 
+# ==================== 운영실(새 관리 화면) API ====================
+# ★대표님 지시 2026-11-09 '관리 편하고 운영하기 좋고 깔끔하게, 필요한 기능 다': 첫 화면(현황)·사이트 관리·
+#   발행 제어판·실패 원인 모음/재시도. 화면은 OPS_HTML('/'), 기존 화면은 '/classic'에 그대로 둔다.
+# 글이 이미 올라갔을 수 있는 실패 — 재시도하면 같은 글이 두 번 올라갈 수 있어 운영실 재시도에서 제외.
+_OPS_RETRY_UNSAFE=('등록 확인 불가','재제출 금지','결과 검증 대기')
+_OPS_CONTROL_SPEC={'publish_loop_enabled':('bool',None,None),'auto_pipeline_enabled':('bool',None,None),
+                   'workroom_workers':('int',1,4),'min_interval_minutes':('int',0,1440),'daily_limit':('int',0,1000)}
+
+def _ops_mem():
+    out={'total_mb':0,'avail_mb':0}
+    try:
+        with open('/proc/meminfo') as f:
+            for ln in f:
+                k,v=ln.split(':',1); kb=int(v.strip().split()[0])
+                if k=='MemTotal': out['total_mb']=kb//1024
+                elif k=='MemAvailable': out['avail_mb']=kb//1024
+    except Exception: pass
+    return out
+
+def _ops_dt(x,key='time'):
+    try: return datetime.strptime(str(x.get(key) or '')[:19],'%Y-%m-%d %H:%M:%S')
+    except Exception: return None
+
+def _ops_fail_key(h):
+    """실패 이력 1건 → (분류, 묶음 키). 숫자·주소·괄호 상세 때문에 같은 원인이 갈라지지 않게 앞부분 핵심만 쓴다."""
+    cat=str(h.get('fail_reason_ko') or '').strip()
+    msg=str(h.get('message') or '').strip()
+    if not cat:
+        try: cat=classify_fail(msg)[1]
+        except Exception: cat=''
+    key=re.sub(r'\s*[\(\[].*$','',msg)
+    key=re.sub(r'https?://\S+|\d+','',key)
+    key=re.sub(r'\s+',' ',key).strip(' —-:·|')
+    return (cat or '기타'),(key[:70] or cat or '기타')
+
+def _ops_cooling(s,now):
+    cu=str(s.get('cooldown_until') or '')
+    try: return cu if (cu and datetime.strptime(cu[:19],'%Y-%m-%d %H:%M:%S')>now) else ''
+    except Exception: return ''
+
+@app.route('/api/ops/overview',methods=['GET'])
+def api_ops_overview():
+    from collections import Counter
+    cfg=load_config(); now=datetime.now(); today=now.strftime('%Y-%m-%d')
+    th=[x for x in load_json(HISTORY_FILE,[]) if str(x.get('time') or '').startswith(today)]
+    st=Counter(x.get('status') for x in th)
+    per={}
+    for x in th:
+        k=x.get('site_id') or x.get('site_name') or ''
+        e=per.setdefault(k,{'id':x.get('site_id') or '','name':x.get('site_name') or '','url':x.get('site_url') or '','done':0,'failed':0})
+        if x.get('status')=='done': e['done']+=1
+        elif x.get('status')=='failed': e['failed']+=1
+    top=sorted(per.values(),key=lambda e:(-e['done'],-e['failed']))[:8]
+    cut=now-timedelta(minutes=60); pd_,pf_=Counter(),Counter()
+    for x in th:
+        dt=_ops_dt(x,'updated') or _ops_dt(x)
+        if not dt or dt<cut: continue
+        mm=dt.strftime('%H:%M')
+        if x.get('status')=='done': pd_[mm]+=1
+        elif x.get('status')=='failed': pf_[mm]+=1
+    minutes=[]
+    for i in range(59,-1,-1):
+        mm=(now-timedelta(minutes=i)).strftime('%H:%M')
+        minutes.append({'m':mm,'done':pd_.get(mm,0),'failed':pf_.get(mm,0)})
+    sites=load_sites()
+    def _safe(fn,s):
+        try: return bool(fn(s))
+        except Exception: return False
+    counts={'total':len(sites),
+            'publishable':sum(1 for s in sites if _safe(is_autopostable,s)),
+            'accounts':sum(1 for s in sites if str(s.get('mb_id') or '').strip()),
+            'http_member':sum(1 for s in sites if s.get('http_member')),
+            'held':sum(1 for s in sites if s.get('maintenance_hold')),
+            'cooling':sum(1 for s in sites if _ops_cooling(s,now)),
+            'unapproved':sum(1 for s in sites if s.get('posting_authorized') is not True and s.get('status')!='rejected')}
+    try: wr=sum(1 for t in _WR_SLOTS.values() if t and t.is_alive())
+    except Exception: wr=0
+    try: load1=round(os.getloadavg()[0],2)
+    except Exception: load1=None
+    done=st.get('done',0); failed=st.get('failed',0)
+    return jsonify({'ok':True,'now':now.strftime('%Y-%m-%d %H:%M:%S'),
+        'switches':{k:cfg.get(k) for k in _OPS_CONTROL_SPEC},
+        'mem':_ops_mem(),'load':load1,'workers_alive':wr,
+        'today':{'done':done,'failed':failed,'posting':st.get('posting',0),
+                 'rate':(round(done*100/(done+failed)) if (done+failed) else None)},
+        'minutes':minutes,'top_sites':top,'sites':counts,
+        'signup':dict(_MEMBER_SIGNUP_STATE),
+        'logs':[{'time':l.get('time',''),'msg':str(l.get('msg',''))[:220],'cat':l.get('cat','')}
+                for l in list(reversed(load_json(LOG_FILE,[])))[:14]]})
+
+@app.route('/api/ops/sites',methods=['GET'])
+def api_ops_sites():
+    now=datetime.now(); today=now.strftime('%Y-%m-%d'); rows=[]
+    for s in load_sites():
+        url=s.get('site_url') or ''
+        try: blk=publishing_block(s) or unattended_block(s) or ''
+        except Exception: blk=''
+        try: pub=bool(is_autopostable(s))
+        except Exception: pub=False
+        acct=str(s.get('mb_id') or '').strip()
+        rows.append({'id':s.get('id'),'name':s.get('name') or '','url':url,'domain':_domain_of(url) or url,
+            'platform':s.get('platform') or '','bo_table':s.get('bo_table') or '',
+            'authorized':s.get('posting_authorized') is True,'login_required':bool(s.get('login_required')),
+            'account':acct,'via':('http' if s.get('http_member') else ('browser' if acct else '')),
+            'status':s.get('status') or '','rejected':s.get('status')=='rejected',
+            'fail_streak':int(s.get('fail_streak',0) or 0),'cooldown_until':_ops_cooling(s,now),
+            'last_fail':str(s.get('last_fail_reason') or '')[:200],'last_post_at':s.get('last_post_at') or '',
+            'today':(int(s.get('posted_today',0) or 0) if s.get('posted_date')==today else 0),
+            'hold':bool(s.get('maintenance_hold')),'block':str(blk),'publishable':pub,
+            'signup_last':str(s.get('member_signup_last') or '')[:160]})
+    return jsonify({'ok':True,'rows':rows,'signup':dict(_MEMBER_SIGNUP_STATE)})
+
+@app.route('/api/ops/failures',methods=['GET'])
+def api_ops_failures():
+    try: hours=max(1,min(168,int(request.args.get('hours',24))))
+    except (TypeError,ValueError): hours=24
+    cut=datetime.now()-timedelta(hours=hours); groups={}; total=0
+    for x in load_json(HISTORY_FILE,[]):
+        if x.get('status')!='failed': continue
+        dt=_ops_dt(x)
+        if not dt or dt<cut: continue
+        total+=1
+        cat,key=_ops_fail_key(x)
+        g=groups.setdefault(key,{'reason':key,'category':cat,'count':0,'sites':{},'last':'','sample':''})
+        g['count']+=1
+        if str(x.get('time'))>=g['last']:
+            g['last']=str(x.get('time')); g['sample']=str(x.get('message') or '')[:240]
+        sid=str(x.get('site_id') or '')
+        e=g['sites'].setdefault(sid,{'id':sid,'name':x.get('site_name') or '','count':0}); e['count']+=1
+    out=[]
+    for g in groups.values():
+        g['sites']=sorted(g['sites'].values(),key=lambda e:-e['count'])
+        g['retry_safe']=not any(k in (g['reason']+' '+g['sample']) for k in _OPS_RETRY_UNSAFE)
+        out.append(g)
+    out.sort(key=lambda g:-g['count'])
+    return jsonify({'ok':True,'hours':hours,'total':total,'groups':out[:40]})
+
+@app.route('/api/ops/control',methods=['POST'])
+def api_ops_control():
+    d=request.get_json(silent=True) or {}; cfg=load_config(); changed=[]
+    for k,(typ,lo,hi) in _OPS_CONTROL_SPEC.items():
+        if k not in d: continue
+        v=d[k]
+        if typ=='bool':
+            if not isinstance(v,bool): return jsonify({'ok':False,'error':f'{k} 값은 켜기/끄기여야 합니다'}),400
+        else:
+            try: v=int(v)
+            except (TypeError,ValueError): return jsonify({'ok':False,'error':f'{k} 값은 숫자여야 합니다'}),400
+            if v<lo or v>hi: return jsonify({'ok':False,'error':f'{k} 값은 {lo}~{hi} 사이여야 합니다'}),400
+        if cfg.get(k)!=v: changed.append((k,cfg.get(k),v)); cfg[k]=v
+    # 워커를 늘릴 때만 메모리 확인(크롬 1개 ≈ 400MB). 줄이는 건 언제나 허용.
+    for k,old,new in changed:
+        if k=='workroom_workers' and int(new)>int(old or 0):
+            av=_ops_mem().get('avail_mb') or 0
+            need=(int(new)-int(old or 0))*400+300
+            if av and av<need:
+                return jsonify({'ok':False,'error':f'메모리 여유 {av}MB — 워커를 {new}개로 늘리려면 약 {need}MB 필요'}),409
+    if changed:
+        save_config(cfg)
+        add_log('[운영실 설정] '+', '.join(f'{k} {o}→{n}' for k,o,n in changed))
+    return jsonify({'ok':True,'changed':[k for k,_,_ in changed],'switches':{k:cfg.get(k) for k in _OPS_CONTROL_SPEC}})
+
+@app.route('/api/ops/sites/action',methods=['POST'])
+def api_ops_sites_action():
+    d=request.get_json(silent=True) or {}; act=str(d.get('action') or '')
+    ids={str(i).strip() for i in (d.get('ids') or [])[:2000] if str(i).strip()}
+    labels={'clear_cooldown':'대기 풀기','hold':'보류','unhold':'보류 해제'}
+    if act not in labels or not ids:
+        return jsonify({'ok':False,'error':'action과 ids가 필요합니다'}),400
+    n=0; skipped=[]
+    with POST_LOCK:
+        sites=load_sites()
+        for s in sites:
+            if str(s.get('id')) not in ids: continue
+            if act=='clear_cooldown':
+                # 글이 이미 올라갔을 수 있는 실패는 풀지 않는다(중복 글 방지).
+                if any(k in str(s.get('last_fail_reason') or '') for k in _OPS_RETRY_UNSAFE):
+                    skipped.append((s.get('name') or s.get('site_url') or '')[:30]); continue
+                s.pop('cooldown_until',None); s['fail_streak']=0
+                if s.get('status')=='failed': s['status']='idle'
+            else:
+                s['maintenance_hold']=(act=='hold')
+            n+=1
+        if n: save_sites(sites)
+    add_log(f'[운영실] {labels[act]} {n}곳'+(f' · 중복 위험으로 제외 {len(skipped)}곳' if skipped else ''))
+    return jsonify({'ok':True,'changed':n,'skipped':skipped})
+
 # ---- 텔레그램 테스트 발송 ----
 @app.route('/api/telegram/test',methods=['POST'])
 def api_tg_test():
@@ -15735,6 +15928,429 @@ if($('p-wlog')&&$('p-wlog').classList.contains('on')){renderWorkerLog();renderHi
 })();
 setInterval(()=>{try{poll()}catch(e){}},2000);
 setInterval(()=>{try{renderSites();var p=$('p-sites');if(p&&p.classList.contains('on'))renderBoard();}catch(e){}},4000);
+</script>
+</body></html>'''
+
+# ==================== 운영실 화면(2026-11-09) ====================
+# 방향: 철도 관제실의 운행 일지 — 줄 친 장부 위에 숫자만 또렷하게.
+# 서체 2개(본문 IBM Plex Sans KR / 숫자·시각 IBM Plex Mono), 주색 잉크 초록·강조 신호 주황, 8px 단위, 왼쪽 정렬, 그림자 없음.
+OPS_HTML=r'''<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>운영실 · 찌라시 마스터</title><meta name="robots" content="noindex,nofollow">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root{--paper:#F5F4EF;--surface:#FFFFFF;--line:#DCD9D0;--rule:#1B1B19;--ink:#1B1B19;--muted:#67655C;
+  --main:#1E5B47;--main-soft:#E2EDE7;--accent:#B93C0B;--accent-soft:#F8E6DA;--u:8px;
+  --sans:'IBM Plex Sans KR',system-ui,sans-serif;--mono:'IBM Plex Mono',ui-monospace,monospace}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--paper:#121311;--surface:#191A18;--line:#2F302C;--rule:#ECEBE6;
+  --ink:#ECEBE6;--muted:#A09E95;--main:#6CC39F;--main-soft:#1D2E26;--accent:#F2834C;--accent-soft:#33221A}}
+:root[data-theme="dark"]{--paper:#121311;--surface:#191A18;--line:#2F302C;--rule:#ECEBE6;--ink:#ECEBE6;--muted:#A09E95;
+  --main:#6CC39F;--main-soft:#1D2E26;--accent:#F2834C;--accent-soft:#33221A}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--paper);color:var(--ink);font:400 15px/1.6 var(--sans);-webkit-font-smoothing:antialiased}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+a{color:inherit}
+button,input,select{font:inherit;color:inherit}
+input[type=checkbox]{accent-color:var(--main);width:16px;height:16px}
+.wrap{max-width:1200px;margin:0 auto;padding:0 calc(var(--u)*3)}
+header.top{border-bottom:2px solid var(--rule)}
+header.top .wrap{display:grid;grid-template-columns:auto 1fr auto;gap:calc(var(--u)*3);align-items:end;padding-top:calc(var(--u)*3);padding-bottom:calc(var(--u)*2)}
+.brand b{display:block;font-size:24px;line-height:1.2;font-weight:700;letter-spacing:-.01em}
+.brand span{font-size:12px;color:var(--muted)}
+.live{font-size:14px;color:var(--muted)}
+.live .dot{display:inline-block;width:8px;height:8px;margin-right:var(--u);background:var(--muted);vertical-align:1px}
+.live.on .dot{background:var(--main)} .live.off .dot{background:var(--accent)}
+.links{display:flex;gap:calc(var(--u)*2);font-size:14px}
+.links a{color:var(--muted);text-decoration:none;border-bottom:1px solid var(--line)}
+.links a:hover{color:var(--ink);border-color:var(--ink)}
+nav.tabs{border-bottom:1px solid var(--line)}
+nav.tabs .wrap{display:flex;gap:calc(var(--u)*4);overflow-x:auto}
+nav.tabs button{background:none;border:0;padding:calc(var(--u)*2) 0;font-size:15px;font-weight:500;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap}
+nav.tabs button[aria-selected="true"]{color:var(--ink);border-color:var(--main)}
+main{padding:calc(var(--u)*4) 0 calc(var(--u)*10)}
+section.view{display:none} section.view.on{display:block}
+h2{font-size:12px;font-weight:500;letter-spacing:.08em;color:var(--muted);margin:calc(var(--u)*5) 0 calc(var(--u)*1);padding-bottom:var(--u);border-bottom:1px solid var(--line)}
+.lead{display:grid;grid-template-columns:auto 1fr;gap:calc(var(--u)*5);align-items:end;padding-bottom:calc(var(--u)*3);border-bottom:2px solid var(--rule)}
+.hero-num{font-family:var(--mono);font-size:88px;line-height:.9;font-weight:500;letter-spacing:-.03em}
+.hero-label{font-size:14px;color:var(--muted);margin-top:var(--u)}
+.second{font-size:16px;color:var(--muted);padding-bottom:calc(var(--u)*1)}
+.second .mono{color:var(--ink);font-size:24px;font-weight:500}
+.second .bad{color:var(--accent)}
+.cols{display:grid;grid-template-columns:5fr 7fr;gap:calc(var(--u)*5)}
+dl.ledger{margin:0}
+dl.ledger div{display:grid;grid-template-columns:136px 1fr;gap:calc(var(--u)*2);padding:calc(var(--u)*1.5) 0;border-bottom:1px solid var(--line)}
+dl.ledger dt{color:var(--muted);font-size:14px} dl.ledger dd{margin:0}
+.on-t{color:var(--main);font-weight:500} .off-t{color:var(--accent);font-weight:500}
+.note{font-size:13px;color:var(--muted)}
+.warn{color:var(--accent)}
+svg.strip{display:block;width:100%;height:96px}
+.axis{display:flex;justify-content:space-between;font-family:var(--mono);font-size:12px;color:var(--muted);margin-top:4px}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th{text-align:left;font-weight:500;font-size:12px;color:var(--muted);padding:var(--u) calc(var(--u)*1.5) var(--u) 0;border-bottom:1px solid var(--rule);white-space:nowrap}
+td{padding:calc(var(--u)*1.5) calc(var(--u)*1.5) calc(var(--u)*1.5) 0;border-bottom:1px solid var(--line);vertical-align:top}
+td.num,th.num{text-align:right;font-family:var(--mono)}
+.share{height:2px;background:var(--line);margin-top:8px} .share i{display:block;height:2px;background:var(--main)}
+tr.hot .share i{background:var(--accent)}
+.sub{display:block;font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:360px}
+.log li{display:grid;grid-template-columns:72px 1fr;gap:calc(var(--u)*2);padding:var(--u) 0;border-bottom:1px solid var(--line);font-size:13px}
+.log{list-style:none;margin:0;padding:0} .log time{font-family:var(--mono);color:var(--muted)}
+.bar{display:flex;flex-wrap:wrap;gap:var(--u);align-items:center;margin-bottom:calc(var(--u)*2)}
+.seg button{background:none;border:1px solid var(--line);padding:4px 12px;font-size:13px;cursor:pointer;color:var(--muted)}
+.seg button+button{border-left:0}
+.seg{display:inline-flex;flex-wrap:wrap}
+.seg button[aria-pressed="true"]{background:var(--ink);border-color:var(--ink);color:var(--paper)}
+.seg button .mono{margin-left:8px}
+input[type=search],input[type=number]{border:1px solid var(--line);background:var(--surface);padding:4px 8px;border-radius:2px;min-height:32px}
+input[type=search]{min-width:240px}
+input[type=number]{width:96px;font-family:var(--mono);text-align:right}
+.btn{border:1px solid var(--ink);background:var(--surface);padding:4px 16px;min-height:32px;border-radius:2px;cursor:pointer;font-size:14px}
+.btn:hover{background:var(--paper)}
+.btn.pri{background:var(--main);border-color:var(--main);color:#fff}
+.btn.pri:hover{filter:brightness(1.08)}
+.btn.risk{border-color:var(--accent);color:var(--accent)}
+.btn[disabled]{opacity:.4;cursor:not-allowed}
+.spacer{flex:1}
+.bulk{display:none;position:sticky;top:0;z-index:2;background:var(--ink);color:var(--paper);padding:var(--u) calc(var(--u)*2);margin-bottom:calc(var(--u)*2);gap:var(--u);align-items:center;flex-wrap:wrap}
+.bulk.on{display:flex} .bulk .btn{background:transparent;color:var(--paper);border-color:var(--paper)}
+.tag{font-family:var(--mono);font-size:11px;border:1px solid var(--line);padding:0 4px;margin-left:8px;color:var(--muted)}
+.st{font-size:13px;white-space:nowrap} .st.ok{color:var(--main)} .st.bad{color:var(--accent)} .st.dim{color:var(--muted)}
+.fail-row{display:grid;grid-template-columns:96px 1fr auto;gap:calc(var(--u)*3);padding:calc(var(--u)*2.5) 0;border-bottom:1px solid var(--line)}
+.fail-row .n{font-family:var(--mono);font-size:32px;line-height:1;font-weight:500}
+.fail-row h3{margin:0 0 4px;font-size:16px;font-weight:500}
+.fail-row .acts{display:flex;flex-direction:column;gap:var(--u);align-items:stretch;min-width:184px}
+details summary{cursor:pointer;font-size:13px;color:var(--muted);margin-top:var(--u)}
+details pre{white-space:pre-wrap;font:12px/1.5 var(--mono);background:var(--surface);border:1px solid var(--line);padding:var(--u);margin:var(--u) 0 0}
+.ctl{max-width:760px}
+.ctl .row{display:grid;grid-template-columns:240px 1fr;gap:var(--u) calc(var(--u)*3);padding:calc(var(--u)*2.5) 0;border-bottom:1px solid var(--line);align-items:center}
+.ctl .row label{font-weight:500} .ctl .row .note{grid-column:2}
+.switch{display:inline-flex} .switch button{border:1px solid var(--line);background:var(--surface);padding:4px 16px;cursor:pointer;min-height:32px}
+.switch button+button{border-left:0}
+.switch button[aria-pressed="true"].y{background:var(--main);border-color:var(--main);color:#fff}
+.switch button[aria-pressed="true"].n{background:var(--accent);border-color:var(--accent);color:#fff}
+.step{display:inline-flex;align-items:center;gap:var(--u)} .step .mono{min-width:32px;text-align:right;font-size:20px}
+.ctl .foot{display:flex;gap:calc(var(--u)*2);align-items:center;padding-top:calc(var(--u)*3)}
+.toast{position:fixed;left:calc(var(--u)*3);bottom:calc(var(--u)*3);max-width:min(520px,calc(100% - 48px));background:var(--ink);color:var(--paper);padding:calc(var(--u)*1.5) calc(var(--u)*2);font-size:14px;display:none;z-index:9}
+.toast.on{display:block} .toast.bad{background:var(--accent);color:#fff}
+.empty{padding:calc(var(--u)*4) 0;color:var(--muted)}
+@media (max-width:860px){
+  .wrap{padding:0 16px}
+  header.top .wrap{grid-template-columns:1fr auto;row-gap:var(--u)} .live{grid-column:1/-1;grid-row:2}
+  .cols{grid-template-columns:1fr;gap:0}
+  .lead{grid-template-columns:1fr;gap:calc(var(--u)*2)} .hero-num{font-size:64px}
+  dl.ledger div{grid-template-columns:112px 1fr}
+  input[type=search]{min-width:0;width:100%}
+  table.sites thead{display:none}
+  table.sites tr{display:grid;grid-template-columns:32px 1fr auto;gap:4px var(--u);padding:calc(var(--u)*1.5) 0;border-bottom:1px solid var(--line)}
+  table.sites td{border:0;padding:0}
+  table.sites td.c-auth,table.sites td.c-acct,table.sites td.c-st,table.sites td.c-fail{grid-column:2/-1}
+  table.sites td.c-today{grid-column:3;grid-row:1}
+  .sub{max-width:none;white-space:normal}
+  .fail-row{grid-template-columns:64px 1fr} .fail-row .acts{grid-column:1/-1;flex-direction:row;flex-wrap:wrap;min-width:0}
+  .ctl .row{grid-template-columns:1fr;gap:var(--u)} .ctl .row .note{grid-column:1}
+}
+</style></head>
+<body>
+<header class="top"><div class="wrap">
+  <div class="brand"><b>운영실</b><span>찌라시 마스터</span></div>
+  <div class="live" id="live"><span class="dot"></span><span id="liveText">불러오는 중</span></div>
+  <div class="links"><a href="/classic">기존 화면</a><a href="/logout">로그아웃</a></div>
+</div></header>
+<nav class="tabs" aria-label="화면"><div class="wrap" role="tablist">
+  <button role="tab" data-v="now" aria-selected="true">현황</button>
+  <button role="tab" data-v="sites" aria-selected="false">사이트</button>
+  <button role="tab" data-v="fail" aria-selected="false">실패 원인</button>
+  <button role="tab" data-v="ctl" aria-selected="false">발행 제어</button>
+</div></nav>
+<main><div class="wrap">
+
+<section class="view on" id="v-now">
+  <div class="lead">
+    <div><div class="hero-num" id="hDone">–</div><div class="hero-label">오늘 올라간 글</div></div>
+    <div class="second" id="hSecond">&nbsp;</div>
+  </div>
+  <div class="cols">
+    <div>
+      <h2>지금 상태</h2>
+      <dl class="ledger" id="ledger"></dl>
+    </div>
+    <div>
+      <h2>최근 60분 · 분당 처리</h2>
+      <svg class="strip" id="strip" viewBox="0 0 600 96" preserveAspectRatio="none" role="img" aria-label="최근 60분 분당 성공과 실패"></svg>
+      <div class="axis"><span id="axL"></span><span id="axR"></span></div>
+      <h2>오늘 사이트별 발행</h2>
+      <table><thead><tr><th>사이트</th><th class="num">성공</th><th class="num">실패</th></tr></thead><tbody id="topSites"></tbody></table>
+      <p class="note" id="topNote"></p>
+    </div>
+  </div>
+  <h2>최근 기록</h2>
+  <ul class="log" id="logs"></ul>
+</section>
+
+<section class="view" id="v-sites">
+  <div class="bar">
+    <div class="seg" id="siteFilters"></div>
+    <span class="spacer"></span>
+    <input type="search" id="siteQ" placeholder="도메인·이름·아이디 검색" aria-label="사이트 검색">
+  </div>
+  <div class="bar">
+    <span class="note" id="signupState"></span><span class="spacer"></span>
+    <button class="btn" id="btnSignup">계정 없는 회원 게시판 자동가입</button>
+    <button class="btn" id="btnSitesReload">새로고침</button>
+  </div>
+  <div class="bulk" id="bulk"><span id="bulkN"></span><span class="spacer"></span>
+    <button class="btn" data-act="clear_cooldown">대기 풀기</button>
+    <button class="btn" data-act="hold">보류</button>
+    <button class="btn" data-act="unhold">보류 해제</button>
+    <button class="btn" data-act="auth_on">허가 체크</button>
+    <button class="btn" data-act="auth_off">허가 해제</button>
+  </div>
+  <table class="sites"><thead><tr>
+    <th><input type="checkbox" id="selAll" aria-label="보이는 사이트 전체 선택"></th><th>사이트</th><th>허가</th><th>계정</th><th class="num">오늘</th><th>상태</th><th>최근 실패</th>
+  </tr></thead><tbody id="siteRows"></tbody></table>
+  <p class="empty" id="siteEmpty" hidden>조건에 맞는 사이트가 없습니다.</p>
+</section>
+
+<section class="view" id="v-fail">
+  <div class="bar"><div class="seg" id="failWin">
+    <button data-h="6" aria-pressed="false">6시간</button><button data-h="24" aria-pressed="true">24시간</button><button data-h="168" aria-pressed="false">7일</button>
+  </div><span class="spacer"></span><span class="note" id="failSum"></span></div>
+  <div id="failRows"></div>
+  <p class="note">‘대기 풀고 다시 시도’는 사이트의 대기 시간과 연속 실패 수만 지웁니다. 자동 발행이 다음 차례에 다시 시도합니다. 글이 이미 올라갔을 수 있는 실패(등록 확인 불가 등)는 중복 글을 막으려고 재시도하지 않습니다.</p>
+</section>
+
+<section class="view" id="v-ctl">
+  <div class="ctl">
+    <div class="row"><label>자동 발행</label><div class="switch" data-k="publish_loop_enabled"><button class="y">켜짐</button><button class="n">꺼짐</button></div>
+      <p class="note">끄면 새 글 작성이 멈춥니다. 진행 중인 글은 끝까지 처리합니다.</p></div>
+    <div class="row"><label>발굴·가입 파이프라인</label><div class="switch" data-k="auto_pipeline_enabled"><button class="y">켜짐</button><button class="n">꺼짐</button></div>
+      <p class="note">새 게시판을 찾고 가입·발행 시험까지 자동으로 진행합니다.</p></div>
+    <div class="row"><label for="cWorkers">동시 작업 수(워커)</label>
+      <div class="step"><button class="btn" data-step="-1" aria-label="워커 줄이기">−</button><span class="mono" id="cWorkers">–</span><button class="btn" data-step="1" aria-label="워커 늘리기">+</button></div>
+      <p class="note" id="cMemNote"></p></div>
+    <div class="row"><label for="cInterval">같은 사이트 최소 간격</label>
+      <div><input type="number" id="cInterval" min="0" max="1440" step="1"> <span class="note">분</span></div>
+      <p class="note">0이면 제한 없음. 한 사이트에 글이 몰리는 것을 막습니다.</p></div>
+    <div class="row"><label for="cDaily">사이트당 하루 최대</label>
+      <div><input type="number" id="cDaily" min="0" max="1000" step="1"> <span class="note">건</span></div>
+      <p class="note">0이면 제한 없음.</p></div>
+    <div class="foot"><button class="btn pri" id="btnApply">적용</button><button class="btn" id="btnPreset">도배 방지 권장값 넣기 (60분 · 하루 10건)</button><span class="note" id="ctlMsg"></span></div>
+  </div>
+</section>
+
+</div></main>
+<div class="toast" id="toast" role="status"></div>
+<script>
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmt=n=>(n??0).toLocaleString('ko-KR');
+async function api(p,o={}){
+  const r=await fetch(p,{credentials:'same-origin',headers:{'Content-Type':'application/json'},...o});
+  if(r.status===401){location.href='/login';throw new Error('로그인 필요')}
+  let j={};try{j=await r.json()}catch(e){}
+  if(!r.ok||j.ok===false)throw new Error(j.error||('요청 실패 '+r.status));
+  return j;
+}
+const post=(p,b)=>api(p,{method:'POST',body:JSON.stringify(b||{})});
+let toastT;function toast(m,bad){const t=$('#toast');t.textContent=m;t.className='toast on'+(bad?' bad':'');clearTimeout(toastT);toastT=setTimeout(()=>t.className='toast',4200)}
+const store={get(k,d){try{return localStorage.getItem(k)??d}catch(e){return d}},set(k,v){try{localStorage.setItem(k,v)}catch(e){}}};
+
+/* ---------- 탭 ---------- */
+let view='now';
+function show(v){
+  view=v; $$('nav.tabs button').forEach(b=>b.setAttribute('aria-selected',b.dataset.v===v));
+  $$('section.view').forEach(s=>s.classList.toggle('on',s.id==='v-'+v));
+  store.set('ops.view',v); history.replaceState(null,'','#'+v);
+  ({now:loadNow,sites:loadSites,fail:loadFail,ctl:loadCtl})[v]();
+}
+$$('nav.tabs button').forEach(b=>b.onclick=()=>show(b.dataset.v));
+
+/* ---------- 현황 ---------- */
+let OV=null;
+function liveText(o){
+  const sw=o.switches||{}, el=$('#live');
+  el.className='live '+(sw.publish_loop_enabled?'on':'off');
+  $('#liveText').textContent=(sw.publish_loop_enabled?'자동 발행 켜짐':'자동 발행 꺼짐')+` · 워커 ${o.workers_alive}/${sw.workroom_workers??'–'} · ${o.now.slice(11,16)} 기준`;
+}
+async function loadNow(){
+  try{OV=await api('/api/ops/overview')}catch(e){toast(e.message,true);return}
+  const o=OV,t=o.today,sw=o.switches,m=o.mem,s=o.sites,su=o.signup||{};
+  liveText(o);
+  $('#hDone').textContent=fmt(t.done);
+  $('#hSecond').innerHTML=`<span class="mono ${t.failed?'bad':''}">${fmt(t.failed)}</span> 실패 · 성공률 <span class="mono">${t.rate==null?'–':t.rate+'%'}</span> · 처리 중 <span class="mono">${fmt(t.posting)}</span>`;
+  const lim=(sw.min_interval_minutes>0||sw.daily_limit>0)
+    ?`간격 <span class="mono">${sw.min_interval_minutes||0}</span>분 · 하루 <span class="mono">${sw.daily_limit||'제한 없음'}</span>${sw.daily_limit?'건':''}`
+    :'제한 없음';
+  const memTxt=m.total_mb?`여유 <span class="mono">${(m.avail_mb/1024).toFixed(1)}</span>GB / <span class="mono">${(m.total_mb/1024).toFixed(1)}</span>GB`:'확인 불가';
+  const suTxt=su.running?`진행 <span class="mono">${su.done}/${su.total}</span> · 성공 <span class="mono">${su.ok}</span>`:(su.total?`쉬는 중 · 지난 실행 성공 <span class="mono">${su.ok}/${su.total}</span>`:'쉬는 중');
+  const rows=[
+    ['자동 발행',sw.publish_loop_enabled?'<span class="on-t">켜짐</span>':'<span class="off-t">꺼짐</span>'],
+    ['워커',`설정 <span class="mono">${sw.workroom_workers??'–'}</span> · 작동 <span class="mono">${o.workers_alive}</span>`],
+    ['사이트당 제한',lim],
+    ['서버 메모리',memTxt+(o.load!=null?` · 부하 <span class="mono">${o.load}</span>`:'')],
+    ['회원 가입 작업',suTxt],
+    ['사이트',`발행 가능 <span class="mono">${s.publishable}</span> · 계정 <span class="mono">${s.accounts}</span>(HTTP <span class="mono">${s.http_member}</span>) · 대기 <span class="mono">${s.cooling}</span> · 보류 <span class="mono">${s.held}</span> · 허가 대기 <span class="mono">${s.unapproved}</span>`],
+  ];
+  $('#ledger').innerHTML=rows.map(([a,b])=>`<div><dt>${a}</dt><dd>${b}</dd></div>`).join('');
+  // 60분 막대
+  const mx=Math.max(1,...o.minutes.map(x=>x.done+x.failed)), w=600/60;
+  $('#strip').innerHTML=o.minutes.map((x,i)=>{
+    const hd=x.done/mx*88, hf=x.failed/mx*88, X=(i*w+1).toFixed(1), W=(w-2).toFixed(1);
+    return `<rect x="${X}" y="${96-hd}" width="${W}" height="${hd}" fill="var(--main)"><title>${x.m} 성공 ${x.done} · 실패 ${x.failed}</title></rect>`+
+           (x.failed?`<rect x="${X}" y="${96-hd-hf}" width="${W}" height="${hf}" fill="var(--accent)"/>`:'');
+  }).join('')+`<line x1="0" y1="95.5" x2="600" y2="95.5" stroke="var(--line)"/>`;
+  $('#axL').textContent=o.minutes[0]?.m||''; $('#axR').textContent=o.minutes.at(-1)?.m||'';
+  // 사이트별
+  const tot=o.top_sites.reduce((a,x)=>a+x.done,0)||1; let hot=null;
+  $('#topSites').innerHTML=o.top_sites.length?o.top_sites.map(x=>{
+    const sh=x.done/tot, isHot=sh>=.4&&x.done>=10; if(isHot&&!hot)hot=x;
+    return `<tr class="${isHot?'hot':''}"><td>${esc(dom(x.url)||x.name)}<span class="sub">${esc(x.name)}</span><div class="share"><i style="width:${(sh*100).toFixed(1)}%"></i></div></td><td class="num">${fmt(x.done)}</td><td class="num">${x.failed?`<span class="warn">${fmt(x.failed)}</span>`:'0'}</td></tr>`}).join(''):'<tr><td colspan="3" class="note">오늘 발행 기록이 아직 없습니다.</td></tr>';
+  $('#topNote').innerHTML=hot?`<span class="warn">오늘 성공의 ${Math.round(hot.done/tot*100)}%가 ${esc(dom(hot.url)||hot.name)} 한 곳에 몰렸습니다.</span> 발행 제어에서 사이트당 간격·하루 한도를 걸 수 있습니다.`:'';
+  $('#logs').innerHTML=o.logs.map(l=>`<li><time>${esc(l.time.slice(0,5))}</time><span>${esc(l.msg)}</span></li>`).join('');
+}
+const dom=u=>{try{return new URL(u).hostname.replace(/^www\./,'')}catch(e){return ''}};
+
+/* ---------- 사이트 ---------- */
+let SITES=[], SEL=new Set(), FILTER=store.get('ops.siteFilter','all');
+const FILTERS=[['all','전체'],['pub','발행 가능'],['noacct','계정 없음'],['cool','대기 중'],['failed','실패'],['hold','보류'],['unauth','허가 대기'],['rej','탈락']];
+function stateOf(r){
+  if(r.rejected)return['탈락','dim'];
+  if(r.hold)return['보류','dim'];
+  if(!r.authorized)return['허가 대기','dim'];
+  if(r.cooldown_until)return['대기 ~'+r.cooldown_until.slice(11,16),'bad'];
+  if(r.login_required&&!r.account)return['계정 없음','dim'];
+  if(r.block)return['막힘 · '+r.block,'bad'];
+  if(r.publishable)return['발행 가능','ok'];
+  if(r.fail_streak>0||r.status==='failed')return['실패 '+r.fail_streak+'회','bad'];
+  return['준비 중','dim'];
+}
+const match={all:r=>!r.rejected,pub:r=>r.publishable&&!r.hold&&!r.cooldown_until,noacct:r=>!r.rejected&&r.login_required&&!r.account,
+  cool:r=>!!r.cooldown_until,failed:r=>!r.rejected&&(r.fail_streak>0||r.status==='failed'),hold:r=>r.hold,unauth:r=>!r.rejected&&!r.authorized,rej:r=>r.rejected};
+async function loadSites(){
+  let j;try{j=await api('/api/ops/sites')}catch(e){toast(e.message,true);return}
+  SITES=j.rows; SEL=new Set([...SEL].filter(id=>SITES.some(r=>r.id===id)));
+  const su=j.signup||{};
+  $('#signupState').innerHTML=su.running?`회원 가입 작업 진행 <span class="mono">${su.done}/${su.total}</span> · 성공 <span class="mono">${su.ok}</span>`:'';
+  $('#btnSignup').disabled=!!su.running;
+  renderSites();
+}
+function renderSites(){
+  $('#siteFilters').innerHTML=FILTERS.map(([k,l])=>`<button data-f="${k}" aria-pressed="${FILTER===k}">${l}<span class="mono">${SITES.filter(match[k]).length}</span></button>`).join('');
+  $$('#siteFilters button').forEach(b=>b.onclick=()=>{FILTER=b.dataset.f;store.set('ops.siteFilter',FILTER);renderSites()});
+  const q=$('#siteQ').value.trim().toLowerCase();
+  const rank=r=>r.publishable?0:(r.cooldown_until?1:(r.fail_streak?2:3));
+  const rows=SITES.filter(match[FILTER]||match.all).filter(r=>!q||(r.domain+' '+r.name+' '+r.account).toLowerCase().includes(q))
+    .sort((a,b)=>rank(a)-rank(b)||b.today-a.today||a.domain.localeCompare(b.domain));
+  $('#siteEmpty').hidden=rows.length>0;
+  $('#siteRows').innerHTML=rows.map(r=>{
+    const [st,cls]=stateOf(r);
+    const acct=r.account?`<span class="mono">${esc(r.account)}</span><span class="tag">${r.via==='http'?'HTTP':'브라우저'}</span>`:(r.login_required?'<span class="note">없음</span>':'<span class="note">비회원</span>');
+    return `<tr data-id="${esc(r.id)}">
+      <td><input type="checkbox" class="sel" ${SEL.has(r.id)?'checked':''} aria-label="선택"></td>
+      <td><a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.domain)}</a><span class="sub" title="${esc(r.name)}">${esc(r.name)}${r.bo_table?' · '+esc(r.bo_table):''}</span></td>
+      <td class="c-auth"><label><input type="checkbox" class="auth" ${r.authorized?'checked':''}> <span class="note">${r.authorized?'허가됨':'대기'}</span></label></td>
+      <td class="c-acct">${acct}</td>
+      <td class="num c-today">${r.today||''}</td>
+      <td class="c-st"><span class="st ${cls}" title="${esc(r.block||'')}">${esc(st)}</span></td>
+      <td class="c-fail"><span class="sub" title="${esc(r.last_fail||r.signup_last)}">${esc(r.last_fail||(!r.account&&r.login_required?r.signup_last:''))}</span></td></tr>`}).join('');
+  $$('#siteRows .sel').forEach(c=>c.onchange=()=>{const id=c.closest('tr').dataset.id;c.checked?SEL.add(id):SEL.delete(id);bulkBar()});
+  $$('#siteRows .auth').forEach(c=>c.onchange=async()=>{
+    const id=c.closest('tr').dataset.id;
+    try{await post('/api/posting-authorization',{kind:'site',id,approved:c.checked});
+      const r=SITES.find(x=>x.id===id);if(r)r.authorized=c.checked;toast(c.checked?'게시 허가를 체크했습니다':'게시 허가를 해제했습니다');renderSites()}
+    catch(e){c.checked=!c.checked;toast(e.message,true)}});
+  $('#selAll').checked=rows.length>0&&rows.every(r=>SEL.has(r.id));
+  $('#selAll').onchange=e=>{rows.forEach(r=>e.target.checked?SEL.add(r.id):SEL.delete(r.id));renderSites()};
+  bulkBar();
+}
+function bulkBar(){const n=SEL.size;$('#bulk').classList.toggle('on',n>0);$('#bulkN').textContent=`${n}곳 선택됨`}
+$('#siteQ').oninput=renderSites;
+$('#btnSitesReload').onclick=loadSites;
+$$('#bulk .btn').forEach(b=>b.onclick=async()=>{
+  const ids=[...SEL], act=b.dataset.act; if(!ids.length)return;
+  try{
+    if(act==='auth_on'||act==='auth_off'){
+      const j=await post('/api/posting-authorization/bulk',{items:ids.map(id=>({kind:'site',id})),approved:act==='auth_on'});
+      toast(`${j.changed}곳 ${act==='auth_on'?'허가 체크':'허가 해제'}`);
+    }else{
+      if(act==='hold'&&!confirm(`${ids.length}곳을 보류합니다. 보류한 사이트에는 글을 올리지 않습니다.`))return;
+      const j=await post('/api/ops/sites/action',{action:act,ids});
+      toast(`${j.changed}곳 처리`+(j.skipped?.length?` · 중복 글 위험으로 ${j.skipped.length}곳 제외`:''));
+    }
+    SEL.clear(); loadSites();
+  }catch(e){toast(e.message,true)}
+});
+$('#btnSignup').onclick=async()=>{
+  try{const d=await post('/api/sites/signup-member-boards',{dry_run:true});
+    if(!d.count){toast('지금 가입할 대상이 없습니다');return}
+    if(!confirm(`허가된 회원 게시판 중 계정이 없는 ${d.count}곳에 한 곳씩 자동가입을 시도합니다.`))return;
+    const j=await post('/api/sites/signup-member-boards',{}); toast(`${j.count}곳 자동가입 시작`); loadSites();
+  }catch(e){toast(e.message,true)}
+};
+
+/* ---------- 실패 원인 ---------- */
+let FAILH=+store.get('ops.failH','24');
+async function loadFail(){
+  $$('#failWin button').forEach(b=>b.setAttribute('aria-pressed',+b.dataset.h===FAILH));
+  let j;try{j=await api('/api/ops/failures?hours='+FAILH)}catch(e){toast(e.message,true);return}
+  $('#failSum').innerHTML=`실패 <span class="mono">${fmt(j.total)}</span>건 · 원인 <span class="mono">${j.groups.length}</span>가지`;
+  $('#failRows').innerHTML=j.groups.length?j.groups.map((g,i)=>{
+    const names=g.sites.slice(0,5).map(s=>`${esc(s.name.slice(0,24))} <span class="mono">${s.count}</span>`).join(' · ')+(g.sites.length>5?` 외 ${g.sites.length-5}곳`:'');
+    return `<div class="fail-row" data-i="${i}">
+      <div class="n">${fmt(g.count)}</div>
+      <div><h3>${esc(g.reason)}</h3><div class="note">${esc(g.category)} · 마지막 <span class="mono">${esc(g.last.slice(5,16))}</span> · <span class="mono">${g.sites.length}</span>곳</div>
+        <div class="note" style="margin-top:4px">${names}</div>
+        <details><summary>원문 보기</summary><pre>${esc(g.sample)}</pre></details></div>
+      <div class="acts">
+        <button class="btn" data-a="retry" ${g.retry_safe?'':'disabled title="글이 이미 올라갔을 수 있어 재시도하지 않습니다"'}>대기 풀고 다시 시도</button>
+        <button class="btn risk" data-a="hold">이 사이트들 보류</button>
+        ${g.retry_safe?'':'<span class="note">중복 글 위험 · 재시도 막음</span>'}
+      </div></div>`}).join(''):'<p class="empty">이 기간에 실패한 발행이 없습니다.</p>';
+  $$('#failRows .fail-row').forEach(row=>{
+    const g=j.groups[+row.dataset.i], ids=g.sites.map(s=>s.id).filter(Boolean);
+    row.querySelector('[data-a=retry]').onclick=async()=>{
+      try{const r=await post('/api/ops/sites/action',{action:'clear_cooldown',ids});toast(`${r.changed}곳 대기 해제 · 다음 차례에 다시 시도`+(r.skipped?.length?` · ${r.skipped.length}곳 제외`:''))}catch(e){toast(e.message,true)}};
+    row.querySelector('[data-a=hold]').onclick=async()=>{
+      if(!confirm(`${ids.length}곳을 보류합니다. 보류한 사이트에는 글을 올리지 않습니다.`))return;
+      try{const r=await post('/api/ops/sites/action',{action:'hold',ids});toast(`${r.changed}곳 보류`)}catch(e){toast(e.message,true)}};
+  });
+}
+$$('#failWin button').forEach(b=>b.onclick=()=>{FAILH=+b.dataset.h;store.set('ops.failH',FAILH);loadFail()});
+
+/* ---------- 발행 제어 ---------- */
+let CTL={}, CTL0={};
+function paintCtl(){
+  $$('.switch').forEach(sw=>{const v=!!CTL[sw.dataset.k];sw.querySelector('.y').setAttribute('aria-pressed',v);sw.querySelector('.n').setAttribute('aria-pressed',!v)});
+  $('#cWorkers').textContent=CTL.workroom_workers??'–';
+  const dirty=Object.keys(CTL).some(k=>CTL[k]!==CTL0[k]);
+  $('#btnApply').disabled=!dirty;
+  $('#ctlMsg').textContent=dirty?'바뀐 값이 있습니다':'';
+}
+async function loadCtl(){
+  try{OV=await api('/api/ops/overview')}catch(e){toast(e.message,true);return}
+  liveText(OV);
+  const s=OV.switches; CTL0={publish_loop_enabled:!!s.publish_loop_enabled,auto_pipeline_enabled:!!s.auto_pipeline_enabled,
+    workroom_workers:+s.workroom_workers||1,min_interval_minutes:+s.min_interval_minutes||0,daily_limit:+s.daily_limit||0};
+  CTL={...CTL0}; $('#cInterval').value=CTL.min_interval_minutes; $('#cDaily').value=CTL.daily_limit;
+  const m=OV.mem; $('#cMemNote').textContent=m.total_mb?`워커 1개에 크롬 1개(약 400MB). 지금 서버 여유 ${(m.avail_mb/1024).toFixed(1)}GB.`:'워커 1개에 크롬 1개(약 400MB).';
+  paintCtl();
+}
+$$('.switch').forEach(sw=>{sw.querySelector('.y').onclick=()=>{CTL[sw.dataset.k]=true;paintCtl()};sw.querySelector('.n').onclick=()=>{CTL[sw.dataset.k]=false;paintCtl()}});
+$$('[data-step]').forEach(b=>b.onclick=()=>{CTL.workroom_workers=Math.max(1,Math.min(4,(CTL.workroom_workers||1)+ +b.dataset.step));paintCtl()});
+$('#cInterval').oninput=e=>{CTL.min_interval_minutes=Math.max(0,parseInt(e.target.value||'0',10)||0);paintCtl()};
+$('#cDaily').oninput=e=>{CTL.daily_limit=Math.max(0,parseInt(e.target.value||'0',10)||0);paintCtl()};
+$('#btnPreset').onclick=()=>{CTL.min_interval_minutes=60;CTL.daily_limit=10;$('#cInterval').value=60;$('#cDaily').value=10;paintCtl()};
+$('#btnApply').onclick=async()=>{
+  const body={};Object.keys(CTL).forEach(k=>{if(CTL[k]!==CTL0[k])body[k]=CTL[k]});
+  if(!Object.keys(body).length)return;
+  if(body.publish_loop_enabled===false&&!confirm('자동 발행을 끕니다. 새 글 작성이 멈춥니다.'))return;
+  try{const j=await post('/api/ops/control',body);toast(j.changed.length?'적용했습니다':'바뀐 값이 없습니다');loadCtl()}
+  catch(e){toast(e.message,true)}
+};
+
+/* ---------- 시작 ---------- */
+{api('/api/ops/overview').then(o=>{OV=o;liveText(o)}).catch(()=>{});const _v=(location.hash||'').slice(1)||store.get('ops.view','now');show(['now','sites','fail','ctl'].includes(_v)?_v:'now');}
+setInterval(()=>{if(document.hidden)return;if(view==='now')loadNow();else{api('/api/ops/overview').then(liveText).catch(()=>{});if(view==='sites'&&!SEL.size)loadSites()}},20000);
 </script>
 </body></html>'''
 
