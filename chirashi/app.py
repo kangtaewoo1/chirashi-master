@@ -6745,6 +6745,10 @@ def do_post(site, title, content_html, skip_login=False):
             return True,hmsg
         if hok is False:
             return False,hmsg   # 명확한 실패(캡차오답 등) — 셀레늄으로 반복 시도하지 않음
+        # ★HTTP로 가입한 계정(http_member)은 서버 크롬이 빈 페이지를 받는 사이트라 셀레늄 폴백이 무의미하고,
+        #   폴백 실패 문구('로그인 입력칸 없음' 등)가 진짜 원인을 가린다(2026-11-09 실측) → HTTP 사유 그대로 반환.
+        if site.get('http_member'):
+            return False,f'HTTP 회원 발행 불가 — {hmsg}'
         # hok is None → 셀레늄 폴백으로 진행
     try:
         ok,msg=(cafe24_post if plat=='cafe24' else gnuboard_post)(site,title,content_html,skip_login=skip_login)
