@@ -47,7 +47,7 @@ class SiteGoalTests(unittest.TestCase):
 
     def test_existing_access_denial_and_maintenance_guards_remain(self):
         for change in ({'maintenance_hold':True},{'permission':False},{'posting_authorized':False},{'status':'rejected'},
-                       {'secret_forced':True},{'login_required':True,'mb_id':''},
+                       {'secret_forced':True},{'login_required':True,'mb_id':'','verified_post_url':''},
                        {'write_access_state':'admin_only'},{'write_access_state':'human_verification_required'}):
             with self.subTest(change=change):
                 progress=self.env['_site_goal_progress']({'site_goal':50},[dict(self.valid(),**change)])

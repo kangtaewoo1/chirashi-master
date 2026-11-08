@@ -165,12 +165,14 @@ def unattended_block(site):
     if site.get('platform') == 'telpan':
         from telpan_adapter import block
         return block(site)
-    if site.get('platform') != 'gnuboard' or site.get('login_required') or site.get('mb_id'):
-        return 'unattended_adapter_unverified'
+    # ★대표님 지시 2026-11-08: '검증 마친 비회원 그누보드만 무인 발행' 규칙 제거 — 회원 게시판·비그누보드도
+    #   무인 발행 허용, 사전 감사(audit ready) 요구도 제거. 위의 안전장치(수동검토 전용·사람확인/캡차·관리자 전용·
+    #   하드 보류)와 아래 '계정 없는 회원 게시판 차단'·'실패 증거 보류'는 유지. 게시 허가 체크는 do_post/is_permitted가 담당.
+    #   계정 없이 실게시에 성공한 이력(verified_post_url+passed)이 있으면 login_required 표시는 오마킹으로 보고 비회원 발행
+    #   시도(진짜 로그인벽이면 첫 실패가 아래 실패 증거 보류로 다시 막는다).
+    if (site.get('login_required') and not str(site.get('mb_id') or '').strip()
+            and not str(site.get('verified_post_url') or '').startswith(('http://', 'https://'))):
+        return 'unattended_credentials_required'
     if audit_state and audit_state!='ready' and not _verified_post:
         return 'unattended_'+str(audit_state)
-    if _verified_post:
-        return ''
-    if audit_state != 'ready':
-        return 'unattended_audit_required'
     return ''

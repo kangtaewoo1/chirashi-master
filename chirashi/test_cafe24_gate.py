@@ -291,12 +291,20 @@ class UnattendedTests(unittest.TestCase):
     def test_unknown_and_human_boards_never_admitted(self):
         from cafe24_gate import unattended_block
         site={'platform':'gnuboard'}
-        self.assertEqual(unattended_block(site),'unattended_audit_required')
+        self.assertEqual(unattended_block(site),'')
         site['unattended_audit']={'state':'ready'}
         self.assertEqual(unattended_block(site),'')
         for key,value in [('has_captcha',True),('manual_review_only',True),('login_required',True)]:
             self.assertTrue(unattended_block(dict(site,**{key:value})))
-        self.assertEqual(unattended_block(dict(site,platform='cafe24')),'unattended_adapter_unverified')
+        # Member and non-gnuboard boards are admitted once an account is saved (2026-11-08).
+        self.assertEqual(unattended_block(dict(site,platform='cafe24')),'')
+        self.assertEqual(unattended_block(dict(site,login_required=True,mb_id='member')),'')
+        self.assertEqual(unattended_block(dict(site,login_required=True,mb_id=' ')),'unattended_credentials_required')
+        # A board that already published without an account is retried as a guest board.
+        verified=dict(site,login_required=True,verified_post_url='https://a.example/bbs/board.php?bo_table=free&wr_id=1')
+        self.assertEqual(unattended_block(verified),'')
+        # Failure evidence on an unverified board still holds it.
+        self.assertEqual(unattended_block({'platform':'gnuboard','unattended_audit':{'state':'human_or_form_review'}}),'unattended_human_or_form_review')
 
     def test_unused_legacy_script_is_not_an_active_challenge(self):
         from form_schema import human_challenge_present

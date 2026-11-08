@@ -51,7 +51,7 @@ class GnuboardBrowserTest(unittest.TestCase):
     def test_permission_and_human_holds_never_start_remote_submission(self):
         for change in ({'permission':False},{'status':'rejected'},{'maintenance_hold':True},
                        {'has_captcha':True},{'manual_review_only':True},{'write_access_state':'admin_only'},
-                       {'write_access_state':'human_verification_required'},{'login_required':True},
+                       {'write_access_state':'human_verification_required'},{'login_required':True,'verified_post_url':''},
                        {'unattended_audit':{'state':'tls_certificate_expired'}}):
             with self.subTest(change=change):
                 result,post,get,reset,updates,_=self.run_post(site=self.site(**change))

@@ -7159,7 +7159,8 @@ def is_autopostable(site):
     verified_url=str(site.get('verified_post_url') or '')
     # 로그인 필요 사이트인데 로그인 정보(mb_id)가 없으면 발행 제외 — 가입 미완료 사이트가
     # 발행 시도돼 failed 나는 것 방지(대표님 지시 2026-09-06). 비회원 글쓰기(login_required=False)는 영향 없음.
-    if site.get('login_required') and not str(site.get('mb_id') or '').strip():
+    #   ★2026-11-08 대표님 '회원 게시판도 무인 발행': 계정 없이 실게시 성공 이력(verified)이 있으면 비회원 발행 시도.
+    if site.get('login_required') and not str(site.get('mb_id') or '').strip() and not verified_url.startswith(('http://','https://')):
         return False
     # 오류안내/데모 사이트는 검증됐어도 발행 대상에서 즉시 제외(reconcile이 곧 영구 탈락 처리).
     if _is_error_or_demo_site(site):
