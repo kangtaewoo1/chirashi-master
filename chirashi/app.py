@@ -4200,7 +4200,18 @@ def gnuboard_post_http(site, title, content_html):
         r=s.get(f'{bbs}/write.php',params={'bo_table':bo},timeout=15,verify=bool(site.get('_unattended_job')))
     except Exception as e:
         return None,f'폼 GET 실패({str(e)[:40]}) — 폴백'
+    # ★구조적 차단 즉시 판정(2026-11-09 자율점검 실측: '글쓰기 폼 없음' 실패 대부분이 사람확인 페이지·호스팅 JS 검사·403/404 —
+    #   6시간에 곳당 9~11번 셀레늄 헛시도로 일꾼을 잡아먹음). 최근 24시간 성공이 없는 비회원 사이트만 셀레늄으로 넘기지 않고
+    #   바로 실패(finalize_post가 '구조적 차단'에 6시간 쉼). 우회가 아니라 막힌 곳에 헛시도를 줄이는 것.
+    _recent_ok=False
+    try:
+        _lp=str(site.get('last_post_at') or '')
+        _recent_ok=bool(_lp) and (datetime.now()-datetime.strptime(_lp[:19],'%Y-%m-%d %H:%M:%S')).total_seconds()<86400
+    except Exception: _recent_ok=False
+    _structural=(not _mb) and not _recent_ok and not site.get('_unattended_job')
     if r.status_code>=400:
+        if _structural and r.status_code in (403,404):
+            return False,f'글쓰기 페이지 HTTP {r.status_code} — 구조적 차단(접근 거부/게시판 주소 확인)'
         return None,f'폼 GET {r.status_code} — 폴백'
     if site.get('_vultr_direct'):
         from charset_guard import form_encoding
@@ -4222,6 +4233,10 @@ def gnuboard_post_http(site, title, content_html):
             return False,'사람 확인 또는 글쓰기 양식 변경 감지'
     low=html.lower()
     # 로그인 게이트/회원전용이면 폴백(비회원 글쓰기 폼이 아님)
+    if _structural and measured['state']=='human_verification_required':
+        return False,'사이트 사람 확인 페이지 — 구조적 차단(자동 발행 불가)'
+    if _structural and len(html)<1200 and '<script' in low and '<form' not in low:
+        return False,'호스팅 보안 검사 페이지 — 구조적 차단(자동 발행 불가)'
     if ('mb_password' in low and 'login' in low and 'wr_subject' not in low) or measured['state']!='measured':
         return None,'비회원 글쓰기 폼 아님 — 폴백'
     # 폼의 write_update 액션 확인
@@ -7063,6 +7078,9 @@ def finalize_post(site,ok,fail_reason=''):
                         s['cooldown_until']=(datetime.now()+timedelta(minutes=20)).strftime('%Y-%m-%d %H:%M:%S')
                     # ★빈 캡차(서버에서 캡차 세션 미생성) 사이트는 5분마다 헛시도해 실패만 쌓임(2026-10-03 실측 15곳×251건/2.5h).
                     #   노드가 없으면 2시간, 노드가 살아 있으면 20분(곧 노드 claim이 가져가도록) 쿨다운.
+                    if '구조적 차단' in str(fail_reason):   # 사람확인·호스팅 검사·403/404 — 6시간 쉼(2026-11-09)
+                        _until=(datetime.now()+timedelta(hours=6)).strftime('%Y-%m-%d %H:%M:%S')
+                        if _until>str(s.get('cooldown_until') or ''): s['cooldown_until']=_until
                     if '캡차 세션 미생성' in str(fail_reason):
                         try: _alive=_pc_node_alive()
                         except Exception: _alive=False
@@ -14448,9 +14466,29 @@ def _ops_cooling(s,now):
     try: return cu if (cu and datetime.strptime(cu[:19],'%Y-%m-%d %H:%M:%S')>now) else ''
     except Exception: return ''
 
+_OPS_REAP_AT=[0.0]
+def _ops_reap_stale_posting(max_age_min=60):
+    """★서버 재시작(배포 등)으로 끊긴 '처리 중' 이력 정리(2026-11-09 자율점검: 30분 넘게 멈춘 posting 21건이 '처리 중'을 부풀림).
+       결과를 모르니 실패로 닫되 '재제출 금지'를 붙여 운영실 재시도(_OPS_RETRY_UNSAFE)에서도 제외. 10분에 한 번만."""
+    if time.time()-_OPS_REAP_AT[0]<600: return 0
+    _OPS_REAP_AT[0]=time.time(); n=0
+    cut=(datetime.now()-timedelta(minutes=max_age_min)).strftime('%Y-%m-%d %H:%M:%S')
+    with JOB_LOCK:
+        h=load_json(HISTORY_FILE,[])
+        for rec in h:
+            if rec.get('status')=='posting' and str(rec.get('time') or '9')<cut:
+                rec['status']='failed'; rec['fail_reason_ko']='중단됨(결과 미확인)'
+                rec['message']='작업 중단됨(서버 재시작 등) — 결과 미확인, 재제출 금지'
+                rec['updated']=datetime.now().strftime('%Y-%m-%d %H:%M:%S'); n+=1
+        if n: save_json(HISTORY_FILE,h)
+    if n: add_log(f'[운영실] 끊긴 처리 중 기록 {n}건 정리(결과 미확인·재제출 금지)','정리')
+    return n
+
 @app.route('/api/ops/overview',methods=['GET'])
 def api_ops_overview():
     from collections import Counter
+    try: _ops_reap_stale_posting()
+    except Exception: pass
     cfg=load_config(); now=datetime.now(); today=now.strftime('%Y-%m-%d')
     th=[x for x in load_json(HISTORY_FILE,[]) if str(x.get('time') or '').startswith(today)]
     st=Counter(x.get('status') for x in th)
