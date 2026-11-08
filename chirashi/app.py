@@ -10087,7 +10087,7 @@ def auto_pipeline_once(limit=5):
                     add_log(f'[자동가입 실패] {name} — {str(msg_su)[:90]}')
                     return   # (병렬 처리: continue → return)
             # 발행 시도(②: 비회원 우선, 또는 방금 가입한 세션으로)
-            ok,msg=do_post(tmp,title,html,skip_login=_just_signed)
+            ok,msg=do_post(tmp,title,html,skip_login=(_just_signed and not tmp.get('http_member')))   # HTTP 가입이면 브라우저 세션이 없음 → HTTP 로그인 발행
             # 검수는 비회원 글쓰기로 봤지만 실제 write.php가 로그인으로 튕기는 게시판이 있다.
             # 이 경우 자동가입 후 1회 재시도(gjsec처럼 login_required 오판된 케이스 구제).
             # ★Cafe24는 '글쓰기 페이지 못찾음'도 대개 로그인 필요 → 자동가입 트리거에 포함(대표님 지시 2026-09-11).
@@ -10101,7 +10101,7 @@ def auto_pipeline_once(limit=5):
                     with _pipe_lock: signed+=1
                     add_log(f'[파이프라인] {name} 자동가입 성공 → 세션 재사용 재발행')
                     # reset_driver 하지 않음 — 가입 직후 로그인된 세션을 그대로 써서 발행(비표준 로그인폼 구제)
-                    ok,msg=do_post(tmp,title,html,skip_login=True)
+                    ok,msg=do_post(tmp,title,html,skip_login=not tmp.get('http_member'))   # ★HTTP 가입 직후엔 HTTP 로그인 발행(2026-11-09 세안타올 실측)
                 else:
                     add_log(f'[파이프라인] {name} 자동가입 실패: {str(msg_su)[:80]}')
                     msg=f'{msg} · 자동가입 실패: {str(msg_su)[:60]}'
@@ -10111,7 +10111,7 @@ def auto_pipeline_once(limit=5):
                                            bo=tmp.get('bo_table'),permission=True)
                 # 가입정보가 생겼으면 등록 사이트에 반영
                 if tmp.get('mb_id'):
-                    set_site_flag(_promoted_site_id(c),mb_id=tmp.get('mb_id'),mb_pass=tmp.get('mb_pass'))
+                    set_site_flag(_promoted_site_id(c),mb_id=tmp.get('mb_id'),mb_pass=tmp.get('mb_pass'),login_required=True,**({'http_member':True,'signup_via':'http'} if tmp.get('http_member') else {}))
                 with _pipe_lock:
                     registered+=1
                     results.append({'name':name,'stage':'post','ok':True,'url':result_url})
@@ -10123,7 +10123,7 @@ def auto_pipeline_once(limit=5):
                 _promote_candidate_to_site(c,_alt_url,write_url=tmp.get('learned',{}).get('write_url','') if isinstance(tmp.get('learned'),dict) else '',
                                            bo=tmp.get('bo_table'),permission=True)
                 if tmp.get('mb_id'):
-                    set_site_flag(_promoted_site_id(c),mb_id=tmp.get('mb_id'),mb_pass=tmp.get('mb_pass'))
+                    set_site_flag(_promoted_site_id(c),mb_id=tmp.get('mb_id'),mb_pass=tmp.get('mb_pass'),login_required=True,**({'http_member':True,'signup_via':'http'} if tmp.get('http_member') else {}))
                 with _pipe_lock:
                     registered+=1
                     results.append({'name':name,'stage':'post','ok':True,'url':_alt_url})
