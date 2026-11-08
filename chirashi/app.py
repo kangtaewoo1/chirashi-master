@@ -2201,7 +2201,7 @@ def _save_manual_action_states():
 def _captcha_public(task):
     return {k:v for k,v in task.items() if k not in ('event','value','cancelled')}
 
-def _kcaptcha_force_load(d):
+def _kcaptcha_force_load(d, force=False):
     """그누보드 kcaptcha 특화: 초기 #captcha_img는 dot.gif 플레이스홀더라서
        JS가 새로고침 전엔 실이미지가 없다. g5_captcha_url을 읽어 세션을 새로 만들고
        실제 kcaptcha_image.php 를 src에 강제 로드한 뒤 디코딩까지 기다린다.
@@ -2221,7 +2221,9 @@ def _kcaptcha_force_load(d):
             var s=i.getAttribute('src')||'';
             return (s.indexOf('dot.gif')===-1 && (i.naturalWidth||0)>5);
         """)
-        if already:
+        # ★force=True(오답 재시도): 이미 떠 있는 그림은 방금 틀린 그 그림이므로 반드시 새 세션·새 그림을 받는다.
+        #   (2026-11-08 실측: 재시도마다 같은 그림을 다시 읽어 "958493"만 3번 제출하고 실패)
+        if already and not force:
             return True
         cap_url=d.execute_script("return (typeof g5_captcha_url!=='undefined')?g5_captcha_url:'';") or ''
         if not cap_url:
@@ -9206,7 +9208,7 @@ def auto_signup(site, submit=True):
             ok,cmsg,answer,info=solve_captcha_with_2captcha(d,site,cap,cfg)
             if ok: break
             if _catt<3:
-                try: _kcaptcha_force_load(d)   # 새 캡차 이미지 강제 로드 후 재시도
+                try: _kcaptcha_force_load(d, force=True)   # 새 캡차 이미지 강제 로드 후 재시도
                 except Exception: pass
                 time.sleep(1)
         if not ok:
@@ -9276,7 +9278,7 @@ def auto_signup(site, submit=True):
         while _still_on_form() and _rtry<2:
             _rtry+=1
             add_log(f'[자동가입 캡차재시도] {_snm} — 제출 후 가입폼 잔존(캡차 오답 추정) {_rtry}/2')
-            try: _kcaptcha_force_load(d); time.sleep(1)
+            try: _kcaptcha_force_load(d, force=True); time.sleep(1)
             except Exception: pass
             _ok2,_m2,_ans2,_i2=solve_captcha_with_2captcha(d,site,'kcaptcha',cfg)
             if not (_ok2 and _ans2): continue
