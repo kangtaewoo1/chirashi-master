@@ -4360,7 +4360,9 @@ def gnuboard_post_http(site, title, content_html):
             return None,last_reason+f' — {CAP_TRIES}회 실패, 셀레늄 폴백'
         if '내용을 입력' in blob: return False,'본문 미입력'
         if '금지단어' in blob: return False,'금지단어 차단'
-        if any(k in blob for k in ['권한이 없','로그인','회원만']): return None,'권한/로그인 필요 — 폴백'
+        if any(k in blob for k in ['권한이 없','로그인','회원만']):
+            # 사이트 알림 문구를 붙여 진짜 거절 이유가 기록에 남게(2026-11-09 http_member 실측: 이유 불명)
+            return None,'권한/로그인 필요 — 폴백'+(f' ({alerts[0][:60]})' if alerts else f' (응답 {pr.status_code} {fin[-60:]})')
         # (4) URL/문구로 판정 불가 — 글이 실제로 올라갔는지 목록에서 확인(중복발행 방지의 핵심).
         #     올라갔으면 True(셀레늄 재발행 안 함), 안 올라갔으면 None(안전 폴백 — 중복 위험 없음).
         landed=_http_verify_title_on_board(s,bbs,bo,title)
