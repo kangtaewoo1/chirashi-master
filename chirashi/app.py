@@ -14818,7 +14818,7 @@ async function renderBoard(){
     }
     // 동작: 사이트는 삭제, 후보는 자동처리중 표시(수동버튼 최소화 — 대표님 '알아서')
     const act=x.kind==='site'
-      ? '<button class="btn btn-xs" onclick="auditForm(\''+esc(x.id)+'\',\'signup\')">가입 양식</button> <button class="btn btn-xs" onclick="auditForm(\''+esc(x.id)+'\',\'write\')">글쓰기 양식</button> <button class="btn btn-xs" onclick="editSite(\''+esc(x.id)+'\')">계정 연결</button> <button class="btn btn-r btn-xs" onclick="delSite(\''+esc(x.id)+'\')">삭제</button>'
+      ? '<button class="btn btn-d btn-xs" onclick="auditForm(\''+esc(x.id)+'\',\'signup\')">가입 양식</button> <button class="btn btn-d btn-xs" onclick="auditForm(\''+esc(x.id)+'\',\'write\')">글쓰기 양식</button> <button class="btn btn-d btn-xs" onclick="editSite(\''+esc(x.id)+'\')">계정 연결</button> <button class="btn btn-r btn-xs" onclick="delSite(\''+esc(x.id)+'\')">삭제</button>'
       : (x.state==='rejected'?'<span style="color:var(--d);font-size:10px">자동 제외</span>':(x.posting_authorized?'승인됨 · 자동 진행':'체크 전까지 진행 안 함'));
     return '<tr><td><span class="st '+b.c+'" style="white-space:nowrap">'+b.t+'</span></td>'
       +'<td style="max-width:260px"><b>'+esc(x.name||x.domain)+'</b><br><a href="'+esc(x.url||'#')+'" target="_blank" rel="noopener" style="color:var(--p);word-break:break-all;font-size:11px">'+esc((x.url||'').slice(0,60))+'</a></td>'
