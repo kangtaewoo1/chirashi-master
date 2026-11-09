@@ -4253,7 +4253,7 @@ def _gnuboard_signup_http(site, cfg, vals):
         # 메일 인증 대기 가능성 — 지메일 받은편지함에서 인증 링크를 찾아(최대 90초) 눌러 가입 완성 후 재확인.
         if _verify_tag:
             add_log(f'[HTTP 가입 메일인증 대기] {nm[:30]} — 지메일 인증 링크 확인 중')
-            try: _v=tempmail_wait_verify_link(_verify_tag,timeout=90)
+            try: _v=tempmail_wait_verify_link(_verify_tag,timeout=int(cfg.get('http_verify_wait_sec',40) or 40))
             except Exception: _v=None
             if _v and _v.get('link'):
                 try: s.get(_v['link'],timeout=20,allow_redirects=True)
