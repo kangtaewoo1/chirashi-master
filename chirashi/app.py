@@ -14670,6 +14670,7 @@ def api_ops_dashboard():
 # 글이 이미 올라갔을 수 있는 실패 — 재시도하면 같은 글이 두 번 올라갈 수 있어 운영실 재시도에서 제외.
 _OPS_RETRY_UNSAFE=('등록 확인 불가','재제출 금지','결과 검증 대기')
 _OPS_CONTROL_SPEC={'publish_loop_enabled':('bool',None,None),'auto_pipeline_enabled':('bool',None,None),
+                   'allow_pc_nodes':('bool',None,None),
                    'workroom_workers':('int',1,4),'min_interval_minutes':('int',0,1440),'daily_limit':('int',0,1000)}
 
 def _ops_mem():
@@ -14875,6 +14876,19 @@ def api_ops_control():
         save_config(cfg)
         add_log('[운영실 설정] '+', '.join(f'{k} {o}→{n}' for k,o,n in changed))
     return jsonify({'ok':True,'changed':[k for k,_,_ in changed],'switches':{k:cfg.get(k) for k in _OPS_CONTROL_SPEC}})
+
+@app.route('/api/ops/node-token',methods=['GET','POST'])
+def api_ops_node_token():
+    # 발행 노드(PC·노트북) 연결용 토큰 조회/회전. ★로그인 세션 전용(토큰 허용목록에 일부러 넣지 않음) —
+    #   유출된 옛 토큰으로 새 토큰을 못 읽게 한다. GET=현재 토큰, POST=새로 발급(옛 토큰 즉시 무효화).
+    cfg=load_config()
+    if request.method=='POST':
+        import secrets as _sec
+        new=_sec.token_hex(16)
+        cfg['log_token']=new; save_config(cfg)
+        add_log('[노드 토큰] 새로 발급 — 기존 토큰 즉시 무효화(유출 대비 회전)','정리')
+        return jsonify({'ok':True,'token':new,'rotated':True})
+    return jsonify({'ok':True,'token':(cfg.get('log_token') or '')})
 
 def _ops_probe_guest(ids=None):
     """★회원 전용 오표시 실측 교정(2026-11-09 대표님 '계정없음은 뭐냐'): '계정 없음' 63곳을 HTTP로 열어 보니 10곳이
@@ -16555,6 +16569,17 @@ input[type=date]{border:1px solid var(--line);background:var(--surface);padding:
       <p class="note">0이면 제한 없음.</p></div>
     <div class="foot"><button class="btn pri" id="btnApply">적용</button><button class="btn" id="btnPreset">도배 방지 권장값 넣기 (60분 · 하루 10건)</button><span class="note" id="ctlMsg"></span></div>
   </div>
+
+  <div class="ctl" style="margin-top:14px">
+    <div class="row"><label>노드 발행 허용(PC·노트북)</label><div class="switch" data-k="allow_pc_nodes"><button class="y">켜짐</button><button class="n">꺼짐</button></div>
+      <p class="note">켜면 서버 전용 모드가 풀려 등록된 노드가 cafe24·서버IP 차단 사이트를 받아 발행합니다. 변경은 아래 ‘적용’으로 저장됩니다.</p></div>
+    <div class="row"><label>노드 연결 토큰</label>
+      <div><button class="btn" id="btnTokShow">토큰 보기</button><button class="btn" id="btnTokCopy" style="display:none">복사</button><button class="btn" id="btnTokRot">토큰 새로 발급</button></div>
+      <p class="note">사무실 PC/노트북을 발행 노드로 붙일 때 설치창에 이 토큰을 입력합니다. 유출됐다면 ‘새로 발급’ — 기존 토큰은 즉시 무효화됩니다(이 화면 로그인에서만 보입니다).</p>
+      <p class="mono" id="tokVal" style="display:none;word-break:break-all;background:#0d1117;color:#7ee787;padding:8px;border-radius:6px;border:1px solid #30363d"></p></div>
+    <div class="row"><label>사무실 PC 설치(1대)</label>
+      <p class="note">① 그 PC에 Python 3.13(“Add to PATH” 체크)과 Chrome 설치 → ② <span class="mono">github.com/kangtaewoo1/chirashi-master</span>의 <span class="mono">chirashi/SETUP_NODE.bat</span> 내려받아 더블클릭 → ③ 묻는 창에 노드이름(예: office1)과 위 토큰 입력 → 자동으로 패키지 설치·부팅 시 자동시작까지 됩니다. 절전은 ‘안 함’으로.</p></div>
+  </div>
 </section>
 
 </div></main>
@@ -16785,6 +16810,7 @@ async function loadCtl(){
   try{OV=await api('/api/ops/overview')}catch(e){toast(e.message,true);return}
   liveText(OV);
   const s=OV.switches; CTL0={publish_loop_enabled:!!s.publish_loop_enabled,auto_pipeline_enabled:!!s.auto_pipeline_enabled,
+    allow_pc_nodes:!!s.allow_pc_nodes,
     workroom_workers:+s.workroom_workers||1,min_interval_minutes:+s.min_interval_minutes||0,daily_limit:+s.daily_limit||0};
   CTL={...CTL0}; $('#cInterval').value=CTL.min_interval_minutes; $('#cDaily').value=CTL.daily_limit;
   const m=OV.mem; $('#cMemNote').textContent=m.total_mb?`워커 1개에 크롬 1개(약 400MB). 지금 서버 여유 ${(m.avail_mb/1024).toFixed(1)}GB.`:'워커 1개에 크롬 1개(약 400MB).';
@@ -16799,7 +16825,19 @@ $('#btnApply').onclick=async()=>{
   const body={};Object.keys(CTL).forEach(k=>{if(CTL[k]!==CTL0[k])body[k]=CTL[k]});
   if(!Object.keys(body).length)return;
   if(body.publish_loop_enabled===false&&!confirm('자동 발행을 끕니다. 새 글 작성이 멈춥니다.'))return;
+  if(body.allow_pc_nodes===true&&!confirm('노드 발행을 허용합니다. 서버 전용 모드가 풀리고 등록된 PC/노트북 노드가 cafe24·차단 사이트를 받아 발행합니다. 진행할까요?'))return;
   try{const j=await post('/api/ops/control',body);toast(j.changed.length?'적용했습니다':'바뀐 값이 없습니다');loadCtl()}
+  catch(e){toast(e.message,true)}
+};
+let TOK='';
+$('#btnTokShow').onclick=async()=>{
+  try{const j=await api('/api/ops/node-token');TOK=j.token||'';$('#tokVal').textContent=TOK;$('#tokVal').style.display='block';$('#btnTokCopy').style.display='';}
+  catch(e){toast(e.message,true)}
+};
+$('#btnTokCopy').onclick=async()=>{try{await navigator.clipboard.writeText(TOK);toast('복사했습니다')}catch(e){toast('복사 실패 — 길게 눌러 선택하세요',true)}};
+$('#btnTokRot').onclick=async()=>{
+  if(!confirm('토큰을 새로 발급합니다. 기존 토큰은 즉시 무효화되어, 이미 붙어 있는 노드가 있으면 새 토큰으로 다시 설정해야 합니다. 진행할까요?'))return;
+  try{const j=await post('/api/ops/node-token',{rotate:true});TOK=j.token||'';$('#tokVal').textContent=TOK;$('#tokVal').style.display='block';$('#btnTokCopy').style.display='';toast('새 토큰을 발급했습니다 — 복사해서 노드에 입력하세요')}
   catch(e){toast(e.message,true)}
 };
 
