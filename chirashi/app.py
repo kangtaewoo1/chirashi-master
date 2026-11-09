@@ -9231,6 +9231,16 @@ def auto_signup(site, submit=True):
     if not _phone_digits.startswith('01'): _phone_digits='010'+_phone_digits[-8:]
     vals_by_role={'id':mid,'password':pw,'password_confirm':pw,'email':email,
                   'nickname':nick,'name':name,'phone':_phone_digits[:11],'birth':'19900315'}
+    # ★그누보드는 HTTP 가입 먼저(2026-11-09 자율점검: 서버 크롬 6개·스왑 1.2GB·부하 14 — 그런데 오늘 가입 성공은 거의 전부
+    #   HTTP 경로, 브라우저 가입은 빈 페이지로 실패). 크롬 없이 수 초에 끝남. 표준 화면이 아니라 '적용 불가(None)'일 때만 브라우저로.
+    #   HTTP로 제출까지 했다가 실패(False)면 브라우저로 다시 가입하지 않는다(같은 사이트에 계정 중복 생성 방지).
+    #   이메일 인증이 필요한 사이트는 브라우저 경로(임시메일 인증 처리)로.
+    if ((site.get('platform') or 'gnuboard')=='gnuboard' and submit and not need_email_verify
+            and cfg.get('http_signup_first',True)):
+        try: _hok0,_hmsg0=_gnuboard_signup_http(site,cfg,vals_by_role)
+        except Exception as _he0: _hok0,_hmsg0=None,f'HTTP 가입 오류({str(_he0)[:50]})'
+        if _hok0 is not None: return _hok0,_hmsg0
+        site['_http_signup_tried']=_hmsg0
     d=get_driver()
     # 그누보드 가입은 register.php(약관) → 동의 → register_form.php(실제 폼) 2단계다.
     # register_form.php를 GET으로 직접 열면 약관 화면이라 필드가 없다 → 약관부터 진행.
@@ -9306,8 +9316,11 @@ def auto_signup(site, submit=True):
     if not _has_pw_field():
         # ★브라우저가 가입 폼에 못 가면(서버 크롬에 빈 페이지 주는 그누보드) requests로 표준 가입 시도.
         if (site.get('platform') or 'gnuboard')=='gnuboard' and submit:
-            try: _hok,_hmsg=_gnuboard_signup_http(site,cfg,vals_by_role)
-            except Exception as _he: _hok,_hmsg=False,f'HTTP 가입 오류({str(_he)[:50]})'
+            if site.get('_http_signup_tried'):   # 앞에서 이미 HTTP 시도(적용 불가) — 같은 시도 반복 안 함
+                _hok,_hmsg=None,str(site.pop('_http_signup_tried'))
+            else:
+                try: _hok,_hmsg=_gnuboard_signup_http(site,cfg,vals_by_role)
+                except Exception as _he: _hok,_hmsg=False,f'HTTP 가입 오류({str(_he)[:50]})'
             if _hok is not None: return _hok,_hmsg
             add_log(f'[자동가입] {_snm} — {_hmsg}')
             return False,f'가입 폼(비밀번호 입력칸)에 도달 실패 — {_hmsg}'   # HTTP 사유를 남겨 구조적 실패 판정에 쓴다
