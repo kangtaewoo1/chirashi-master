@@ -392,30 +392,38 @@ class ServerQueueOnlyTest(unittest.TestCase):
         exec(compile(ast.Module(body=[fn],type_ignores=[]),'server-only-test','exec'),env)
         self.assertEqual(env['api_pipeline_claim_sites']()['sites'],[])
 
-    def test_legacy_node_claim_is_disabled_even_when_nodes_are_enabled(self):
+    def _claim_env(self, site, saved, read):
+        import threading,time
+        from types import SimpleNamespace
         tree=ast.parse(Path(__file__).with_name('app.py').read_text(encoding='utf-8'))
         fn=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='api_pipeline_claim_sites')
         fn.decorator_list=[]
-        import threading,time
-        from types import SimpleNamespace
-        site={'id':'site','site_url':'https://example.com','platform':'cafe24','mb_id':'user',
-              'verified_post_url':'https://example.com/article/1','permission':True}
         env={'jsonify':lambda value:value,
              'request':SimpleNamespace(get_json=lambda **kw:{'node_id':'pc'}),
              'load_config':lambda:{'pc_claim_ttl':600},'_pc_nodes_enabled':lambda:True,
              'time':time,'POST_LOCK':threading.RLock(),'load_sites':lambda:[site],
              'is_permitted':lambda value:True,'load_json':lambda *args:[],
-             'WORKROOMS_FILE':Path('/unused'),
-             'save_sites':lambda *args:self.fail('Legacy PC endpoint must not claim sites'),
-             '_workroom_image_urls':lambda *args:[],
-             '_auto_subkeywords':lambda *args:{},
-             '_decrypt_password':lambda *args:self.fail('Legacy PC endpoint must not read credentials'),
-             'add_log':lambda *args,**kwargs:None}
-        exec(compile(ast.Module(body=[fn],type_ignores=[]),'disabled-node-claim-test','exec'),env)
-        result=env['api_pipeline_claim_sites']()
-        self.assertEqual(result['sites'],[])
-        self.assertEqual(result['reason'],'audited_server_queue_only')
+             'WORKROOMS_FILE':Path('/unused'),'save_sites':saved,
+             '_workroom_image_urls':lambda *args:[],'_auto_subkeywords':lambda *args:{},
+             '_decrypt_password':read,'add_log':lambda *args,**kwargs:None}
+        exec(compile(ast.Module(body=[fn],type_ignores=[]),'node-claim-test','exec'),env)
+        return env['api_pipeline_claim_sites']
+    def test_node_claim_requires_posting_authorization(self):
+        # 2026-11-09 대표님 승인: 노드 위임은 '게시 허가 체크된' 서버 IP 불가 사이트만. 허가 없으면 claim·자격증명 읽기 금지.
+        site={'id':'site','site_url':'https://example.com','platform':'cafe24','mb_id':'user',
+              'verified_post_url':'https://example.com/article/1','permission':True}
+        claim=self._claim_env(site,lambda *a:self.fail('Unauthorized site must not be claimed'),
+                              lambda *a:self.fail('Unauthorized credentials must not be read'))
+        self.assertEqual(claim()['sites'],[])
         self.assertNotIn('pc_claim_by',site)
+    def test_node_claim_hands_over_authorized_node_only_site(self):
+        site={'id':'site','site_url':'https://example.com','platform':'gnuboard','node_only':True,
+              'posting_authorized':True,'mb_id':'','permission':True}
+        saved=[]
+        claim=self._claim_env(site,lambda *a:saved.append(True),lambda *a:'')
+        result=claim()
+        self.assertEqual([s['id'] for s in result['sites']],['site'])
+        self.assertEqual(site['pc_claim_by'],'pc'); self.assertTrue(saved)
 
     def test_explicit_approval_endpoint_saves_o_and_x_for_sites_and_candidates(self):
         tree=ast.parse(Path(__file__).with_name('app.py').read_text(encoding='utf-8'))

@@ -534,6 +534,15 @@ def learn_signup_profile(site,force=False):
 
 _CFG_CACHE=None   # (mtime_key, read_ts, parsed_dict) — load_config 디스크읽기 캐시(TTL 0.8s, save_config가 무효화)
 def _enforce_server_only_config(c):
+    # ★PC 노드 허용 스위치(2026-11-09 대표님 '사무실 PC 노드로 붙이기' 승인): allow_pc_nodes=True일 때만 서버 전용을 풀어
+    #   노드가 서버로는 안 되는 사이트(해외IP 차단·cafe24)를 맡게 한다. node_publish_all은 계속 False(서버 발행 유지).
+    #   스위치가 없거나 False면 종전과 똑같이 서버 전용을 강제한다.
+    if c.get('allow_pc_nodes') is True:
+        changed=c.get('server_only_mode') is not False or c.get('node_publish_all') is not False
+        if changed:
+            c['server_only_mode']=False
+            c['node_publish_all']=False
+        return changed
     changed=c.get('server_only_mode') is not True or c.get('node_publish_all') is not False
     if changed:
         c['server_only_mode']=True
@@ -614,7 +623,7 @@ def load_config():
        # ★자동가입 고정계정(대표님 지시 2026-09-08: 랜덤 대신 통일). 비면 기존 랜덤 생성.
        #   설정 시 모든 자동가입에 이 아이디/비번 사용(대표님이 관리·중복ID 감소).
        'signup_fixed_id':'','signup_fixed_pw':'',
-       'log_token':'cae3aaa53d6f3576a1c1f6a258f79129'}   # 읽기전용 로그 조회 토큰(?token= 로 /api/logs·/api/worker-log 접근)
+       'log_token':''}   # 읽기전용 로그 조회 토큰(?token= 로 /api/logs·/api/worker-log 접근)
     # ★config 파일읽기 캐시(2026-10-23 대표님 '사이트 느려짐' 실측: /api/worker-log 49초): is_autopostable 등이
     #   사이트마다 load_config()를 불러 worker-log가 121회+ 디스크 읽기+JSON파싱 → 느림. 파일 mtime이 같으면
     #   0.8초 내 재읽기는 캐시된 파싱본을 재사용(save_config가 파일을 바꾸면 mtime 달라져 자동 무효화). 반환은 복사본.
@@ -647,7 +656,7 @@ def load_config():
         c.setdefault('publish_loop_enabled',True)
         c.setdefault('publish_interval_sec',300)
         c.setdefault('discover_interval_sec',600)
-        c.setdefault('log_token','cae3aaa53d6f3576a1c1f6a258f79129')
+        c.setdefault('log_token',secrets.token_hex(16))   # ★공개 기본값 금지(2026-11-09) — 새 설치는 무작위
         c['autofull_migrated']=True
         try: save_json(CONFIG_FILE,c)
         except Exception: pass
@@ -10465,6 +10474,7 @@ def _publish_combo_to_site(s, kw, wname, rid, cfg, writer_name='', chrome_sem=No
     if not cfg.get('publish_loop_enabled'): return
     fresh=next((x for x in load_sites() if x.get('id')==s.get('id')),None)
     if not fresh or not is_publishable(fresh): return
+    if fresh.get('node_only'): return   # 서버 IP로 안 되는 사이트 — 한국 IP 노드(claim-sites) 전담(2026-11-09)
     if fresh.get('pc_last_finalized_job') and (fresh.get('unattended_audit') or {}).get('state')!='ready': return
     _slk=_site_lock(fresh.get('id'))
     if not _slk.acquire(blocking=False): return   # 다른 슬롯/조합이 이 사이트 발행 중 → 스킵
@@ -12204,8 +12214,56 @@ def api_pc_queue_report():
 
 @app.route('/api/pipeline/claim-sites',methods=['POST'])
 def api_pipeline_claim_sites():
-    """Unattended publishing uses the audited server queue; no legacy PC handoff."""
-    return jsonify({'ok':True,'sites':[],'ttl':0,'reason':'audited_server_queue_only'})
+    """★좁은 범위의 노드 발행 위임(2026-11-09 대표님 승인 '사무실 PC 노드'): 서버 IP로는 절대 안 되는 사이트만 한국 IP 노드에 넘긴다.
+       대상 = (node_only 표시 사이트 또는 cafe24) AND 게시 허가 체크(posting_authorized) — 그 외는 서버 큐 그대로.
+       보류·관리자전용·사람확인·비밀글강제·본인인증·수동검증·탈락 사이트는 노드에도 절대 넘기지 않는다(자격증명도 안 읽음).
+       claim 잠금(pc_claim_by/expire, TTL)으로 서버·다른 노드와 중복 방지. 결과는 report-site로 회신. body {node_id, n}."""
+    d=request.get_json(silent=True) or {}
+    _cfg=load_config()
+    if not _pc_nodes_enabled():
+        return jsonify({'ok':True,'sites':[],'ttl':0,'reason':'server_only_mode'})
+    node_id=str(d.get('node_id') or '').strip() or 'pc'
+    try: n=max(1,min(10,int(d.get('n',4) or 4)))
+    except (TypeError,ValueError): n=4
+    ttl=max(120,min(1800,int(_cfg.get('pc_claim_ttl',600) or 600)))
+    now=time.time(); picked=[]
+    def _blocked(s):
+        return bool(s.get('maintenance_hold') or s.get('secret_forced') or s.get('signup_phone_cert')
+                    or s.get('manual_review_only') or s.get('status')=='rejected'
+                    or s.get('write_access_state') in ('admin_only','human_verification_required'))
+    with POST_LOCK:
+        sites=load_sites(); changed=False
+        for s in sites:   # 만료된 claim 회수
+            if s.get('pc_claim_by') and float(s.get('pc_claim_expire',0) or 0)<=now:
+                s['pc_claim_by']=''; s['pc_claim_expire']=0; changed=True
+        elig=[s for s in sites
+              if (s.get('node_only') or s.get('platform')=='cafe24') and s.get('posting_authorized') is True
+              and not _blocked(s)
+              and not (s.get('pc_claim_by') and float(s.get('pc_claim_expire',0) or 0)>now)]
+        elig.sort(key=lambda s:float(s.get('pc_last_try',0) or 0))
+        sel=elig[:n]
+        if sel:
+            _room=next((r for r in (load_json(WORKROOMS_FILE,[]) or [])
+                        if (r.get('keyword_csv') or r.get('keywords') or '').strip()
+                        and not (r.get('keyword_csv') or '').lstrip().startswith('#')),None)
+            _wid=(_room or {}).get('id') or ''; _wname=(_room or {}).get('name') or ''
+            _wimgs=_workroom_image_urls(_wid) if _wid else []
+            for s in sel:
+                s['pc_claim_by']=node_id; s['pc_claim_expire']=now+ttl; s['pc_last_try']=now
+                picked.append({'id':s.get('id'),'site_url':s.get('site_url',''),'platform':s.get('platform',''),
+                    'bo_table':s.get('bo_table',''),'write_url':s.get('write_url',''),
+                    'write_entry_url':s.get('write_entry_url',''),'verified_post_url':s.get('verified_post_url',''),
+                    'article_board_name':s.get('article_board_name',''),
+                    'login_required':bool(s.get('login_required')),'signup_exhausted':bool(s.get('signup_exhausted')),
+                    'mb_id':s.get('mb_id',''),'mb_pass':_decrypt_password(s.get('mb_pass_enc') or s.get('mb_pass','')),
+                    'name':s.get('name') or s.get('site_url',''),
+                    'workroom_id':_wid,'workroom_name':_wname,'image_urls':_wimgs})
+            changed=True
+        if changed: save_sites(sites)
+    if picked:
+        add_log(f'[노드 claim] {node_id} ← {len(picked)}곳(서버 IP로 안 되는 사이트) 로컬발행 배정','파이프라인')
+    _llm={'turnstile_mode':_cfg.get('turnstile_mode','auto'),'twocaptcha_enabled':bool(_cfg.get('twocaptcha_enabled'))}
+    return jsonify({'ok':True,'sites':picked,'ttl':ttl,'llm':_llm})
 
 @app.route('/api/pipeline/report-site',methods=['POST'])
 def api_pipeline_report_site():

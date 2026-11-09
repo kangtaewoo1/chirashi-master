@@ -52,7 +52,7 @@ except Exception:
 SERVER      = os.environ.get("CHIRASHI_SERVER") or "https://google.twseo.kr"
 # 발행노드(pc_node.py)와 동일 규칙 → 같은 기기는 관제실에서 한 카드로 묶임.
 NODE_ID     = os.environ.get("PC_NODE_ID") or ("pc-" + socket.gethostname().lower()[:20])
-SERVER_TOKEN= os.environ.get("CHIRASHI_TOKEN") or "cae3aaa53d6f3576a1c1f6a258f79129"
+SERVER_TOKEN= os.environ.get("CHIRASHI_TOKEN") or ""
 # 검색 제공자: 'ddg'(무료·키불필요, 기본) / 'brave' / 'google'. PC는 대표님 실제 IP라
 #  DuckDuckGo 무료 검색이 서버보다 훨씬 덜 차단됨 → 키 없이 발굴 가능(대표님 지시 '키없이 무료').
 SEARCH_PROVIDER = os.environ.get("PC_SEARCH_PROVIDER", "ddg")

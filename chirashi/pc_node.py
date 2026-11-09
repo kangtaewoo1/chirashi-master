@@ -48,7 +48,7 @@ except Exception:
 
 # ─────────────────────── CONFIG ───────────────────────
 SERVER       = os.environ.get("CHIRASHI_SERVER") or "https://google.twseo.kr"
-SERVER_TOKEN = os.environ.get("CHIRASHI_TOKEN") or "cae3aaa53d6f3576a1c1f6a258f79129"
+SERVER_TOKEN = os.environ.get("CHIRASHI_TOKEN") or ""   # ★공개 저장소에 토큰 기본값 금지(2026-11-09) — 설치 시 환경변수로
 import socket
 NODE_ID      = os.environ.get("PC_NODE_ID") or ("pc-" + socket.gethostname().lower()[:20])
 UA           = {"User-Agent": "chirashi-pc-node/1.0"}
@@ -816,5 +816,6 @@ if __name__ == "__main__":
         from pc_queue import run as run_queue
         run_queue(once=a.once,idle=min(a.idle,10))
     else:
-        from pc_queue import run as run_queue
-        run_queue(once=a.once,idle=min(a.idle,10))
+        # ★full(기본): 서버 claim-sites(서버 IP로 안 되는 허가 사이트) + claim(후보) 로컬 처리.
+        #   (2026-11-09: else 분기도 pc_queue로 바뀌어 있어 full 모드가 죽어 있었음 — 원래대로 run()으로)
+        run(once=a.once, workers=a.workers, idle=a.idle)
