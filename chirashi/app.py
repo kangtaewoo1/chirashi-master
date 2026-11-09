@@ -10813,14 +10813,13 @@ def discover_loop():
             # 막혀서 목표 밑으로 떨어지면 자동 재개된다.
             pub_count=len([s for s in load_sites() if is_autopostable(s)])
             goal=int(cfg.get('site_goal',50) or 50)
-            if cfg.get('discover_enabled') and ready and pub_count < goal:
+            # ★미검수(재검수 대기) 백로그는 항상 먼저 비운다(2026-11-10 탈락 1,927개 회수 후 — 기존엔 Brave 분기에 밀려
+            #   10/10분밖에 못 돌아 하루 넘게 걸렸음). 백로그 있으면 큰 배치로 처리, 없을 때만 Brave 발굴.
+            _backlog=sum(1 for c in load_cands() if not c.get('screened'))
+            if _backlog:
+                screen_pending(int(cfg.get('screen_batch',40) or 40))
+            elif cfg.get('discover_enabled') and ready and pub_count < goal:
                 discover_once(cfg,max_queries=int(cfg.get('discover_batch',50) or 50))
-            elif cfg.get('discover_enabled') and pub_count >= goal:
-                # 목표 달성 — 발굴 멈추고 미검수 후보만 정리
-                if any(not c.get('screened') for c in load_cands()): screen_pending(10)
-            else:
-                # 발굴 꺼져 있어도 미검수 후보는 계속 처리
-                if any(not c.get('screened') for c in load_cands()): screen_pending(10)
             # 제외 도메인(설정)에 걸린 기존 후보를 자동 탈락 — 나중에 제외목록에 추가해도 이미
             # 발굴된 후보가 안 사라지던 문제(대표님 지시: clickn.co.kr 등 제외했는데 후보에 남음).
             try:
