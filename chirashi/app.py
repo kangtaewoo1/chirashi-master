@@ -4176,6 +4176,17 @@ def _gnuboard_signup_http(site, cfg, vals):
     data=_fill(form)
     if not data.get('mb_id') or not data.get('mb_password'):
         return None,'HTTP 가입 불가 — 표준 아이디/비밀번호 칸 없음'
+    # ★메일 인증 게시판 대응(2026-11-09 대표님 지시): IMAP(지메일) 설정돼 있으면 가입 이메일을 읽을 수 있는 지메일
+    #   도트주소로 바꾼다. 제출 뒤 로그인이 안 되면(인증 대기) 받은편지함에서 인증 링크를 찾아 눌러 가입을 완성한다.
+    _verify_tag=''; _did_verify=False
+    if 'mb_email' in data:
+        _ic=load_config()
+        if (_ic.get('imap_email') or '').strip() and (_ic.get('imap_password') or '').strip():
+            try:
+                _va,_,_vt=tempmail_create()
+                if _va and str(_vt).startswith('IMAP:'):
+                    data['mb_email']=_va; _verify_tag=_vt
+            except Exception: pass
     target=urllib.parse.urljoin(r2.url,form['attrs'].get('action') or 'register_form_update.php')
     # 브라우저의 jquery.register_form.js가 제출 전에 하는 중복확인(ajax.mb_*.php)을 같은 세션으로 똑같이 호출.
     #   그누보드 5.4+는 이 확인 결과를 세션(ss_check_mb_*)에 남기고, 없으면 '올바른 방법으로 이용해 주십시오.'로 반려
@@ -4239,9 +4250,25 @@ def _gnuboard_signup_http(site, cfg, vals):
         return False,f'HTTP 가입 실패 — 캡차 6회 실패({last[:40]})'
     mid=data['mb_id']; pw=data['mb_password']
     if not _gnuboard_http_login(_rq.Session(),base,mid,pw):
-        return False,'HTTP 가입 제출했으나 로그인 확인 실패(승인제·메일인증 가능)'
-    site['mb_id']=mid; site['mb_pass']=pw; site['http_member']=True
-    set_site_flag(site.get('id'),mb_id=mid,mb_pass=pw,signup_status='complete',login_saved=True,no_verify=True,
+        # 메일 인증 대기 가능성 — 지메일 받은편지함에서 인증 링크를 찾아(최대 90초) 눌러 가입 완성 후 재확인.
+        if _verify_tag:
+            add_log(f'[HTTP 가입 메일인증 대기] {nm[:30]} — 지메일 인증 링크 확인 중')
+            try: _v=tempmail_wait_verify_link(_verify_tag,timeout=90)
+            except Exception: _v=None
+            if _v and _v.get('link'):
+                try: s.get(_v['link'],timeout=20,allow_redirects=True)
+                except Exception: pass
+                if _gnuboard_http_login(_rq.Session(),base,mid,pw):
+                    add_log(f'[HTTP 가입 메일인증 완료] {nm[:30]}')
+                    _did_verify=True
+                else:
+                    return False,'HTTP 가입 메일인증 링크 클릭했으나 로그인 확인 실패'
+            else:
+                return False,'HTTP 가입 제출했으나 메일 인증 링크 미수신(승인제·인증 지연 가능)'
+        else:
+            return False,'HTTP 가입 제출했으나 로그인 확인 실패(승인제·메일인증 가능)'
+    site['mb_id']=mid; site['mb_pass']=pw; site['http_member']=True; site['no_verify']=not _did_verify
+    set_site_flag(site.get('id'),mb_id=mid,mb_pass=pw,signup_status='complete',login_saved=True,no_verify=not _did_verify,
                   http_member=True,signup_via='http',signup_updated_at=datetime.now().isoformat(timespec='seconds'))
     if needs_cap and img and ans:
         _save_captcha_sample(img,ans,verified=True)
