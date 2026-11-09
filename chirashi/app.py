@@ -10824,8 +10824,10 @@ def discover_loop():
             _backlog=sum(1 for c in load_cands() if not c.get('screened'))
             if _backlog:
                 screen_pending(int(cfg.get('screen_batch',40) or 40))
-            elif cfg.get('discover_enabled') and ready and pub_count < goal:
-                discover_once(cfg,max_queries=int(cfg.get('discover_batch',50) or 50))
+            # 발굴은 재검수와 '동시에' 돈다(2026-11-10): 백로그를 다 비울 때까지 새 발굴이 굶지 않게. Brave는 월 예산 상한이
+            #   계정에 걸려 있고 discover_query_limit(하루 상한)로 한 번 더 조인다.
+            if cfg.get('discover_enabled') and ready and pub_count < goal:
+                discover_once(cfg,max_queries=int(cfg.get('discover_batch',30) or 30))
             # 제외 도메인(설정)에 걸린 기존 후보를 자동 탈락 — 나중에 제외목록에 추가해도 이미
             # 발굴된 후보가 안 사라지던 문제(대표님 지시: clickn.co.kr 등 제외했는데 후보에 남음).
             try:
