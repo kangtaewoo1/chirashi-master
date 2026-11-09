@@ -4210,7 +4210,7 @@ def _gnuboard_signup_http(site, cfg, vals):
             if not ans: last='캡차 OCR 빈값/신뢰도 낮음'; continue
             data['captcha_key']=ans
         try:
-            body=urllib.parse.urlencode(data,encoding=enc,errors='ignore')
+            body=urllib.parse.urlencode({k:v for k,v in data.items() if not str(k).startswith('_')},encoding=enc,errors='ignore')
             pr=s.post(target,data=body,timeout=25,allow_redirects=True,
                       headers={'Referer':r2.url,'Content-Type':'application/x-www-form-urlencoded'})
         except Exception as e:
@@ -4224,6 +4224,16 @@ def _gnuboard_signup_http(site, cfg, vals):
             continue
         if re.search(r'이미\s*(?:사용|등록|가입|존재)|중복',last):
             return False,f'HTTP 가입 실패 — 아이디/이메일 중복({last[:50]})'
+        # ★특정 이메일 도메인만 받는 게시판(2026-11-09 실측 '네이버 이메일 주소만 사용 가능합니다') — 한 번만 그 도메인으로 바꿔 재시도.
+        #   메일 인증까지 하는 곳이면 아래 로그인 확인에서 어차피 걸러짐(가짜주소라 수신 불가) → 무인증 게시판만 통과.
+        if ('mb_email' in data) and not data.get('_email_domain_swapped'):
+            _dm=re.search(r'([a-z0-9-]+\.(?:com|net|co\.kr|kr))\s*(?:이메일|메일|주소)',last,re.I)
+            _dom=(_dm.group(1).lower() if _dm else ('naver.com' if re.search(r'네이버|naver',last,re.I) else ''))
+            if _dom:
+                _loc=re.sub(r'[^a-z0-9]','',str(data.get('mb_id') or 'user').lower())[:20] or ('u'+secrets.token_hex(3))
+                data['mb_email']=f'{_loc}@{_dom}'; data['_email_domain_swapped']=True
+                add_log(f'[HTTP 가입 이메일 교체] {nm[:28]} — {_dom} 전용 → 재시도')
+                continue
         return False,f'HTTP 가입 실패 — {last[:70]}'
     else:
         return False,f'HTTP 가입 실패 — 캡차 6회 실패({last[:40]})'
