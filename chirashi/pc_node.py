@@ -414,6 +414,7 @@ def _process_one(cand, cfg, pool):
     _curl = cand.get("url", "")
     m = _re.match(r"(https?://[^/]+)", _curl); base = m.group(1) if m else _curl
     tmp = {"id": "cand_" + str(cid), "site_url": base, "platform": cand.get("platform", "gnuboard"),
+           "posting_authorized": cand.get("posting_authorized") is True,   # ★서버 claim은 승인된 후보만 주는데(app.py elig posting_authorized is True) tmp로 옮길 때 빠져 do_post가 전부 '승인 필요' 보류하던 버그(2026-11-10). 서버 _proc(app.py:10154)와 동일하게 전달.
            "bo_table": cand.get("bo_table") or "free", "name": name, "mb_id": "", "mb_pass": ""}
     # ★Cafe24: 처음 발굴한 글목록 URL을 진입점으로(대표님 지시 2026-09-11). write.html 추측→404 방지.
     if cand.get("platform") == "cafe24":
