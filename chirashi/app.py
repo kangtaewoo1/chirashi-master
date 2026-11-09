@@ -12000,6 +12000,7 @@ def api_pipeline_claim():
             picked.append({'id':c.get('id'),'url':c.get('url'),'domain':c.get('domain'),
                 'platform':c.get('platform','gnuboard'),'bo_table':c.get('bo_table') or 'free',
                 'board_name':c.get('board_name'),'login_required':bool(c.get('login_required')),
+                'posting_authorized':c.get('posting_authorized') is True,   # ★elig에서 이미 승인된 것만 골랐는데 picked엔 안 실려 노드 do_post가 전부 '승인 필요' 보류하던 버그(2026-11-10). 노드 _process_one이 이 값을 tmp로 넘김.
                 'write_form':bool(c.get('write_form')),'captcha':bool(c.get('captcha'))})
         if picked: save_cands(cands)
     if picked: add_log(f'[PC노드] {node_id} 후보 {len(picked)}곳 claim(가입·발행 위임)','파이프라인')
