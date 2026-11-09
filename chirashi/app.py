@@ -3395,7 +3395,42 @@ def verify_once(limit=40):
         add_log(f'[검증] {len(results)}건 확인 (생존 {sum(1 for v in results.values() if v=="yes")}·삭제 {sum(1 for v in results.values() if v=="no")})')
         try: _auto_hold_deleting_sites()
         except Exception as _e: add_log(f'[삭제 사이트 자동보류 오류] {str(_e)[:80]}')
+    try: _auto_hold_robots_blocked()
+    except Exception as _e: add_log(f'[검색로봇 차단 자동보류 오류] {str(_e)[:80]}')
     return len(results)
+
+def _auto_hold_robots_blocked(max_check=40):
+    """★검색엔진이 못 읽는 사이트 자동 보류(2026-11-09 실측: 이번 달 213건 올린 사이트의 robots.txt가 'User-agent: *'를
+       나쁜봇 묶음에 붙여 써 구글·네이버까지 Disallow: / → 올린 글 전부 검색 노출 0). 사이트당 하루 1회, 그 사이트의 실제
+       발행글 주소를 Googlebot·Yeti 둘 다 못 읽으면 maintenance_hold. 운영실 '사이트' 탭에서 해제 가능."""
+    import requests as _rq, urllib.robotparser as _rp
+    today=_kst_now().strftime('%Y-%m-%d')
+    todo=[s for s in load_sites() if s.get('status')!='rejected' and not s.get('maintenance_hold')
+          and str(s.get('site_url','')).startswith('http') and s.get('robots_checked')!=today][:max_check]
+    blocked={}; checked=set()
+    for s in todo:
+        m=re.match(r'(https?://[^/]+)',s.get('site_url','')); base=m.group(1) if m else ''
+        post=str(s.get('verified_post_url') or '') or f"{base}/bbs/board.php?bo_table={s.get('bo_table') or 'free'}&wr_id=1"
+        try:
+            r=_rq.get(base+'/robots.txt',timeout=10)
+            txt=r.text if (r.status_code<400 and 'html' not in str(r.headers.get('content-type','')).lower()) else ''
+        except Exception:
+            continue   # 못 읽으면 판단 보류(다음 날 재시도)
+        p=_rp.RobotFileParser(); p.parse(txt.splitlines()); checked.add(s.get('id'))
+        if not p.can_fetch('Googlebot',post) and not p.can_fetch('Yeti',post):
+            blocked[s.get('id')]=post
+    if not checked: return 0
+    held=[]
+    with POST_LOCK:
+        sites=load_sites()
+        for s in sites:
+            if s.get('id') in checked: s['robots_checked']=today
+            if s.get('id') in blocked and not s.get('maintenance_hold'):
+                s['maintenance_hold']=True; s['auto_hold_reason']='robots.txt가 구글·네이버 검색로봇을 막음 — 올린 글이 검색에 안 나옴'
+                held.append((s.get('name') or s.get('site_url') or '')[:30])
+        save_sites(sites)
+    if held: add_log(f'[검색로봇 차단 자동보류] {len(held)}곳 — robots.txt가 구글·네이버를 막음: {", ".join(held)[:120]}','정리')
+    return len(held)
 
 def _auto_hold_deleting_sites(min_checked=20):
     """★올린 글을 전부 지우는 사이트 자동 보류(2026-11-09 실측: 3곳이 309·202·195건 전부 삭제 — 헛발행으로 일꾼만 소모).
