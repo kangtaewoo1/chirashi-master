@@ -8728,12 +8728,19 @@ def screen_pending(limit=30):
         cands=load_cands()
         todo=[c for c in cands if not c.get('screened')][:max(1,limit)]
         ids=[c['id'] for c in todo]
-    results={}
-    for c in todo:
+    # ★검수 병렬화(2026-11-10 병목 실측: 순차 + 건당 sleep(1)로 200개에 수십 분 → 처리량 급락).
+    #   네트워크 바운드라 screen_candidate만 스레드풀로 병렬 수집하고, 점수·상태 판정은 순차로(가벼움·스레드안전).
+    import concurrent.futures as _cf
+    def _screen_fetch(c):
         try:
             r=screen_candidate(c['url'],cfg)
         except Exception as e:
             r={'note':str(e)[:100],'reachable':False}
+        return c,r
+    results={}
+    with _cf.ThreadPoolExecutor(max(1,min(12,len(todo) or 1))) as _ex:
+        _fetched=list(_ex.map(_screen_fetch,todo))
+    for c,r in _fetched:
         r['screened']=True
         r['score']=score_candidate(r)
         # 자동 탈락 사유
@@ -8783,7 +8790,6 @@ def screen_pending(limit=30):
             r['posting_authorized']=True; r['auto_authorized']=True
             r['posting_authorization_updated_at']=_kst_now().strftime('%Y-%m-%d %H:%M')
         results[c['id']]=r
-        time.sleep(1)   # 요청 속도 관리
     rejected_now=[]
     with _cand_lock:
         cands=load_cands()
