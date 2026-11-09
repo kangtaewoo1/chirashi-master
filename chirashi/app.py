@@ -7259,6 +7259,19 @@ def reconcile_sites():
             save_sites(kept)
     if dropped_doms:   # 삭제 도메인은 영구 탈락 목록에 기록(재발굴 방지)
         add_rejected_domains(dropped_doms,'안 되는 사이트 자동삭제')
+        # ★후보도 함께 탈락(2026-11-09 실측 루프: 비밀글 강제 게시판이 등록→읽기제한 삭제→후보는 'approved'로 남아
+        #   파이프라인이 다시 집음→시험 글 재게시→또 삭제… 헤어링크·무안일보·KESPION 반복). 같은 도메인 후보를 rejected로.
+        try:
+            _dd={d.lower() for d in dropped_doms if d}
+            _why={_domain_of(s.get('site_url','')).lower():str(s.get('last_fail_reason') or '안 되는 사이트 자동삭제')[:80] for s in removed}
+            with _cand_lock:
+                _cs=load_cands(); _n=0
+                for c in _cs:
+                    _d=(c.get('domain') or _domain_of(c.get('url',''))).lower()
+                    if _d in _dd and c.get('status') in ('ready','approved','new'):
+                        c['status']='rejected'; c['reject_reason']='사이트 자동삭제 — '+_why.get(_d,'안 되는 사이트'); _n+=1
+                if _n: save_cands(_cs)
+        except Exception: pass
     if removed: add_log(f'[자동정리] 안 되는 사이트 {len(removed)}개 자동삭제(발행가능·진행중만 유지)','정리')
     return len(removed)
     return changed
