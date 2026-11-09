@@ -8776,6 +8776,12 @@ def screen_pending(limit=30):
                 r['status']='rejected'; r['reject_reason']='빡센검수 탈락 — 홍보글 흔적 없음(방치·개방 게시판 아님)'
             elif _dead:
                 r['status']='rejected'; r['reject_reason']=f'빡센검수 탈락 — 죽은 게시판(최근글 {_lp}일 전)'
+        # ★게시 허가 자동 승인(2026-11-10 대표님 '자동승인으로 변경'): 재검수를 통과한(status=ready) 실제 발행 가능 게시판만
+        #   자동으로 posting_authorized=True. 빡센검수가 이미 '홍보흔적 있는/열린 게시판'만 ready로 남기므로 그것만 승인된다.
+        #   이후에도 시험 발행 성공분만 사이트로 등록되고, 글삭제·검색로봇차단 사이트는 자동 보류 → 안전장치 유지.
+        if cfg.get('auto_authorize') and r.get('status')=='ready' and r.get('posting_authorized') is not True:
+            r['posting_authorized']=True; r['auto_authorized']=True
+            r['posting_authorization_updated_at']=_kst_now().strftime('%Y-%m-%d %H:%M')
         results[c['id']]=r
         time.sleep(1)   # 요청 속도 관리
     rejected_now=[]
