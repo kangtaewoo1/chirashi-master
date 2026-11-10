@@ -519,6 +519,20 @@ def run(once=False, workers=None, idle=30):
     cfg = app.load_config()
     n = _safe_workers(workers)
     log(f"PC 발행노드 시작 — node_id={NODE_ID} · 서버={SERVER} · 동시 {n}개")
+    # ★하트비트 백그라운드 스레드(2026-11-10 '노드 0건 발행' 실측 — watchdog이 정상 긴 배치를 행으로 오판):
+    #   기존엔 run() 루프 '꼭대기'에서만 .node_heartbeat 기록 → 배치가 STALE(300초)을 넘기면
+    #   (후보25·워커3 → 데드라인 최대 2500초) watchdog이 발행 중인 노드를 죽여 claim분 전멸(0건).
+    #   → 20초마다 독립 기록. selenium/do_post는 I/O라 GIL을 풀어 이 스레드가 계속 돌다.
+    #   프로세스가 '진짜' 얼면(OS 프리즈) 이 스레드도 못 돌아 heartbeat가 멈고 watchdog이 정상 복구.
+    _HB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.node_heartbeat')
+    _hb_stop = threading.Event()
+    def _hb_beat():
+        while not _hb_stop.is_set():
+            try:
+                with open(_HB_FILE, 'w', encoding='utf-8') as _f: _f.write(str(int(time.time())))
+            except Exception: pass
+            _hb_stop.wait(20)
+    threading.Thread(target=_hb_beat, name='node-heartbeat', daemon=True).start()
     _last_prof_clean = 0.0
     _last_orphan_kill = [0.0]
     _last_orphan_sweep = [0.0]
