@@ -7703,15 +7703,20 @@ def load_cands():
         if cand.pop('emails',None) is not None: changed=True
     if changed: save_json(CAND_FILE,cands)
     return cands
+_cand_mtime=[0.0]   # 이 프로세스가 마지막으로 쓴 candidates.json mtime(외부 수정 감지용)
 def save_cands(c):
-    # 외부 프로세스(발굴 하버스터) append·롱루프 stale save로부터 보호:
-    # 저장 시 디스크에만 있는 '새 id'를 머지해 유실 방지(상태변경/추가는 안전).
+    # 외부 프로세스(발굴 하버스터) append·롱루프 stale save로부터 보호하되 핫패스 비용 최소화:
+    # 파일 mtime이 우리 마지막 쓰기 이후 바뀐 경우(외부가 건드림)에만 디스크 '새 id' 머지.
     try:
-        have={str(x.get('id')) for x in c}
-        extra=[x for x in load_json(CAND_FILE,[]) if str(x.get('id')) not in have]
-        if extra: c=list(c)+extra
+        m=os.path.getmtime(CAND_FILE) if os.path.exists(CAND_FILE) else 0.0
+        if m>_cand_mtime[0]+0.0005:
+            have={str(x.get('id')) for x in c}
+            extra=[x for x in load_json(CAND_FILE,[]) if str(x.get('id')) not in have]
+            if extra: c=list(c)+extra
     except Exception: pass
     save_json(CAND_FILE,c)
+    try: _cand_mtime[0]=os.path.getmtime(CAND_FILE)
+    except Exception: pass
 def save_cands_replace(c): save_json(CAND_FILE,c)   # 정확 치환(삭제/비움 전용)
 _cand_lock=threading.RLock()   # 재진입 가능(add_candidates_from 안에서 remove_rejected_domain 호출 등 중첩 허용)
 
