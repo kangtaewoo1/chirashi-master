@@ -2136,15 +2136,84 @@ def _gen_once(keywords, cfg, workroom_id=None, image_urls=None):
         add_log(f'[무료모델 폴백 전부 실패→60초 템플릿] {_last}')
     return generate_rich_html(keywords,cfg,workroom_id=workroom_id,image_urls=image_urls)
 
+def _resolve_region_gu_dongs(r):
+    # 메인지역 r의 (시도,구,그 구 동리스트)를 regions_full에서 찾음. r은 동/역/구/시도 어느 형태든 base로 매칭.
+    # 구 특정=같은 구 동(지리적으로 가까움), 시도만=그 시도 전체 동. 못 찾으면 (None,None,[]).
+    try:
+        data=load_json(REGIONS_FILE,{}) or {}
+    except Exception:
+        return None,None,[]
+    rn=str(r or '').strip()
+    base=re.sub(r'(역|동|읍|면|리|가|구|시|군)$','',rn) or rn
+    if not base or not isinstance(data,dict): return None,None,[]
+    for sido,gus in data.items():
+        if not isinstance(gus,dict): continue
+        for gu,dongs in gus.items():
+            if re.sub(r'(구|시|군)$','',str(gu))==base or gu==rn:
+                return sido,gu,list(dongs or [])
+    for sido,gus in data.items():
+        if not isinstance(gus,dict): continue
+        for gu,dongs in gus.items():
+            for d in (dongs or []):
+                if d==rn or re.sub(r'(동|읍|면|리|가)$','',str(d))==base:
+                    return sido,gu,list(dongs or [])
+    for sido,gus in data.items():
+        if re.sub(r'(특별자치도|특별자치시|특별시|광역시|도)$','',str(sido))==base or sido==rn:
+            allsd=[d for g in (gus.values() if isinstance(gus,dict) else []) for d in (g or [])]
+            return sido,None,allsd
+    return None,None,[]
+
+def _area_coverage_html(r, s, cfg, workroom_id=None):
+    # 본문 하단 '이용 가능 지역' 블록: 같은 구(또는 시도)의 실제 주변지역 x 랜덤 업종(대표님 2026-11-11).
+    # 지역 데이터 못 찾으면 '' 반환(블록 생략=안전). 노드에 regions_full 없으면 자동 생략.
+    try:
+        s=str(s or '').strip() or '셔츠룸'
+        _sido,_gu,dongs=_resolve_region_gu_dongs(r)
+        if not dongs: return ''
+        rn=normalize_region(r,cfg)
+        seen={rn}; near=[]
+        pool=list(dict.fromkeys(dongs)); random.shuffle(pool)
+        for d in pool:
+            dn=normalize_region(d,cfg)
+            if dn and dn not in seen:
+                seen.add(dn); near.append(dn)
+            if len(near)>=16: break
+        if len(near)<6: return ''
+        items=[x+random.choice(SERVICE_SUFFIXES) for x in near]
+        head=rn+s+' 이용 가능 지역'
+        chips=' · '.join(items)
+        return ('<h2 style="font-size:22px;font-weight:800;margin:36px 0 14px;padding-bottom:8px;'
+                'border-bottom:2px solid #c0392b;color:#111;">'+head+'</h2>'
+                '<p style="line-height:2.1;color:#444;font-size:15px;word-break:keep-all;">'+chips+'</p>')
+    except Exception:
+        return ''
+
+def _insert_area_block(html, blk):
+    if not blk: return html
+    for mk in ('자주 묻는 질문','자주묻는','FAQ','문의하기','상담 문의','ⓒ','&copy;'):
+        i=html.find(mk)
+        if i>0:
+            h2=html.rfind('<h2',0,i)
+            pos=h2 if h2>0 else i
+            return html[:pos]+blk+html[pos:]
+    j=html.rfind('</div>')
+    return (html[:j]+blk+html[j:]) if j>0 else html+blk
+
 def generate_article(keywords, cfg, unique=True, workroom_id=None, image_urls=None):
     """본문 생성. unique=True 면 제목/본문이 과거와 겹치지 않을 때까지 재생성(상시 다르게).
        workroom_id를 주면 그 작업실 전용 이미지 풀을 사용(없으면 이미지 없이 발행).
        image_urls를 주면(노드가 서버로부터 받은 작업실 이미지) 로컬 조회 없이 그걸 사용 — 노드엔 이미지가 로컬에 없어서."""
+    _acr=(keywords.get('지역') or '').strip(); _acs=(keywords.get('서비스') or '').strip()
+    def _acinj(_h):
+        try: return _insert_area_block(_h,_area_coverage_html(_acr,_acs,cfg,workroom_id))
+        except Exception: return _h
     if not unique:
-        return _gen_once(keywords,cfg,workroom_id=workroom_id,image_urls=image_urls)
+        _h,_t=_gen_once(keywords,cfg,workroom_id=workroom_id,image_urls=image_urls)
+        return _acinj(_h),_t
     html=title=None
     for _ in range(8):
         html,title=_gen_once(keywords,cfg,workroom_id=workroom_id,image_urls=image_urls)
+        html=_acinj(html)
         if remember_if_unique(title,html): return html,title
     # 8회 모두 충돌(사실상 불가) → 강제 유니크 토큰 부착
     html=force_unique_html(html); remember_if_unique(title,html,force=True)
