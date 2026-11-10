@@ -402,18 +402,28 @@ def attach_saved_images(d,max_n=1,workroom_id=None):
         except Exception: continue
     return used,(f'{used}개 첨부' if used else '첨부 입력 실패')
 
-def _credential_fernet():
-    """사이트 로그인정보용 서버측 암호화기. 세션키/전용 env에서 안정적으로 파생한다."""
+def _credential_keys():
+    # 복호화 시도할 후보 키들(우선순위: 전용 env -> CHIRASHI_SECRET -> secret.key 파일).
+    # 이전(Hetzner 이전 전) 키로 암호화된 비번도 복구하려고 가능한 키를 모두 모은다.
+    ks=[]
+    for v in (os.environ.get('CHIRASHI_CREDENTIAL_KEY'), os.environ.get('CHIRASHI_SECRET')):
+        if v and v not in ks: ks.append(v)
+    try:
+        kf=DATA_DIR/'secret.key'
+        if kf.exists():
+            _pp=kf.read_text().strip()
+            if _pp and _pp not in ks: ks.append(_pp)
+    except Exception: pass
+    return ks
+
+def _credential_fernet(raw=None):
+    """사이트 로그인정보용 서버측 암호화기. raw 미지정이면 1순위 키 사용(암호화·기존 동작 그대로)."""
     try:
         from cryptography.fernet import Fernet
-        persisted=''
-        try:
-            kf=DATA_DIR/'secret.key'
-            if kf.exists(): persisted=kf.read_text().strip()
-        except Exception: pass
-        raw=(os.environ.get('CHIRASHI_CREDENTIAL_KEY') or os.environ.get('CHIRASHI_SECRET') or persisted)
+        if raw is None:
+            ks=_credential_keys(); raw=ks[0] if ks else None
         if not raw: raise RuntimeError('credential key unavailable')
-        raw=raw.encode()
+        raw=raw.encode() if isinstance(raw,str) else raw
         return Fernet(base64.urlsafe_b64encode(hashlib.sha256(raw).digest()))
     except Exception:
         return None
@@ -428,10 +438,16 @@ def _encrypt_password(value):
 def _decrypt_password(value):
     if not value: return ''
     if not str(value).startswith('fernet:'): return str(value)  # 기존 평문 데이터 마이그레이션 입력
-    f=_credential_fernet()
-    if not f: return ''
-    try: return f.decrypt(str(value)[7:].encode()).decode()
-    except Exception: return ''
+    tok=str(value)[7:].encode()
+    # ★이중키 복호화(2026-11-11): 이전 키로 암호화된 비번도 복구 — 후보 키 전부 시도(암호화는 1순위 키 유지).
+    for k in _credential_keys():
+        f=_credential_fernet(k)
+        if not f: continue
+        try:
+            v=f.decrypt(tok).decode()
+            if v: return v
+        except Exception: continue
+    return ''
 
 def load_sites():
     sites=load_json(SITES_FILE,[])
