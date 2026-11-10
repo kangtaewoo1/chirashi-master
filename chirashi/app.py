@@ -1042,8 +1042,16 @@ def build_title(r,s,b,cfg,raw=None):
        실질 차별화(핵심키워드는 다 살려 SEO 유리). 너무 길면(140자) 앵글 생략."""
     raw=raw or pick_phone(cfg)
     ph=format_phone_random(raw)   # 번호 표기만 매번 살짝 변형(순서·키워드는 고정)
-    try: r=normalize_region_in_text(r,cfg)
-    except Exception: pass
+    # ★지역명 정규화(2026-11-10 버그수정): normalize_region_in_text는 '지역+업종 결합형'만 처리해
+    #   순수 지역 토큰(_split로 분리된 '부평동')은 동이 안 떨어졌다 → 미변시 normalize_region 폴백.
+    #   r(메인)·b(키워드3) 둘 다 적용 → 제목 리드와 키워드3의 동 표기가 규칙(부평/화정→동제거, 서창동/서현동→유지)을 따름.
+    def _nrm_region(_x):
+        try:
+            _y=normalize_region_in_text(_x,cfg)
+            if _y==_x: _y=normalize_region(_x,cfg)
+            return _y
+        except Exception: return _x
+    r=_nrm_region(r); b=_nrm_region(b)
     # ★지역명 자동검증(2026-09-18 대표님 '이런거 있으면 일괄 체크'): 실존 안 하는 지역명(두원동 등)이면
     #   로그에 남긴다(차단 아님 — 오탐 방지). r이 지역+업종 붙은 메인키워드거나 'r+s' 형태 둘 다 검사.
     try:
@@ -1078,7 +1086,7 @@ _region_order_cache=None
 #  - 읍/면: 기본 제거. 단 인구 많은 읍(통진읍 등)은 유지(아래 KEEP_EUPMYEON).
 # ★KEEP_DONG: 대표님 지정(계산동·작전동은 동이 붙어야 안 어색) + 네이버 실측('떼면 딴 뜻':개포동·상수동·역삼동 등).
 #   설정(cfg['region_keep_dong'], 콤마구분)로 대표님이 계속 추가 가능.
-KEEP_DONG=set('''계산동 작전동 개포동 상수동 역삼동 논현동 신논현동 삼성동 대치동 압구정동 청담동
+KEEP_DONG=set('''계산동 작전동 서창동 서현동 개포동 상수동 역삼동 논현동 신논현동 삼성동 대치동 압구정동 청담동
 연남동 성수동 서교동 합정동 이태원동 한남동 신사동 방배동'''.split())
 # ★KEEP_EUPMYEON: 인구 많아 지역명으로 통하는 읍(나무위키 읍 인구 실측 3만+ 및 대표님 지정 통진읍).
 #   설정(cfg['region_keep_eupmyeon'])로 추가 가능. 면은 원칙적으로 전부 제거(수요 거의 없음).
@@ -15792,7 +15800,7 @@ function shortDistrict(x){const last=x.trim().split(/\s+/).pop();
 //  - '역삼1동'처럼 숫자 붙은 행정동은 숫자 떼고 판단(역삼1동→역삼동→(예외라)역삼동... 은 어색 → 역삼으로).
 //    실제로는 숫자·'가'를 먼저 벗기고 남은 원형(역삼동)이 예외면 그 원형을 쓴다.
 //  - 남는 글자 1자(명동→명)면 원형 유지. 지하철'역'은 여기서 다루지 않음.
-const _KEEP_DONG=new Set('계산동 작전동 개포동 상수동 역삼동 논현동 신논현동 삼성동 대치동 압구정동 청담동 연남동 성수동 서교동 합정동 이태원동 한남동 신사동 방배동'.split(' '));
+const _KEEP_DONG=new Set('계산동 작전동 서창동 서현동 개포동 상수동 역삼동 논현동 신논현동 삼성동 대치동 압구정동 청담동 연남동 성수동 서교동 합정동 이태원동 한남동 신사동 방배동'.split(' '));
 const _KEEP_EM=new Set('통진읍 물금읍 봉담읍 화도읍 배방읍 진접읍 다사읍 향남읍 정관읍 공도읍 오창읍 범서읍 남양읍 흥해읍 와부읍 곤지암읍 오포읍 백석읍 옥정읍 고덕읍 삼계읍'.split(' '));
 function shortDong(x){
   let raw=(x||'').trim();
