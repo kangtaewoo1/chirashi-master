@@ -7703,7 +7703,16 @@ def load_cands():
         if cand.pop('emails',None) is not None: changed=True
     if changed: save_json(CAND_FILE,cands)
     return cands
-def save_cands(c): save_json(CAND_FILE,c)
+def save_cands(c):
+    # 외부 프로세스(발굴 하버스터) append·롱루프 stale save로부터 보호:
+    # 저장 시 디스크에만 있는 '새 id'를 머지해 유실 방지(상태변경/추가는 안전).
+    try:
+        have={str(x.get('id')) for x in c}
+        extra=[x for x in load_json(CAND_FILE,[]) if str(x.get('id')) not in have]
+        if extra: c=list(c)+extra
+    except Exception: pass
+    save_json(CAND_FILE,c)
+def save_cands_replace(c): save_json(CAND_FILE,c)   # 정확 치환(삭제/비움 전용)
 _cand_lock=threading.RLock()   # 재진입 가능(add_candidates_from 안에서 remove_rejected_domain 호출 등 중첩 허용)
 
 # ---- 영구 탈락 도메인(다음 발굴에서 제외) ----
@@ -11456,11 +11465,11 @@ def api_candidates():
     if request.method=='DELETE':
         d=request.get_json() or {}
         if d.get('id'):
-            save_cands([c for c in load_cands() if c.get('id')!=d['id']])
+            save_cands_replace([c for c in load_cands() if c.get('id')!=d['id']])
         elif d.get('clear')=='rejected':
-            save_cands([c for c in load_cands() if c.get('status')!='rejected'])
+            save_cands_replace([c for c in load_cands() if c.get('status')!='rejected'])
         else:
-            save_cands([])
+            save_cands_replace([])
         return jsonify({'ok':True})
     cands=load_cands()
     # 제거된 메일초안/문의함 기능의 기존 데이터도 함께 정리한다.
