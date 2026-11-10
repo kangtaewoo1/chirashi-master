@@ -10390,7 +10390,16 @@ def auto_pipeline_once(limit=5):
     for c in pend:
         t=threading.Thread(target=_proc,args=(c,),name=f'SIGNUP-{c.get("id","")[:6]}',daemon=True)
         t.start(); _pthreads.append(t)
-    for t in _pthreads: t.join()
+    # ★배치 데드라인(2026-11-11): join 무제한이면 로그인 가입 1곳이 hang해도 전환 전체가 멈춤
+    #   (비회원 소진 후 pend가 전부 로그인 → 가입 1/h 정체 실측). 사이트당 예산으로 데드라인, 넘긴 스레드는 daemon이라 버리고 진행.
+    _pdeadline=time.time()+max(240, int(load_config().get('pipeline_signup_timeout',90) or 90)*len(_pthreads)//max(1,_sfan)+90)
+    for t in _pthreads:
+        _pl=_pdeadline-time.time()
+        if _pl<=0: break
+        t.join(timeout=_pl)
+    _phang=[t for t in _pthreads if t.is_alive()]
+    if _phang:
+        add_log(f'[파이프라인] 배치 타임아웃 — hang 가입/발행 {len(_phang)}개 버리고 다음 배치 진행','정리')
     # 3) 등록됐지만 '준비됨/캡차대기/메일대기'에서 멈춘 사이트: 자동가입을 실제로 끝내고
     #    스케줄/작업실 랜덤 키워드로 발행 테스트까지 완료 → 성공 시 발행가능으로 등록.
     prepared=[s for s in load_sites()
