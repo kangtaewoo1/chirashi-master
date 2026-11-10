@@ -8801,8 +8801,8 @@ def screen_pending(limit=30):
             _has_promo=(_pc>=1) or bool(r.get('promo_hint'))
             _lp=r.get('last_post_days')
             _dead=(_lp is not None and _lp>180)
-            if not _has_promo:
-                r['status']='rejected'; r['reject_reason']='빡센검수 탈락 — 홍보글 흔적 없음(방치·개방 게시판 아님)'
+            if not _has_promo and r.get('login_required'):   # ★홍보흔적 없어도 비회원(로그인불필)은 유지 — 처녀게시판=SEO금맥(대표님 2026-11-11). 로그인필요만 탈락(가입성공률~0%)
+                r['status']='rejected'; r['reject_reason']='빡센검수 탈락 — 홍보흔적 없음+로그인필요(가입성공률 낮음)'
             elif _dead:
                 r['status']='rejected'; r['reject_reason']=f'빡센검수 탈락 — 죽은 게시판(최근글 {_lp}일 전)'
         # ★게시 허가 자동 승인(2026-11-10 대표님 '자동승인으로 변경'): 재검수를 통과한(status=ready) 실제 발행 가능 게시판만
@@ -10067,7 +10067,7 @@ def auto_pipeline_once(limit=5):
             pruned=0
             for c in cands:
                 if c.get('status')!='ready': continue
-                if c.get('write_form') and not c.get('login_required'): continue   # 비회원(바로발행)은 유지
+                if not c.get('login_required'): continue   # ★비회원(로그인불필)은 폼미확인·홍보흔적 없어도 유지(처녀게시판, 대표님 2026-11-11) — 실발행으로 검증
                 _pc=int(c.get('promo_phone_count',0) or 0)
                 if _pc>=1 or c.get('promo_hint'): continue                         # 홍보흔적 있으면 유지
                 # ★로그인필요 + 홍보흔적 없음 = 가입해도 될 확률 낮은 사이트 → 대기줄에서 탈락(출처 무관).
