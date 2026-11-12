@@ -10650,6 +10650,47 @@ def _workroom_combos(room):
 _WR_SLOTS={}   # slot_index -> Thread (작업실 발행 슬롯 워커 = 동시 크롬)
 _MEM_WARN=['']   # VPS 메모리 축소 경고 중복 방지용(마지막 경고 상태)
 
+# ★죽은 서버 사전 차단(2026-11-12 실측: 흥신소 24곳이 한 서버(222.239.254.99)에 있는데 그 서버가 다운 →
+#   크롬 10슬롯이 전부 응답 없는 사이트에 몇 분씩 묶여 정상 사이트 발행까지 16:44부터 멈춤).
+#   크롬을 잡기 전에 HTTP로 10초 안에 응답하는지 본다(403·500이라도 '응답'이면 살아 있음).
+#   응답 없으면 같은 IP의 모든 사이트를 10분 건너뜀. 살아 있으면 2분간 재확인 생략. 실패 이력·fail_streak 안 남김.
+_HOST_STATE={}            # ip -> (alive:bool, until_epoch)
+_HOST_STATE_LOCK=threading.Lock()
+_HOST_IP_CACHE={}         # hostname -> (ip, until_epoch)
+
+def _host_ip(host):
+    import socket
+    now=time.time(); c=_HOST_IP_CACHE.get(host)
+    if c and c[1]>now: return c[0]
+    try: ip=socket.gethostbyname(host)
+    except Exception: ip=host
+    _HOST_IP_CACHE[host]=(ip, now+1800)
+    return ip
+
+def _host_alive(site, wname=''):
+    url=str(site.get('site_url') or '')
+    host=_domain_of(url)
+    if not host or not url.startswith('http'): return True
+    ip=_host_ip(host); now=time.time()
+    with _HOST_STATE_LOCK:
+        st=_HOST_STATE.get(ip)
+        if st and st[1]>now: return st[0]
+    import requests
+    alive=True
+    try:
+        r=requests.get(url, headers={'User-Agent':_HTTP_UA}, timeout=(6,10), verify=False, stream=True, allow_redirects=False)
+        r.close()
+    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+        alive=False
+    except Exception:
+        alive=True   # 판단 불가(SSL 등)는 기존대로 크롬에 맡김
+    with _HOST_STATE_LOCK:
+        prev=_HOST_STATE.get(ip)
+        _HOST_STATE[ip]=(alive, now+(600 if not alive else 120))
+    if not alive and not (prev and prev[0] is False):
+        add_log(f"[작업실:{wname}] 서버 응답 없음 — {host}({ip}) 같은 서버 사이트 10분 건너뜀(실패 기록 안 함)")
+    return alive
+
 def _publish_combo_to_site(s, kw, wname, rid, cfg, writer_name='', chrome_sem=None):
     """한 조합(kw)을 '한 사이트'에 유니크 글로 발행. _publish_one_combo가 사이트마다 병렬 호출.
        각 호출은 자기 스레드의 크롬(get_driver는 스레드명 기반)을 써서 서로 간섭 안 함.
@@ -10671,6 +10712,8 @@ def _publish_combo_to_site(s, kw, wname, rid, cfg, writer_name='', chrome_sem=No
         if rid: fresh['workroom_id']=rid
         if not under_daily_limit(fresh,cfg): return
         if not under_min_interval(fresh)[0]: return
+        _ha=globals().get('_host_alive')   # (격리 테스트는 이 함수만 떼어 실행하므로 없으면 생략)
+        if _ha and not _ha(fresh, wname): return   # 응답 없는 서버는 크롬·LLM 쓰기 전에 건너뜀(실패 기록 안 함)
         pub_kw=_auto_subkeywords(kw.get('_main','')) if kw.get('_main_only') else _fix_kw_dong(kw)
         try:
             with _global_gen_sem():   # LLM 동시호출 상한(기본 12) — 크롬 슬롯과 별개로 생성 폭주 방지
