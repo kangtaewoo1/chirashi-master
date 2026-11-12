@@ -1372,17 +1372,54 @@ def _norm_text(html):
     """태그·공백 제거한 순수 텍스트(중복 판정 기준)."""
     return re.sub(r'\s+',' ',re.sub(r'<[^>]+>',' ',html or '')).strip()
 
+# ★유사 중복 차단(2026-11-12 대표님 '진짜 글들은 절대로 중복이 있어서는 안 된다'): 해시 비교는 글자 하나만 달라도
+#   통과시킨다. 본문 5단어 연쇄(shingle)의 bottom-k 지문(64개)을 최근 5,000개와 비교해 추정 유사도 ≥ 0.5면 중복으로 본다.
+#   실측(템플릿 같은 키워드 20개): 평균 0.15·최대 0.26 → 정상 글은 통과, 사실상 같은 글만 걸린다.
+NEARDUP_FILE=DATA_DIR/'uniq_shingles.json'
+_NEARDUP_K=64; _NEARDUP_MAX=5000; _NEARDUP_TH=0.5
+_NEARDUP_MEM=[None]; _NEARDUP_DIRTY=[0]
+
+def _shingle_sig(text, n=5, k=_NEARDUP_K):
+    w=re.findall(r'[0-9A-Za-z가-힣]+', text or '')
+    if len(w)<n: return []
+    hs={int(hashlib.md5(' '.join(w[i:i+n]).encode('utf-8')).hexdigest()[:12],16) for i in range(len(w)-n+1)}
+    return sorted(hs)[:k]
+
+def _sig_similarity(a, b, k=_NEARDUP_K):
+    if not a or not b: return 0.0
+    sa=set(a); sb=set(b)
+    u=sorted(sa|sb)[:k]
+    return sum(1 for x in u if x in sa and x in sb)/max(1,len(u))
+
+def _neardup_load():
+    if _NEARDUP_MEM[0] is None:
+        d=load_json(NEARDUP_FILE,[])
+        _NEARDUP_MEM[0]=[x for x in d if isinstance(x,list)] if isinstance(d,list) else []
+    return _NEARDUP_MEM[0]
+
 def remember_if_unique(title, body, force=False):
-    """제목/본문이 과거에 없던 새 콘텐츠면 기록하고 True. 이미 있으면 False."""
+    """제목/본문이 과거에 없던 새 콘텐츠면 기록하고 True. 이미 있거나 최근 글과 유사(≥0.5)하면 False."""
     th=hashlib.sha1((title or '').encode('utf-8')).hexdigest()
     bh=hashlib.sha1(_norm_text(body).encode('utf-8')).hexdigest()
+    sig=_shingle_sig(_norm_text(body))
     with _uniq_lock:
         u=load_json(UNIQ_FILE,{'t':[],'b':[]})
         if not isinstance(u,dict): u={'t':[],'b':[]}
         ts=set(u.get('t',[])); bs=set(u.get('b',[]))
         if not force and (th in ts or bh in bs): return False
+        mem=_neardup_load()
+        if not force and sig and any(_sig_similarity(sig,o)>=_NEARDUP_TH for o in mem): return False
         u['t']=(u.get('t',[])+[th])[-8000:]; u['b']=(u.get('b',[])+[bh])[-8000:]
-        save_json(UNIQ_FILE,u); return True
+        save_json(UNIQ_FILE,u)
+        if sig:
+            mem.append(sig)
+            if len(mem)>_NEARDUP_MAX: del mem[:len(mem)-_NEARDUP_MAX]
+            _NEARDUP_DIRTY[0]+=1
+            if _NEARDUP_DIRTY[0]>=10:
+                _NEARDUP_DIRTY[0]=0
+                try: save_json(NEARDUP_FILE,mem)
+                except Exception: pass
+        return True
 
 def force_unique_html(html):
     """(최후수단) 눈에 거의 안 띄는 유니크 토큰을 붙여 강제로 다르게."""
@@ -1892,6 +1929,20 @@ def _strip_meta_sentences(html_body):
     except Exception:
         return html_body
 
+# ★글 1개당 AI 생성 마감(스레드별). _gen_once가 설정하고 끝나면 지운다. None이면 마감 없음(예전 동작).
+_AI_DEADLINE=threading.local()
+def _ai_left():
+    d=getattr(_AI_DEADLINE,'t',None)
+    return None if d is None else d-time.time()
+def _ai_room(sec):
+    l=_ai_left(); return l is None or l>sec
+def _ai_cap(timeout):
+    l=_ai_left()
+    return timeout if l is None else max(5.0,min(float(timeout),l))
+def _ai_check(stage=''):
+    l=_ai_left()
+    if l is not None and l<8: raise RuntimeError(f'AI 생성 시간 초과({stage})')
+
 def generate_post_gpt(keywords, cfg, workroom_id=None, image_urls=None, model_override=None):
     """OpenAI로 키워드1 중심의 장문 HTML 본문 생성. 실패 시 템플릿으로 폴백."""
     import requests as _rq
@@ -1986,26 +2037,35 @@ def generate_post_gpt(keywords, cfg, workroom_id=None, image_urls=None, model_ov
             if time.time()>=_t_end: return False
             time.sleep(min(max(0.2,_wait),3))
     _is_free=(_prov=='openrouter' and (str(model).endswith(':free') or str(model)=='openrouter/free'))
-    if _is_free: _free_slot()
+    # ★글 1개당 AI 시간 예산(2026-11-12 대표님 '2' — 무료 AI가 느리면 빨리 템플릿): _gen_once가 정한 마감 안에서만
+    #   슬롯 대기·응답 대기·재시도를 한다. 마감이 없으면(노드·기타 호출) 예전 동작 그대로.
+    if _is_free:
+        _left=_ai_left()
+        if not _free_slot(120 if _left is None else max(0,min(120,_left-20))) and _left is not None:
+            raise RuntimeError('AI 생성 시간 초과(무료 슬롯 대기)')
     def _post_once():
-        return _rq.post(_url,headers=_hdr,json=_body,timeout=_to)
+        _ai_check('응답 대기 전')
+        return _rq.post(_url,headers=_hdr,json=_body,timeout=_ai_cap(_to))
     resp=None
     for _att in range(2):
         try:
             resp=_post_once()
-            if resp.status_code in (500,502,503,504) and _prov in ('nvidia','openrouter') and _att<1:
+            if resp.status_code in (500,502,503,504) and _prov in ('nvidia','openrouter') and _att<1 and _ai_room(20):
                 time.sleep(4); continue   # 서버 일시장애 — 1회만 재시도(빨리 포기)
             break
         except Exception as _e:
-            if _prov in ('nvidia','openrouter') and _att<1:
+            if _prov in ('nvidia','openrouter') and _att<1 and _ai_room(20):
                 time.sleep(4); continue   # 타임아웃 등 — 1회만 재시도(빨리 포기)
+            if _ai_left() is not None and 'Timeout' in type(_e).__name__:
+                raise RuntimeError('AI 생성 시간 초과(응답 지연)')
             raise
     if _prov in ('nvidia','openrouter') and resp is not None and resp.status_code==429:
         if _is_free:
             # ★무료모델 429는 분당 한도 → 템플릿 서킷(60초)으로 보내지 말고 버킷으로 자리 기다렸다 최대 3회 재시도
             #   (21:21 실측: 429 1번에 전 슬롯 60초 템플릿 → AI 1:템플릿 7). 그래도 429면 일 한도(50/1000) 소진 가능성.
             for _k in range(3):
-                time.sleep(6+6*_k); _free_slot(90); resp=_post_once()
+                if not _ai_room(30): break   # 시간 예산 안에서만 재시도
+                time.sleep(6+6*_k); _free_slot(90 if _ai_left() is None else max(0,min(90,_ai_left()-20))); resp=_post_once()
                 if resp.status_code!=429: break
             if resp.status_code==429: raise RuntimeError(f'{_prov.upper()} 분당 한도(429) — 잠시 후 재개 (연속 429면 무료 일 한도 소진 가능)')
         else:
@@ -2095,7 +2155,18 @@ _FREE_LOGGED=[0.0]      # '무료모델 사용 중' 안내 마지막 시각(10�
 # 2026-10-16: qwen/qwen3.8-27b:free는 OpenRouter에서 내려감(400) → 제거. 아래 4종은 10-16 /api/v1/models 실존 확인.
 _FREE_MODELS_DEFAULT=['google/gemma-4-31b-it:free','google/gemma-4-26b-a4b-it:free','nvidia/nemotron-3-super-120b-a12b:free','nvidia/nemotron-3-ultra-550b-a55b:free']
 
+_AI_TIMEOUT_LOGGED=[0.0]
 def _gen_once(keywords, cfg, workroom_id=None, image_urls=None):
+    """글 1개 생성. AI(무료 포함)는 config ai_gen_budget_sec(기본 75초) 안에서만 시도하고, 넘으면 템플릿."""
+    try: _budget=max(20,min(600,int(cfg.get('ai_gen_budget_sec',75) or 75)))
+    except Exception: _budget=75
+    _AI_DEADLINE.t=time.time()+_budget
+    try:
+        return _gen_once_inner(keywords,cfg,workroom_id=workroom_id,image_urls=image_urls)
+    finally:
+        _AI_DEADLINE.t=None
+
+def _gen_once_inner(keywords, cfg, workroom_id=None, image_urls=None):
     # GPT 429(레이트리밋) 서킷브레이커: 429가 나면 5분간 GPT를 건너뛰고 템플릿 직행.
     #  (매 발행마다 GPT 호출→429 대기→폴백 반복이 발행을 느리게 해 타임아웃 유발 — 대표님 지적)
     # 제공자별 키 존재 여부로 게이트(nvidia면 nvidia_api_key). 예전엔 openai_key만 봐서 NVIDIA 전용 설정이 조용히 템플릿으로 빠졌음.
@@ -2108,6 +2179,12 @@ def _gen_once(keywords, cfg, workroom_id=None, image_urls=None):
             _msg=str(e)
             # 여러 워커가 같은 순간 429를 받아 같은 줄을 6번 찍던 것 방지: 이미 스킵 중이면 로그 생략.
             _first=(time.time()>=_GPT_SKIP_UNTIL[0])
+            if 'AI 생성 시간 초과' in _msg:
+                # 느린 응답은 이 글만 템플릿(서킷 안 걸어 다음 글은 다시 AI 시도). 로그는 5분에 1번.
+                if time.time()-_AI_TIMEOUT_LOGGED[0]>300:
+                    _AI_TIMEOUT_LOGGED[0]=time.time()
+                    add_log(f'[AI 느림→템플릿] {_pv.upper()} 응답이 {int(cfg.get("ai_gen_budget_sec",75) or 75)}초 안에 안 와 이 글은 템플릿으로 발행(다음 글은 다시 AI 시도)')
+                return generate_rich_html(keywords,cfg,workroom_id=workroom_id,image_urls=image_urls)
             if '잔액 소진' in _msg or 'insufficient_quota' in _msg:
                 _GPT_SKIP_UNTIL[0]=time.time()+1800   # 30분 스킵 — 충전 전엔 재시도 무의미(헛요청·오해 로그 방지)
                 _where='openrouter.ai/settings/credits' if _pv=='openrouter' else 'platform.openai.com'
@@ -2231,9 +2308,9 @@ def generate_article(keywords, cfg, unique=True, workroom_id=None, image_urls=No
         html,title=_gen_once(keywords,cfg,workroom_id=workroom_id,image_urls=image_urls)
         html=_acinj(html)
         if remember_if_unique(title,html): return html,title
-    # 8회 모두 충돌(사실상 불가) → 강제 유니크 토큰 부착
-    html=force_unique_html(html); remember_if_unique(title,html,force=True)
-    return html,title
+    # 8회 모두 중복/유사 → 숨은 토큰으로 억지 유니크를 만들어 올리지 않는다(대표님 '절대 중복 금지' 2026-11-12).
+    #   예외를 올려 이번 발행을 건너뛴다(호출부가 생성오류로 로그 후 return).
+    raise RuntimeError('중복 회피 실패 — 8회 생성 모두 기존 글과 같거나 유사(≥50%)해 이번 발행 건너뜀')
 
 # ==================== 텔레그램 알림 (선택) ====================
 def send_telegram(cfg, msg):
@@ -7736,7 +7813,9 @@ def enqueue_generated(sites, keywords, cfg, meta=None):
     blocked=[s for s in sites if not (is_publishable(s) and not _cafe24_node_only(s))]
     now=datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     for s in allowed:
-        html,title=generate_article(keywords,cfg)   # 사이트마다 새로 생성(유니크)
+        try: html,title=generate_article(keywords,cfg)   # 사이트마다 새로 생성(유니크)
+        except Exception as e:
+            add_log(f'[생성 건너뜀] {(s.get("name") or s.get("site_url",""))[:24]} — {str(e)[:70]}'); continue
         jid=secrets.token_hex(8)
         history_add({'id':jid,'time':now,'updated':now,'site_id':s.get('id'),
                      'site_name':s.get('name') or s.get('site_url',''),'site_url':s.get('site_url',''),
