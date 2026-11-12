@@ -15087,13 +15087,36 @@ def _late_verify_interrupted_bg():
         finally: _LATE_VERIFY_RUNNING.release()
     threading.Thread(target=_run, name='LATE-VERIFY', daemon=True).start()
 
+DAY_LEDGER_FILE=DATA_DIR/'day_ledger.json'
+_DAY_LEDGER_LOCK=threading.Lock()
+def _day_ledger_merge(h=None):
+    """history.json은 최근 5000건만 보관 → 하루 발행이 그보다 많으면 오늘 앞부분이 밀려나
+       운영실 '오늘 올라간 글'이 오히려 줄어들던 문제(2026-11-12 실측: 실제 8345 vs 표시 4702).
+       오늘·어제 기록의 {id:상태}를 별도 장부에 누적해, 밀려난 기록도 마지막 상태로 계속 센다."""
+    now=datetime.now(); today=now.strftime('%Y-%m-%d'); yday=(now-timedelta(days=1)).strftime('%Y-%m-%d')
+    if h is None: h=load_json(HISTORY_FILE,[])
+    with _DAY_LEDGER_LOCK:
+        led=load_json(DAY_LEDGER_FILE,{})
+        if not isinstance(led,dict): led={}
+        led={k:v for k,v in led.items() if k in (today,yday) and isinstance(v,dict)}
+        for x in h:
+            d=str(x.get('time') or '')[:10]; hid=x.get('id')
+            if d in (today,yday) and hid: led.setdefault(d,{})[hid]=x.get('status')
+        save_json(DAY_LEDGER_FILE,led)
+    return led
+
 def ops_reap_loop():
-    """운영실을 안 열어도 끊긴 발행 정리·사후 확인이 돌게(10분 주기)."""
+    """운영실을 안 열어도 끊긴 발행 정리·사후 확인이 돌게(10분 주기). 오늘 장부는 3분마다 누적."""
     time.sleep(120)
+    n=0
     while True:
-        try: _ops_reap_stale_posting()
+        try: _day_ledger_merge()
         except Exception: pass
-        time.sleep(600)
+        if n%4==0:
+            try: _ops_reap_stale_posting()
+            except Exception: pass
+        n+=1
+        time.sleep(150)
 
 @app.route('/api/ops/overview',methods=['GET'])
 def api_ops_overview():
@@ -15101,8 +15124,11 @@ def api_ops_overview():
     try: _ops_reap_stale_posting()
     except Exception: pass
     cfg=load_config(); now=datetime.now(); today=now.strftime('%Y-%m-%d')
-    th=[x for x in load_json(HISTORY_FILE,[]) if str(x.get('time') or '').startswith(today)]
+    _hall=load_json(HISTORY_FILE,[])
+    th=[x for x in _hall if str(x.get('time') or '').startswith(today)]
     st=Counter(x.get('status') for x in th)
+    try: _lst=Counter((_day_ledger_merge(_hall).get(today) or {}).values())
+    except Exception: _lst=Counter()
     per={}
     for x in th:
         k=x.get('site_id') or x.get('site_name') or ''
@@ -15136,7 +15162,9 @@ def api_ops_overview():
     except Exception: wr=0
     try: load1=round(os.getloadavg()[0],2)
     except Exception: load1=None
-    done=st.get('done',0); failed=st.get('failed',0)
+    try: _sdone=sum(int(s.get('posted_today',0) or 0) for s in sites if s.get('posted_date')==today)
+    except Exception: _sdone=0
+    done=max(st.get('done',0),_lst.get('done',0),_sdone); failed=max(st.get('failed',0),_lst.get('failed',0))
     return jsonify({'ok':True,'now':now.strftime('%Y-%m-%d %H:%M:%S'),
         'switches':{k:cfg.get(k) for k in _OPS_CONTROL_SPEC},
         'mem':_ops_mem(),'load':load1,'workers_alive':wr,
