@@ -7301,8 +7301,13 @@ def finalize_post(site,ok,fail_reason=''):
                     try: _ftemp=bool(classify_fail(fail_reason)[2])
                     except Exception: _ftemp=True
                     _fsn=int(s.get('fail_streak',0) or 0)
+                    # ★20회+ → 12시간, 구조적 차단 10회+ → 24시간(2026-11-12 실측: 한때 됐던 검증 사이트 12곳이 폼 사라짐·
+                    #   로그인폼 변경·보안검사로 연속 10~29회 실패 중인데 3시간마다 헛시도해 주간 실패의 ~20%를 차지).
+                    #   성공 한 번이면 fail_streak=0으로 즉시 정상 주기 복귀.
                     if fail_reason and not _ftemp and _fsn>=3:
-                        _until=(datetime.now()+timedelta(minutes=(180 if _fsn>=10 else 60))).strftime('%Y-%m-%d %H:%M:%S')
+                        _mins=720 if _fsn>=20 else (180 if _fsn>=10 else 60)
+                        if '구조적 차단' in str(fail_reason) and _fsn>=10: _mins=1440
+                        _until=(datetime.now()+timedelta(minutes=_mins)).strftime('%Y-%m-%d %H:%M:%S')
                         if _until>str(s.get('cooldown_until') or ''): s['cooldown_until']=_until
                     # (죽은 사이트 잠금은 실시간 오판을 피해 /api/sites/mark-login-required가 last_post_at 기준으로
                     #  주기 처리한다. 여기선 fail_streak만 올리고 reconcile_sites가 잠금 판정.)
@@ -14849,7 +14854,124 @@ def _ops_reap_stale_posting(max_age_min=60):
                 rec['updated']=datetime.now().strftime('%Y-%m-%d %H:%M:%S'); n+=1
         if n: save_json(HISTORY_FILE,h)
     if n: add_log(f'[운영실] 끊긴 처리 중 기록 {n}건 정리(결과 미확인·재제출 금지)','정리')
+    try: _late_verify_interrupted_bg()
+    except Exception: pass
     return n
+
+# ★중단 기록 사후 확인(2026-11-12 실측: OOM으로 앱이 재시작돼 '작업 중단됨' 43건 — 확인 가능한 29건 중 24건(83%)이
+#   실제로 게시판에 올라가 있었다). 끊긴 발행은 대부분 '성공했는데 기록만 못 한 것'이므로, 브라우저 없이 HTTP로
+#   목록(최신순)과 제목 검색을 읽어 확인한다. 읽기만 하며 재제출하지 않는다.
+#   찾음 → 성공으로 정정(결과 URL 기록). 못 찾음 + 평소 즉시 노출되는 검증 사이트 → '미등록 확인'(다시 시도 가능).
+#   그 외(승인제 가능성·접속 오류) → 기존대로 재제출 금지 유지. 접속 오류는 최대 3번까지 다음 주기에 다시 본다.
+_LATE_VERIFY_RUNNING=threading.Lock()
+_LATE_INTERRUPTED='중단됨(결과 미확인)'
+
+def _late_norm(s):
+    return re.sub(r'[^0-9A-Za-z가-힣]','',html_lib.unescape(str(s or ''))).lower()
+
+def _late_bbs_base(site, rec):
+    for u in (site.get('write_url'), site.get('verified_post_url'), rec.get('site_url'), site.get('site_url')):
+        m=re.match(r'(https?://[^?#]+?/bbs)/', str(u or '')+'/')
+        if m: return m.group(1)
+    base=str(rec.get('site_url') or site.get('site_url') or '').rstrip('/')
+    return (base+'/bbs') if base.startswith('http') else ''
+
+def _late_verify_title(site, rec):
+    """('found', 글URL) | ('absent','') | ('error', 사유). 그누보드 목록·제목검색만 GET."""
+    import requests
+    bo=str(rec.get('bo_table') or site.get('bo_table') or '').strip()
+    bbs=_late_bbs_base(site, rec)
+    key=_late_norm(rec.get('title'))
+    if not bo or not bbs or len(key)<20: return 'error','게시판 정보 부족'
+    # ★우리 글끼리 오인 방지(실측: 같은 게시판에 같은 전화번호의 다른 지역 글이 많아 조각 매칭이 남의(=우리 다른) 글을 잡음).
+    #   목록에선 '앞 15자 일치' 후보만 고르고, 후보 글을 실제로 열어 <title>에 '전체 제목'이 있어야 인정한다.
+    pre=key[:15]
+    first=(str(rec.get('title') or '').strip().split() or [''])[0]
+    queries=[{'bo_table':bo,'sst':'wr_id','sod':'desc','sop':'and'}]
+    if first: queries.append({'bo_table':bo,'sfl':'wr_subject','stx':first,'sop':'and'})
+    hdr={'User-Agent':_HTTP_UA}; read_ok=0; seen=set()
+    for q in queries:
+        try:
+            r=requests.get(f'{bbs}/board.php', params=q, headers=hdr, timeout=25, verify=False)
+        except Exception as e:
+            return 'error', type(e).__name__
+        if r.status_code!=200: return 'error', f'HTTP {r.status_code}'
+        html=r.text or ''
+        if 'wr_id=' not in html and '게시물이 없습니다' not in html: return 'error','목록 못 읽음'
+        read_ok+=1
+        for m in re.finditer(r'<a[^>]+href="([^"]*wr_id=(\d+)[^"]*)"[^>]*>(.*?)</a>', html, re.S|re.I):
+            if m.group(2) in seen: continue
+            txt=_late_norm(re.sub(r'<[^>]+>',' ',m.group(3)))
+            if not txt.startswith(pre): continue
+            seen.add(m.group(2))
+            if len(seen)>6: break
+            u=urllib.parse.urljoin(r.url, html_lib.unescape(m.group(1)))
+            try:
+                pr=requests.get(u, headers=hdr, timeout=25, verify=False)
+                tm=re.search(r'<title[^>]*>(.*?)</title>', pr.text or '', re.S|re.I)
+            except Exception:
+                continue
+            if tm and key in _late_norm(tm.group(1)):
+                return 'found', f'{bbs}/board.php?bo_table={bo}&wr_id={m.group(2)}'
+    if seen: return 'error','비슷한 제목은 있으나 확정 못 함(중복 위험 — 재제출 금지 유지)'
+    return ('absent','') if read_ok==len(queries) else ('error','목록 못 읽음')
+
+def _late_verify_interrupted(max_days=3, limit=80):
+    """중단 기록을 HTTP로 사후 확인해 이력을 정정한다. 반환: {'found':n,'absent':n,'error':n}"""
+    from concurrent.futures import ThreadPoolExecutor
+    cut=(datetime.now()-timedelta(days=max_days)).strftime('%Y-%m-%d %H:%M:%S')
+    hist=load_json(HISTORY_FILE,[])
+    todo=[dict(x) for x in hist if x.get('status')=='failed' and x.get('fail_reason_ko')==_LATE_INTERRUPTED
+          and str(x.get('time') or '')>=cut and int(x.get('late_tries',0) or 0)<3][:limit]
+    out={'found':0,'absent':0,'error':0}
+    if not todo: return out
+    sites={str(s.get('id')):s for s in load_sites()}
+    def _one(rec):
+        s=sites.get(str(rec.get('site_id'))) or {}
+        try: return rec, s, _late_verify_title(s, rec)
+        except Exception as e: return rec, s, ('error', type(e).__name__)
+    with ThreadPoolExecutor(6) as ex: res=list(ex.map(_one, todo))
+    now=datetime.now().strftime('%Y-%m-%d %H:%M:%S'); upd={}
+    for rec,s,(v,info) in res:
+        out[v]=out.get(v,0)+1
+        if v=='found':
+            upd[rec['id']]={'status':'done','result_url':info,'fail_reason_ko':None,'late_checked':now,
+                            'message':'등록 확인(사후 확인) — 서버 재시작으로 기록이 끊겼지만 실제로 게시됨'}
+        elif v=='absent' and str(s.get('verified_post_url') or '').startswith('http'):
+            upd[rec['id']]={'fail_reason_ko':'중단됨(미등록 확인)','late_checked':now,
+                            'message':'작업 중단됨 — 사후 확인 결과 게시판에 없음(다시 시도 가능)'}
+        else:
+            upd[rec['id']]={'late_tries':int(rec.get('late_tries',0) or 0)+1,'late_checked':now}
+    if upd:
+        with JOB_LOCK:
+            h=load_json(HISTORY_FILE,[])
+            for x in h:
+                u=upd.get(x.get('id'))
+                if u and x.get('fail_reason_ko')==_LATE_INTERRUPTED:
+                    for k,val in u.items():
+                        if val is None: x.pop(k,None)
+                        else: x[k]=val
+                    x['updated']=now
+            save_json(HISTORY_FILE,h)
+    if out['found'] or out['absent']:
+        add_log(f'[운영실] 중단 기록 사후 확인 — 실제 게시됨 {out["found"]}건(성공으로 정정) · 미등록 {out["absent"]}건 · 확인불가 {out["error"]}건','정리')
+    return out
+
+def _late_verify_interrupted_bg():
+    if not _LATE_VERIFY_RUNNING.acquire(blocking=False): return
+    def _run():
+        try: _late_verify_interrupted()
+        except Exception as e: add_log(f'[운영실] 중단 기록 사후 확인 오류: {str(e)[:80]}')
+        finally: _LATE_VERIFY_RUNNING.release()
+    threading.Thread(target=_run, name='LATE-VERIFY', daemon=True).start()
+
+def ops_reap_loop():
+    """운영실을 안 열어도 끊긴 발행 정리·사후 확인이 돌게(10분 주기)."""
+    time.sleep(120)
+    while True:
+        try: _ops_reap_stale_posting()
+        except Exception: pass
+        time.sleep(600)
 
 @app.route('/api/ops/overview',methods=['GET'])
 def api_ops_overview():
@@ -17034,7 +17156,7 @@ def main():
         print('⏰ 스케줄러 시작 (KST 기준)')
     except Exception as e: print('스케줄러 시작 실패:',e)
     # 지연 재시도 루프 / 텔레그램 명령 수신 / 발행글 생존 검증
-    for fn,nm in [(retry_loop,'RETRY'),(telegram_loop,'TG'),(verify_loop,'VERIFY'),(member_scheduler_loop,'MSCHED'),(discover_loop,'DISCO'),(pipeline_loop,'PIPELINE'),(publish_loop,'PUBLISH')]:
+    for fn,nm in [(retry_loop,'RETRY'),(telegram_loop,'TG'),(verify_loop,'VERIFY'),(member_scheduler_loop,'MSCHED'),(discover_loop,'DISCO'),(pipeline_loop,'PIPELINE'),(publish_loop,'PUBLISH'),(ops_reap_loop,'OPS-REAP')]:
         try: threading.Thread(target=fn,name=nm,daemon=True).start()
         except Exception as e: print(f'{nm} 시작 실패:',e)
     print('🔁 재시도·📱텔레그램·🔎검증 스레드 시작')
