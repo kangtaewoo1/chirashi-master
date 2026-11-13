@@ -540,6 +540,29 @@ def run_once(max_queries):
         try: server_post("/api/candidates/ingest", {"urls": [], "node_id": NODE_ID})  # 관제실 하트비트만
         except Exception: pass
         return
+    # ★본인인증 벽 발굴 필터(2026-11-14): 검색경로도 crt.sh와 동일하게 — 가입페이지에 진짜 본인인증 벽이
+    #   있는 사이트는 자동가입 불가라 전송 전 걸러낸다(서버 claim·가입 60초 낭비 차단). 병렬 확인(노드 IP).
+    before = len(urls)
+    def _cert_ok(u):
+        try:
+            sp = urllib.parse.urlsplit(u)
+            base = f"{sp.scheme}://{sp.netloc}"
+            return (not _register_blocked_by_cert(base)), u
+        except Exception:
+            return True, u   # 판정 실패는 통과(fail-open) — 서버가 백업으로 잡음
+    kept = []
+    with ThreadPoolExecutor(max_workers=12) as _ex:
+        for ok, u in _ex.map(_cert_ok, urls):
+            if ok: kept.append(u)
+    urls = kept
+    _blocked = before - len(urls)
+    if _blocked:
+        log(f"  ⛔본인인증 벽 {_blocked}곳 발굴 제외(자동가입 불가) — 전송 {len(urls)}개")
+    if not urls:
+        log("본인인증 벽 제외 후 전송할 신규 URL 없음.")
+        try: server_post("/api/candidates/ingest", {"urls": [], "node_id": NODE_ID})
+        except Exception: pass
+        return
     log(f"새 URL {len(urls)}개 → 서버로 전송…")
     # 서버 ingest는 1회 100개 상한 → 100개씩 나눠 보낸다
     sent = 0
