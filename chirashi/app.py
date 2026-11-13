@@ -2313,17 +2313,34 @@ def _rellink_pool():
         _RELLINK_CACHE.update(t=time.time(),rows=rows)
         return rows
 
+_RELLINK_TLS=threading.local()   # 이번 글에 넣은 관련글 URL(발행 이력에 남겨 생존확인 때 링크 삭제 여부 판정)
+_RELLINK_SENT=[
+    '비슷한 분위기를 찾고 계신다면 {a} 쪽 이야기도 함께 참고해 보시면 좋습니다.',
+    '가격이나 시스템이 더 궁금하신 분들은 {a} 정리 글도 한 번 확인해 보세요.',
+    '근처에서 다른 선택지를 알아보고 계시다면 {a} 정보도 꽤 도움이 됩니다.',
+    '실제로 다녀오신 분들 이야기는 {a} 글에 조금 더 자세히 나와 있습니다.',
+    '처음 방문이라 망설여진다면 미리 {a} 안내를 읽어 보시는 것도 방법입니다.',
+    '분위기가 조금 다른 곳과 비교해 보고 싶다면 {a} 내용도 같이 보시길 권합니다.',
+    '주말 예약 전이라면 {a} 이용 팁도 함께 보시면 훨씬 편합니다.',
+    '같은 동네에서 {a} 찾으시는 분들도 많아서 따로 정리해 두었습니다.',
+    '혹시 일행 취향이 갈린다면 {a} 쪽도 후보에 넣어 보세요.',
+    '시간대별 분위기 차이는 {a} 글에서 비교해 보실 수 있습니다.',
+    '{a} 관련해서도 문의가 많아 별도로 정리된 글이 있으니 참고하세요.',
+    '이동 동선을 고려하신다면 {a} 위치 정보도 같이 확인해 두시면 좋습니다.',
+]
+
 def _related_links_html(region, service, workroom_id, cfg):
-    """★관련글 링크(대표님 2026-11-14 '발행한 글을 키워드 잡아 링크 3개 본문 중간에'):
-       같은 작업실(같은 고객)의 이전 발행 글만 — 다른 고객 글로 새지 않게. 같은 지역+업종 → 같은 지역 → 같은 업종 순,
-       서로 다른 사이트(도메인)에서 n개. 앵커=그 글의 '지역+업종' 키워드. 없으면 ''(블록 생략)."""
+    """★관련글 링크(대표님 2026-11-14 '발행한 글을 키워드 잡아 링크 3개 본문 중간에' → '최대한 자연스럽게'):
+       같은 작업실(같은 고객)의 이전 발행 글만. 같은 지역+업종 → 같은 지역 → 같은 업종 순, 서로 다른 사이트에서 n개.
+       고정 문구 묶음(링크 네트워크 흔적) 대신 링크마다 다른 평범한 문장 1개(<p>)로 만들어 리스트로 반환. 없으면 []."""
+    _RELLINK_TLS.urls=[]
     try:
-        if not cfg.get('related_links_on',True) or not workroom_id: return ''
+        if not cfg.get('related_links_on',True) or not workroom_id: return []
         n=max(0,min(5,int(cfg.get('related_links_count',3) or 0)))
-        if not n: return ''
+        if not n: return []
         rg=normalize_region(region,cfg) if region else ''
         pool=[x for x in _rellink_pool() if x['w']==str(workroom_id)]
-        if not pool: return ''
+        if not pool: return []
         def _rn(x): return normalize_region(x['r'],cfg) if x['r'] else ''
         tiers=[[x for x in pool if rg and _rn(x)==rg and x['s']==service],
                [x for x in pool if rg and _rn(x)==rg and x['s']!=service],
@@ -2337,37 +2354,39 @@ def _related_links_html(region, service, workroom_id, cfg):
                 pick.append(x); doms.add(x['d']); urls.add(x['u'])
                 if len(pick)>=n: break
             if len(pick)>=n: break
-        if not pick: return ''
-        a=[]; suf=['',' 후기',' 추천',' 가격',' 이용 안내',' 위치',' 예약']; random.shuffle(suf)
-        if '' in suf: suf.remove(''); suf.insert(0,'')   # 첫 링크는 순수 키워드
+        if not pick: return []
+        sents=random.sample(_RELLINK_SENT,min(len(pick),len(_RELLINK_SENT)))
+        out=[]
         for i,x in enumerate(pick):
-            kw=(((_rn(x) or x['r'])+x['s']).strip() or (rg+service))+suf[i%len(suf)]
-            a.append('<a href="'+html_lib.escape(x['u'],quote=True)+'" target="_blank" '
-                     'style="color:#c0392b;font-weight:700;text-decoration:underline;">'+html_lib.escape(kw)+'</a>')
-        return ('<p style="line-height:1.9;color:#333;font-size:15px;margin:22px 0;padding:12px 14px;'
-                'background:#faf6f5;border-left:4px solid #c0392b;word-break:keep-all;">'
-                '함께 보면 좋은 글 : '+' · '.join(a)+'</p>')
+            kw=((_rn(x) or x['r'])+x['s']).strip() or (rg+service)
+            a='<a href="'+html_lib.escape(x['u'],quote=True)+'" target="_blank">'+html_lib.escape(kw)+'</a>'
+            out.append('<p style="line-height:1.9;">'+sents[i%len(sents)].replace('{a}',a)+'</p>')
+        _RELLINK_TLS.urls=[x['u'] for x in pick]
+        return out
     except Exception:
-        return ''
+        return []
 
-def _insert_mid_block(html, blk):
-    """본문 '중간'(전체 길이 절반에 가장 가까운 </p> 뒤)에 끼움. </p>가 없으면 그대로(안전)."""
-    if not blk or not html: return html
-    ends=[m.end() for m in re.finditer(r'</p\s*>',html,flags=re.I)]
-    if len(ends)<2: return html
-    mid=len(html)//2
-    pos=min(ends[:-1],key=lambda e:abs(e-mid))
-    return html[:pos]+blk+html[pos:]
+def _insert_spread(html, blks):
+    """문장들을 본문 여러 곳(첫 문단 이후, 마지막 문단 전)에 고르게 흩어 끼움. </p>가 적으면 그대로(안전)."""
+    if not blks or not html: return html
+    ends=[m.end() for m in re.finditer(r'</p\s*>',html,flags=re.I)][1:-1]
+    if len(ends)<len(blks): return html
+    k=len(blks); L=len(ends)
+    picks=sorted({ends[min(L-1,int(L*(i+1)/(k+1)))] for i in range(k)},reverse=True)
+    for pos,b in zip(picks,reversed(blks[:len(picks)])):
+        html=html[:pos]+b+html[pos:]
+    return html
 
 def generate_article(keywords, cfg, unique=True, workroom_id=None, image_urls=None, site=None):
     """본문 생성. unique=True 면 제목/본문이 과거와 겹치지 않을 때까지 재생성(상시 다르게).
        workroom_id를 주면 그 작업실 전용 이미지 풀을 사용(없으면 이미지 없이 발행).
        image_urls를 주면(노드가 서버로부터 받은 작업실 이미지) 로컬 조회 없이 그걸 사용 — 노드엔 이미지가 로컬에 없어서."""
     _acr=(keywords.get('지역') or '').strip(); _acs=(keywords.get('서비스') or '').strip()
+    _RELLINK_TLS.urls=[]   # 링크 생략 사이트에서 이전 글 URL이 이력에 남지 않게
     def _acinj(_h):
         try:
             if not (site or {}).get('strips_links'):   # 링크를 지우는 사이트엔 빈 문구만 남으므로 생략
-                _h=_insert_mid_block(_h,_related_links_html(_acr,_acs,workroom_id,cfg))
+                _h=_insert_spread(_h,_related_links_html(_acr,_acs,workroom_id,cfg))
         except Exception: pass
         try: return _insert_area_block(_h,_area_coverage_html(_acr,_acs,cfg,workroom_id))
         except Exception: return _h
@@ -3618,8 +3637,10 @@ def check_post_alive(url, info=None):
         if any(s in body for s in dead): return False
         if isinstance(info,dict):
             # ★관련글 링크 생존(2026-11-14 ever-green 실측: 문구는 남고 <a>만 지워짐) — 블록이 있을 때만 판정
-            _m=re.search(r'함께 보면 좋은 글(.{0,3000}?)</p>',body,re.S)
-            if _m: info['links_kept']=bool(re.search(r'<a\s[^>]*href',_m.group(1),re.I))
+            _exp=[u for u in (info.get('expect') or []) if u]
+            if _exp:
+                _hrefs=' '.join(html_lib.unescape(h) for h in re.findall(r'<a\s[^>]*href\s*=\s*["\']([^"\']+)',body,re.I))
+                info['links_kept']=any(u in _hrefs for u in _exp)
         return True
     except Exception:
         return None
@@ -3636,7 +3657,7 @@ def verify_once(limit=40):
     todo=cand[:max(1,limit)]
     results={}; _lk={}
     for r in todo:
-        _inf={}
+        _inf={'expect':r.get('rel_links') or []}
         alive=check_post_alive(r['result_url'],_inf)
         if alive is not None: results[r['id']]=('yes' if alive else 'no')
         if alive and 'links_kept' in _inf and r.get('site_id'): _lk[r['site_id']]=_inf['links_kept']
@@ -10910,7 +10931,8 @@ def _publish_combo_to_site(s, kw, wname, rid, cfg, writer_name='', chrome_sem=No
             'site_name':fresh.get('name') or fresh.get('site_url',''),'site_url':fresh.get('site_url',''),
             'bo_table':fresh.get('bo_table',''),'title':title,'region':pub_kw.get('지역',''),'service':pub_kw.get('서비스',''),
             'brand':pub_kw.get('브랜드',''),
-            'workroom_id':rid,'workroom_name':wname,'status':'posting','result_url':'','message':'','attempts':0})
+            'workroom_id':rid,'workroom_name':wname,'status':'posting','result_url':'','message':'','attempts':0,
+            'rel_links':list(getattr(_RELLINK_TLS,'urls',[]) or [])})
         ok=False; msg=''; _t0=time.time()
         # ★크롬 슬롯은 실제 브라우저 작업(do_post)에만(2026-09-30 대표님 '발행량 늘려야해' 실측): 예전엔 _publish_one_combo
         #   가 전역 크롬 세마포어를 스레드 시작부터 잡아 위의 generate_article(LLM 20~60초) 동안도 슬롯을 점유 →
