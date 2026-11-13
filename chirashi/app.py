@@ -10219,6 +10219,16 @@ def auto_pipeline_once(limit=5):
                     c['reject_reason']='서버 IP 차단(cafe24) — 노트북(한국 IP) 노드 대기'; _c24+=1
             if _c24:
                 save_cands(cands); add_log(f'[cafe24 후보 복원] 서버 IP 차단으로 떨어진 {_c24}곳 → 노트북 노드 대기로 되돌림','정리')
+        # ★cafe24 오분류 교정(2026-11-13 실측): 주소가 /bbs/·bo_table=인 그누보드(cafe24 호스팅·발굴 오태깅)가
+        #   platform='cafe24'로 붙어 있으면 위 게이트에서 노드 전용으로 묶여 서버가 영영 손대지 않음(20곳 적체).
+        #   cafe24 쇼핑몰 게시판은 /board/·/article/ 주소라 겹치지 않음 → gnuboard로 바로잡는다(표시 남김, 되돌리기 가능).
+        _pf=0
+        for c in cands:
+            if (c.get('platform')=='cafe24' and c.get('status') in ('ready','approved')
+                    and re.search(r'/bbs/|[?&]bo_table=', str(c.get('url') or ''))):
+                c['platform']='gnuboard'; c['platform_fixed_from']='cafe24'; _pf+=1
+        if _pf:
+            save_cands(cands); add_log(f'[후보 분류 교정] cafe24로 잘못 붙은 그누보드 게시판 {_pf}곳 → 서버 처리 대상으로','정리')
         # ★'글쓰기 폼 없음' 오판 탈락 1회 재검토(2026-11-09: 회원전용 권한 alert·bo_table 어긋남·하위폴더 설치를 폼없음으로 잘못
         #   탈락시켰음 — 판정 수정 후 허가된 후보만 한 번 다시 대기로).
         _rv=0
