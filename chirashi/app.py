@@ -4515,6 +4515,23 @@ def _gnuboard_signup_http(site, cfg, vals):
             add_log(f'[HTTP 가입 캡차재시도] {nm[:30]} — {last[:40]} {attempt}/3')
             continue
         if re.search(r'이미\s*(?:사용|등록|가입|존재)|중복',last):
+            # ★이메일 중복 폴백(2026-11-14 대표님): 고정계정이면 중복='우리가 만든 그 계정 존재' → 재가입 말고
+            #   그 계정으로 HTTP 로그인. 로그인 성공하면 발행 가능한 회원이 된 것 → creds 저장하고 성공 반환.
+            #   (고정계정 아니면 매번 다른 랜덤값이라 로그인 불가 → 기존대로 반려.)
+            _fid=str(cfg.get('signup_fixed_id') or '').strip()
+            _fpw=str(cfg.get('signup_fixed_pw') or '').strip()
+            if _fid and _fpw:
+                _lmid=data.get('mb_id') or _fid; _lpw=data.get('mb_password') or _fpw
+                try: _dli=_gnuboard_http_login(_rq.Session(),base,_lmid,_lpw)
+                except Exception: _dli=False
+                if _dli:
+                    site['mb_id']=_lmid; site['mb_pass']=_lpw; site['http_member']=True; site['no_verify']=True
+                    set_site_flag(site.get('id'),mb_id=_lmid,mb_pass=_lpw,signup_status='complete',login_saved=True,
+                                  no_verify=True,http_member=True,signup_via='http_dup_login',
+                                  signup_updated_at=datetime.now().isoformat(timespec='seconds'))
+                    add_log(f'[자동가입 성공] 🌐HTTP 중복→로그인 {nm} — {_lmid}(이미 가입된 계정 재사용)')
+                    return True,f'자동가입 성공(HTTP 중복계정 로그인) — {_lmid}'
+                return False,f'HTTP 중복 계정 로그인 실패 — 고정계정 비번 불일치/비표준 로그인({last[:40]})'
             return False,f'HTTP 가입 실패 — 아이디/이메일 중복({last[:50]})'
         # ★특정 이메일 도메인만 받는 게시판(2026-11-09 실측 '네이버 이메일 주소만 사용 가능합니다') — 한 번만 그 도메인으로 바꿔 재시도.
         #   메일 인증까지 하는 곳이면 아래 로그인 확인에서 어차피 걸러짐(가짜주소라 수신 불가) → 무인증 게시판만 통과.
@@ -10156,12 +10173,24 @@ def auto_signup(site, submit=True):
         _form_still=bool(d.find_elements(By.CSS_SELECTOR,
             "input[name='mb_password_re'],input[name='mb_password_confirm'],input[name='passwd_confirm'],#reg_mb_password_re"))
     except Exception: pass
-    # (c) 중복 아이디는 문구 무관하게 항상 반려(다음 시도 다른 값)
+    # (c) 아이디/이메일 중복 — ★구제(2026-11-14 대표님 '이메일 중복 폴백'): 고정계정(signup_fixed_id/pw)을
+    #   쓰는 경우 중복은 '우리가 이미 만든 그 계정이 존재'한다는 뜻이므로, 재가입 말고 그 계정으로 로그인하면
+    #   발행 가능. 아래 ③ 로그인 재시도(mid/pw) 경로로 흘려보낸다. (고정계정이 아니면 중복은 매번 다른 랜덤
+    #   값이라 우리 creds로 로그인 불가 → 즉시 반려 유지.) 로그인 성공 시 _mark_success로 계정이 site에 심긴다.
+    _dup_seen=False
     if any(k in pt for k in ('이미 등록된','이미 사용중','이미 사용 중','중복된 아이디','사용중인 아이디','이미 가입','이미 존재')):
-        return False,'가입 실패 — 아이디/이메일 중복(다음 시도 시 다른 값 사용)'
-    if any(k in pt for k in ('본인인증','휴대폰 인증','실명인증','SMS 인증')):
+        _cfg_dup=load_config()
+        _fixed=bool(str(_cfg_dup.get('signup_fixed_id') or '').strip() and str(_cfg_dup.get('signup_fixed_pw') or '').strip())
+        if not _fixed:
+            return False,'가입 실패 — 아이디/이메일 중복(랜덤계정이라 로그인 불가, 다음 시도 다른 값)'
+        _dup_seen=True
+        add_log(f'[자동가입] {site.get("name") or site.get("site_url","")} — 중복(이미 가입됨) 감지 → 고정계정으로 로그인 시도')
+        # 중복 신호 외의 다른 반려(본인인증/승인제/규칙위반)는 건너뛰고 바로 ③ 로그인으로 — 중복이면 폼이
+        # 남아있어도 '규칙위반'이 아니라 '이미 가입'이므로 아래 (c-2)(d) 규칙위반 분기를 타면 안 된다.
+        _form_still=False
+    if (not _dup_seen) and any(k in pt for k in ('본인인증','휴대폰 인증','실명인증','SMS 인증')):
         return False,'가입 실패 — 본인인증 필요(자동가입 불가)'
-    if any(k in pt for k in ('승인 후','관리자 승인','승인이 필요','가입 승인')):
+    if (not _dup_seen) and any(k in pt for k in ('승인 후','관리자 승인','승인이 필요','가입 승인')):
         return False,'가입 보류 — 관리자 승인제 게시판(자동발행 불가)'
     # (c-2) ★kcaptcha 오답이 '규칙 위반'으로 오분류되던 것 교정(2026-09-15 대표님 'ID 규칙 위반도 잡아줘' 실측):
     #   그누보드 가입폼엔 닉네임 옆에 '공백없이 한글,영문,숫자만 (한글2·영문4자 이상)' 안내문구가 상시 노출된다.
@@ -10206,6 +10235,8 @@ def auto_signup(site, submit=True):
             time.sleep(2); dismiss_alerts(d)
             if _logged_in(): return _mark_success('로그인 확인')
         except Exception: continue
+    if _dup_seen:
+        return False,'중복 계정 로그인 실패 — 고정계정 비번 불일치/로그인폼 비표준(수동 확인 필요)'
     return False,'가입 제출했으나 로그인 확인 실패(가입 규칙·중복ID·승인제·비표준 로그인폼 가능)'
 
 def _safe_find(d, sel):
