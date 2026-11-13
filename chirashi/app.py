@@ -2346,14 +2346,22 @@ def _related_links_html(region, service, workroom_id, cfg):
                [x for x in pool if rg and _rn(x)==rg and x['s']!=service],
                [x for x in pool if x['s']==service and _rn(x)!=rg],
                pool]
-        pick=[]; doms=set(); urls=set()
-        for t in tiers:
-            t=list(t); random.shuffle(t)
-            for x in t:
-                if x['d'] in doms or x['u'] in urls: continue
-                pick.append(x); doms.add(x['d']); urls.add(x['u'])
-                if len(pick)>=n: break
-            if len(pick)>=n: break
+        # ★앵커 섞기(2026-11-14 대표님): 같은 키워드 ×3 대신 같은지역·같은업종 / 같은지역·다른업종 / 다른지역·같은업종을
+        #   한 개씩 돌아가며 뽑고(라운드로빈), 키워드(앵커)가 겹치지 않게. 모자라면 남은 풀에서 채움.
+        def _ak(x): return ((_rn(x) or x['r'])+x['s']).strip()
+        pick=[]; doms=set(); urls=set(); anchors=set()
+        tl=[list(t) for t in tiers]
+        for t in tl: random.shuffle(t)
+        for strict in (True,False):
+            progress=True
+            while len(pick)<n and progress:
+                progress=False
+                for t in tl:
+                    if len(pick)>=n: break
+                    for x in t:
+                        if x['d'] in doms or x['u'] in urls or (strict and _ak(x) in anchors): continue
+                        pick.append(x); doms.add(x['d']); urls.add(x['u']); anchors.add(_ak(x)); progress=True
+                        break
         if not pick: return []
         sents=random.sample(_RELLINK_SENT,min(len(pick),len(_RELLINK_SENT)))
         out=[]
