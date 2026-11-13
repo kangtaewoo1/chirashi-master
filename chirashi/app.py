@@ -2357,13 +2357,15 @@ def _insert_mid_block(html, blk):
     pos=min(ends[:-1],key=lambda e:abs(e-mid))
     return html[:pos]+blk+html[pos:]
 
-def generate_article(keywords, cfg, unique=True, workroom_id=None, image_urls=None):
+def generate_article(keywords, cfg, unique=True, workroom_id=None, image_urls=None, site=None):
     """본문 생성. unique=True 면 제목/본문이 과거와 겹치지 않을 때까지 재생성(상시 다르게).
        workroom_id를 주면 그 작업실 전용 이미지 풀을 사용(없으면 이미지 없이 발행).
        image_urls를 주면(노드가 서버로부터 받은 작업실 이미지) 로컬 조회 없이 그걸 사용 — 노드엔 이미지가 로컬에 없어서."""
     _acr=(keywords.get('지역') or '').strip(); _acs=(keywords.get('서비스') or '').strip()
     def _acinj(_h):
-        try: _h=_insert_mid_block(_h,_related_links_html(_acr,_acs,workroom_id,cfg))
+        try:
+            if not (site or {}).get('strips_links'):   # 링크를 지우는 사이트엔 빈 문구만 남으므로 생략
+                _h=_insert_mid_block(_h,_related_links_html(_acr,_acs,workroom_id,cfg))
         except Exception: pass
         try: return _insert_area_block(_h,_area_coverage_html(_acr,_acs,cfg,workroom_id))
         except Exception: return _h
@@ -3594,7 +3596,7 @@ def do_backup(cfg=None, reason='자동'):
     return ok,err
 
 # ==================== 발행 검증 (게시글 생존 확인) ====================
-def check_post_alive(url):
+def check_post_alive(url, info=None):
     """게시된 URL 이 아직 살아있는지 HTTP 로 확인. True=생존, False=삭제/없음, None=확인불가."""
     import requests as _rq
     try:
@@ -3612,6 +3614,10 @@ def check_post_alive(url):
         dead=['존재하지 않','삭제된','삭제되었','없는 게시','게시물이 없','원글이 없','잘못된 접근',
               '페이지를 찾을 수 없','not found','더 이상','권한이 없']
         if any(s in body for s in dead): return False
+        if isinstance(info,dict):
+            # ★관련글 링크 생존(2026-11-14 ever-green 실측: 문구는 남고 <a>만 지워짐) — 블록이 있을 때만 판정
+            _m=re.search(r'함께 보면 좋은 글(.{0,3000}?)</p>',body,re.S)
+            if _m: info['links_kept']=bool(re.search(r'<a\s[^>]*href',_m.group(1),re.I))
         return True
     except Exception:
         return None
@@ -3626,11 +3632,18 @@ def verify_once(limit=40):
     cand=[r for r in h if r.get('status')=='done' and str(r.get('result_url','')).startswith('http')]
     cand.sort(key=lambda r:(r.get('verified_at') or ''))   # 미검증·오래된 것 우선
     todo=cand[:max(1,limit)]
-    results={}
+    results={}; _lk={}
     for r in todo:
-        alive=check_post_alive(r['result_url'])
+        _inf={}
+        alive=check_post_alive(r['result_url'],_inf)
         if alive is not None: results[r['id']]=('yes' if alive else 'no')
+        if alive and 'links_kept' in _inf and r.get('site_id'): _lk[r['site_id']]=_inf['links_kept']
         time.sleep(1)
+    for _sid,_kept in _lk.items():
+        try:
+            set_site_flag(_sid,strips_links=(not _kept))
+            if not _kept: add_log(f'[관련글 링크] 사이트가 링크를 지움 → 이 사이트 글엔 관련글 블록 생략 ({_sid})','정리')
+        except Exception: pass
     if results:
         with JOB_LOCK:
             h=load_json(HISTORY_FILE,[]); vat=_kst_now().strftime('%Y-%m-%d %H:%M')
@@ -10873,7 +10886,7 @@ def _publish_combo_to_site(s, kw, wname, rid, cfg, writer_name='', chrome_sem=No
         pub_kw=_auto_subkeywords(kw.get('_main','')) if kw.get('_main_only') else _fix_kw_dong(kw)
         try:
             with _global_gen_sem():   # LLM 동시호출 상한(기본 12) — 크롬 슬롯과 별개로 생성 폭주 방지
-                html,title=generate_article(pub_kw,cfg,unique=True,workroom_id=rid)
+                html,title=generate_article(pub_kw,cfg,unique=True,workroom_id=rid,site=fresh)
         except Exception as e:
             add_log(f"[작업실:{wname}] 생성오류 {str(e)[:50]}"); return
         if (fresh.get('unattended_audit') or {}).get('state')=='ready':
