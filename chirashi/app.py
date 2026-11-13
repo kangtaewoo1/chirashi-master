@@ -2292,12 +2292,79 @@ def _insert_area_block(html, blk):
     j=html.rfind('</div>')
     return (html[:j]+blk+html[j:]) if j>0 else html+blk
 
+_RELLINK_CACHE={'t':0.0,'rows':[]}
+_RELLINK_LOCK=threading.Lock()
+def _rellink_pool():
+    """발행 성공(실게시 URL·생존 확인) 글 목록. history.json을 60초 캐시(발행마다 5000건 재파싱 방지)."""
+    with _RELLINK_LOCK:
+        if time.time()-_RELLINK_CACHE['t']<60: return _RELLINK_CACHE['rows']
+        rows=[]
+        try:
+            for x in load_json(HISTORY_FILE,[]) or []:
+                u=str(x.get('result_url') or '')
+                if x.get('status')!='done' or not u.startswith(('http://','https://')): continue
+                if str(x.get('alive') or '').lower() in ('no','false','dead'): continue
+                if x.get('is_secret'): continue   # 비밀글은 남이 못 열어 링크 무의미
+                rows.append({'u':u,'r':str(x.get('region') or '').strip(),'s':str(x.get('service') or '').strip(),
+                             'w':str(x.get('workroom_id') or ''),'d':urllib.parse.urlsplit(u).netloc.lower()})
+        except Exception: rows=[]
+        _RELLINK_CACHE.update(t=time.time(),rows=rows)
+        return rows
+
+def _related_links_html(region, service, workroom_id, cfg):
+    """★관련글 링크(대표님 2026-11-14 '발행한 글을 키워드 잡아 링크 3개 본문 중간에'):
+       같은 작업실(같은 고객)의 이전 발행 글만 — 다른 고객 글로 새지 않게. 같은 지역+업종 → 같은 지역 → 같은 업종 순,
+       서로 다른 사이트(도메인)에서 n개. 앵커=그 글의 '지역+업종' 키워드. 없으면 ''(블록 생략)."""
+    try:
+        if not cfg.get('related_links_on',True) or not workroom_id: return ''
+        n=max(0,min(5,int(cfg.get('related_links_count',3) or 0)))
+        if not n: return ''
+        rg=normalize_region(region,cfg) if region else ''
+        pool=[x for x in _rellink_pool() if x['w']==str(workroom_id)]
+        if not pool: return ''
+        def _rn(x): return normalize_region(x['r'],cfg) if x['r'] else ''
+        tiers=[[x for x in pool if rg and _rn(x)==rg and x['s']==service],
+               [x for x in pool if rg and _rn(x)==rg and x['s']!=service],
+               [x for x in pool if x['s']==service and _rn(x)!=rg],
+               pool]
+        pick=[]; doms=set(); urls=set()
+        for t in tiers:
+            t=list(t); random.shuffle(t)
+            for x in t:
+                if x['d'] in doms or x['u'] in urls: continue
+                pick.append(x); doms.add(x['d']); urls.add(x['u'])
+                if len(pick)>=n: break
+            if len(pick)>=n: break
+        if not pick: return ''
+        a=[]; suf=['',' 후기',' 추천',' 가격',' 이용 안내',' 위치',' 예약']; random.shuffle(suf)
+        if '' in suf: suf.remove(''); suf.insert(0,'')   # 첫 링크는 순수 키워드
+        for i,x in enumerate(pick):
+            kw=(((_rn(x) or x['r'])+x['s']).strip() or (rg+service))+suf[i%len(suf)]
+            a.append('<a href="'+html_lib.escape(x['u'],quote=True)+'" target="_blank" '
+                     'style="color:#c0392b;font-weight:700;text-decoration:underline;">'+html_lib.escape(kw)+'</a>')
+        return ('<p style="line-height:1.9;color:#333;font-size:15px;margin:22px 0;padding:12px 14px;'
+                'background:#faf6f5;border-left:4px solid #c0392b;word-break:keep-all;">'
+                '함께 보면 좋은 글 : '+' · '.join(a)+'</p>')
+    except Exception:
+        return ''
+
+def _insert_mid_block(html, blk):
+    """본문 '중간'(전체 길이 절반에 가장 가까운 </p> 뒤)에 끼움. </p>가 없으면 그대로(안전)."""
+    if not blk or not html: return html
+    ends=[m.end() for m in re.finditer(r'</p\s*>',html,flags=re.I)]
+    if len(ends)<2: return html
+    mid=len(html)//2
+    pos=min(ends[:-1],key=lambda e:abs(e-mid))
+    return html[:pos]+blk+html[pos:]
+
 def generate_article(keywords, cfg, unique=True, workroom_id=None, image_urls=None):
     """본문 생성. unique=True 면 제목/본문이 과거와 겹치지 않을 때까지 재생성(상시 다르게).
        workroom_id를 주면 그 작업실 전용 이미지 풀을 사용(없으면 이미지 없이 발행).
        image_urls를 주면(노드가 서버로부터 받은 작업실 이미지) 로컬 조회 없이 그걸 사용 — 노드엔 이미지가 로컬에 없어서."""
     _acr=(keywords.get('지역') or '').strip(); _acs=(keywords.get('서비스') or '').strip()
     def _acinj(_h):
+        try: _h=_insert_mid_block(_h,_related_links_html(_acr,_acs,workroom_id,cfg))
+        except Exception: pass
         try: return _insert_area_block(_h,_area_coverage_html(_acr,_acs,cfg,workroom_id))
         except Exception: return _h
     if not unique:
