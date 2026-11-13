@@ -4955,25 +4955,49 @@ def gnuboard_post(site, title, content_html, skip_login=False):
     #   alert 감지(3870)가 타이밍상 놓치면 여기까지 흘러 'wr_subject 없음'으로 오분류됐음(83건 중 다수).
     #   → 폴링마다 page_source에서 권한없음/로그인후이용 문구를 확인해 진짜 로그인필요로 정확 반환.
     _NEED_LOGIN_TXT=('글을 쓸 권한이 없','권한이 없습니다','회원이시라면 로그인','로그인 후 이용','로그인 후 이용해','회원만 글쓰기','회원만 작성','로그인이 필요')
-    _wr_found=False
-    for _ in range(10):
+    # ★폼 탐색 1회 재로드(2026-11-14 자율점검 실측): '글쓰기폼 못찾음' 실패 사이트(doctorm·hansdental 등)를 노드와 같은
+    #   셀레늄으로 단독 재현하니 폼(_WR_SEL)+kcaptcha가 정상으로 보였다 → 노드에선 동시발행 부하로 5초 폴링 안에 못
+    #   그려져 간헐 '폼 없음' 오판(실패 243건의 큰 축). 권한없음·로그인 신호는 루프에서 이미 조기반환하므로, 그 신호
+    #   없이 폼만 못 찾은 경우에만 write.php를 1회 다시 열고 더 길게 폴링해 부하로 놓친 폼을 구제한다(회원전용은 영향 없음).
+    def _poll_wr(_rounds):
+        for _ in range(_rounds):
+            try:
+                if d.find_elements(By.CSS_SELECTOR,_WR_SEL):
+                    return True
+            except Exception:
+                return 'session_error'
+            try:
+                if 'login' in (d.current_url or '').lower():
+                    return 'login'
+            except Exception: pass
+            try:
+                _ps=(d.page_source or '')
+                if (not d.find_elements(By.CSS_SELECTOR,_WR_SEL)) and any(t in _ps for t in _NEED_LOGIN_TXT):
+                    return 'need_login'
+            except Exception: pass
+            time.sleep(0.5)
+        return False
+    _r=_poll_wr(10)
+    if _r=='session_error': return False,'글쓰기 폼 확인 중 브라우저 세션 오류 — 읽기 재검수 필요'
+    if _r=='login': return False,'로그인이 필요한 게시판입니다 — 비회원 글쓰기 불가'
+    if _r=='need_login': return False,'로그인이 필요한 게시판입니다 — 비회원 글쓰기 불가(권한없음 안내)'
+    _wr_found=bool(_r)
+    # 재로드는 '부하로 폼만 못 그린 경우'에만 의미 있다. 진입 alert이 '존재하지 않는 게시판'(bo_table 오류)·권한/로그인
+    #   이면 재로드해도 똑같으니 건너뛴다(회원전용·없는게시판에 헛되이 16초 쓰지 않도록 — 2026-11-14 검증에서 확인).
+    _skip_reload=any(k in _wr_alert for k in ('존재하지','없는 게시판','권한이 없','권한 없','로그인','회원만','회원가입'))
+    if (not _wr_found) and (not _skip_reload):
+        # 부하로 놓쳤을 수 있으니 write.php 1회 재로드 후 더 길게(최대 8초) 재폴링.
         try:
-            if d.find_elements(By.CSS_SELECTOR,_WR_SEL):
-                _wr_found=True; break
-        except Exception:
-            return False,'글쓰기 폼 확인 중 브라우저 세션 오류 — 읽기 재검수 필요'
-        # 폴링 중 로그인 리다이렉트로 바뀌면 즉시 로그인필요 반환
-        try:
-            if 'login' in (d.current_url or '').lower():
-                return False,'로그인이 필요한 게시판입니다 — 비회원 글쓰기 불가'
+            dismiss_alerts(d)   # 혹시 남은 alert을 닫고 재로드(열린 alert 중 d.get→탭 크래시 방지)
+            d.get(f"{bbs}/write.php?bo_table={bo}"); time.sleep(1)
+            _ra=' '.join(dismiss_alerts(d) or [])
+            if any(k in _ra for k in ('존재하지','없는 게시판','권한이 없','권한 없','로그인','회원만','회원가입')):
+                return False,'로그인이 필요한 게시판입니다 — 비회원 글쓰기 불가(권한 alert)' if ('권한' in _ra or '로그인' in _ra or '회원' in _ra) else '글쓰기 폼(wr_subject) 없음 — 렌더링/비표준 스킨 읽기 재검수 필요'
         except Exception: pass
-        # ★JS 권한없음 스킨 감지: 리다이렉트 없이 200으로 온 '회원 전용' 안내를 잡아 자동가입으로 넘긴다.
-        try:
-            _ps=(d.page_source or '')
-            if (not d.find_elements(By.CSS_SELECTOR,_WR_SEL)) and any(t in _ps for t in _NEED_LOGIN_TXT):
-                return False,'로그인이 필요한 게시판입니다 — 비회원 글쓰기 불가(권한없음 안내)'
-        except Exception: pass
-        time.sleep(0.5)
+        _r2=_poll_wr(16)
+        if _r2=='login': return False,'로그인이 필요한 게시판입니다 — 비회원 글쓰기 불가'
+        if _r2=='need_login': return False,'로그인이 필요한 게시판입니다 — 비회원 글쓰기 불가(권한없음 안내)'
+        _wr_found=bool(_r2) and _r2 not in ('session_error',)
     if not _wr_found:
         # 마지막으로 남은 alert도 확인해 로그인/권한 문구면 로그인필요로 정확 분류
         _la=' '.join(dismiss_alerts(d) or [])
