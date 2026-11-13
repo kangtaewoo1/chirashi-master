@@ -351,6 +351,31 @@ def _monopoly_score(body):
     if 0 < recent_yr <= 24: score += 1   # 최근글 2024년 이하(1년+ 방치)
     return max(0, score)
 
+# ★본인인증 벽 발굴 필터(2026-11-14 대표님 지시 '본인인증 발굴 필터'): 휴대폰/실명 본인인증이
+#   강제인 게시판은 자동가입 자체가 불가능(NICE·checkplus 팝업 통과 불가) → 이런 게시판을 발굴 단계에서
+#   아예 ingest 안 해, 노드가 될 수 없는 사이트에 claim·가입 60초를 낭비하지 않게 한다.
+#   판정신호는 서버 learn_signup(app.py)과 '동일 기준' — 실제 인증 버튼/스크립트가 있을 때만(단순
+#   '본인인증' 단어는 약관에도 있어 오판). 서버가 signup_phone_cert로 영구제외하는 것과 같은 신호라
+#   과차단 위험 없음. 서버 영구제외는 그대로 백업으로 남는다(발굴에서 놓친 것도 서버가 잡음).
+_CERT_SIGNALS = ('win_hp_cert', 'fnPopCertify', 'checkplus_main', 'checkplus',
+                 'nice본인인증', 'callNiceModule', 'openCertPopup',
+                 '휴대폰 본인인증', '휴대폰본인인증', '실명인증 후')
+
+def _register_blocked_by_cert(base):
+    """가입 페이지에 '진짜 본인인증 벽'(자동가입 불가)이 있으면 True. 네트워크 오류면 False(fail-open)."""
+    for path in ("/bbs/register.php", "/bbs/register_form.php"):
+        try:
+            r = requests.get(base + path, headers=UA, timeout=7, verify=False, allow_redirects=True)
+            if r.status_code >= 400:
+                continue
+            html = (r.text or "")[:40000]
+            low = html.lower()
+            if any((k.lower() in low) for k in _CERT_SIGNALS):
+                return True
+        except Exception:
+            continue
+    return False
+
 def _has_board(dom):
     """도메인에 '실제 존재하는' 그누보드 게시판이 있는지 확인. 있으면 게시판 URL 반환, 없으면 ''.
        ★cafe24 판정 제거(수율0)·오판정 정밀화(2026-09-18 실측): 단순 'bo_table 문자열 존재'로 판정하면
@@ -375,6 +400,10 @@ def _has_board(dom):
                 r = requests.get(f"{base}/bbs/board.php?bo_table={bo}", headers=UA, timeout=7, verify=False, allow_redirects=True)
                 body = (r.text or "")[:30000]
                 if r.status_code < 400 and _is_real_board(body):
+                    # ★본인인증 벽이면 발굴 제외 — 자동가입 불가 사이트를 큐에 안 넣음(claim·가입 60초 낭비 차단).
+                    if _register_blocked_by_cert(base):
+                        log(f"  ⛔본인인증 벽 — 발굴 제외: {base}")
+                        return "", 0
                     return f"{base}/bbs/board.php?bo_table={bo}", _monopoly_score(body)
             except Exception:
                 pass
