@@ -1065,15 +1065,23 @@ def build_title(r,s,b,cfg,raw=None):
     #   '하대원동/심곡동/면목동'처럼 동을 살려 저장하는데, 이 폴백이 실존 동 547개를 전부 다시 축약해
     #   제목만 동이 빠졌다(본문엔 동 유지 → 어긋남). 실존 '동' 지역은 조합이 정한 표기를 제목에서
     #   그대로 둔다(KEEP_DONG 목록 의존 없이 regions_full 기준 O(1) 판정). 강동/검단동 등도 축약(강→)되던 것 함께 방지.
+    _strip=set(STRIP_DONG)
+    try:
+        for _w in re.split(r'[,\s]+',str((cfg or {}).get('region_strip_dong','') or '')):
+            if _w.strip(): _strip.add(_w.strip().rstrip('동') or _w.strip())
+    except Exception: pass
+    _names=set(_all_region_names())
+    def _keep_dong(_tok):
+        # 실존 '동'이면 기본 유지. 단 맨이름이 거점(STRIP_DONG)이면 제거 대상(폴백에서 normalize가 뗌).
+        return _tok.endswith('동') and _tok in _names and _tok[:-1] not in _strip
     def _nrm_region(_x):
         try:
             _s=str(_x or '').strip()
             if not _s: return _s
-            _names=set(_all_region_names())
-            if _s.endswith('동') and _s in _names:
+            if _keep_dong(_s):
                 return _s                       # 순수 동 토큰: 하대원동·심곡동 그대로
             _rg,_sv=_split_main_keyword(_s)
-            if _sv and _rg.endswith('동') and _rg in _names:
+            if _sv and _keep_dong(_rg):
                 return _rg+_s[len(_rg):]         # 동+업종(하대원동가라오케): 동 유지, 뒤는 그대로
             _y=normalize_region_in_text(_x,cfg)
             if _y==_x: _y=normalize_region(_x,cfg)
@@ -1120,6 +1128,13 @@ KEEP_DONG=set('''계산동 작전동 서창동 서현동 개포동 상수동 역
 #   설정(cfg['region_keep_eupmyeon'])로 추가 가능. 면은 원칙적으로 전부 제거(수요 거의 없음).
 KEEP_EUPMYEON=set('''통진읍 물금읍 봉담읍 화도읍 배방읍 진접읍 다사읍 향남읍 정관읍 공도읍 오창읍
 범서읍 남양읍 흥해읍 와부읍 곤지암읍 오포읍 백석읍 옥정읍 고덕읍 삼계읍'''.split())
+# ★STRIP_DONG(2026-11-14 대표님 '하대원동노래방으로 나와야'): 제목의 '동' 정책을 뒤집음.
+#   기존 build_title은 실존 동을 KEEP_DONG 외엔 전부 떼서(하대원동→하대원) 작은 법정동이 깨졌다.
+#   → 이제 '기본 유지'로 바꾸되, 맨이름이 검색수요 큰 거점 동(네이버 실측·2026-11-10 '제거확정')만 여기서 제거.
+#   즉 STRIP_DONG에 든 '맨이름'만 동을 떼고(부평동→부평), 나머지 실존 동은 그대로 유지(하대원동·심곡동·면목동).
+#   설정 cfg['region_strip_dong'](콤마구분)로 대표님이 거점을 계속 추가 가능.
+STRIP_DONG=set('''부평 화정 평촌 동탄 일산 잠실 양재 신촌 광교 송도 구로 대림 주안 신도림
+야탑 간석 고잔 성남 안산 압구정 합정 신림 망원 서면'''.split())
 
 _region_norm_cache={}
 def normalize_region(name, cfg=None):
