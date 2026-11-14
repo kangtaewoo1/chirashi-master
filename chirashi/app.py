@@ -10574,8 +10574,14 @@ def auto_pipeline_once(limit=5):
           # ★cafe24는 PC(한국 IP)만. 2026-11-09 실측: Hetzner IP는 cafe24가 통째로 차단('잠시 접속이 제한') → 서버가 시도하면
           #   차단 화면을 '사람 확인 필요'로 보고 탈락시켜 대기 후보 353곳을 버리게 됨. config server_cafe24_ok=True일 때만 서버가 시도.
           and not (c.get('platform')=='cafe24' and (_pc_node_alive() or not cfg.get('server_cafe24_ok')))
-          # ★노드 발행 전담(2026-09-14): node_publish_all이면 서버는 신규후보 발행도 노드에 무조건 위임(서버 ddddocr 없음).
-          and not cfg.get('node_publish_all',True)
+          # ★노드 발행 전담(2026-09-14): node_publish_all이면 신규후보 발행을 노드에 위임.
+          #   단 '비회원 바로가능(로그인 불필요·cafe24 아님)' 후보는 서버도 직접 처리한다(2026-11-14 대표님 지시 '사이트 늘려라'):
+          #   서버 DC IP가 막히는 건 로그인뿐 — 비회원 게시판은 서버가 성공시킨다(작업실 발행의 server_nonlogin_publish와 동일 원리).
+          #   실측: 비회원 바로가능 후보 223곳 중 187곳이 '노드 전담' 게이트에 막혀 한 번도 시도 안 됨.
+          and ((not cfg.get('node_publish_all',True))
+               or (cfg.get('server_nonlogin_publish',True)
+                   and c.get('write_form') and not c.get('login_required')
+                   and (c.get('platform') or 'gnuboard')!='cafe24'))
           and float(c.get('last_pipeline_at',0) or 0) < _cool]
     # (파이프라인 진단 로그 제거 — 처리할 후보 없을 때마다 매 주기 찍혀 화면 도배. 대표님 지시)
     # 비회원 글쓰기 가능(로그인 불필요) 게시판을 먼저 처리한다. 로그인 필요 게시판은
