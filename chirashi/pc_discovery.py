@@ -376,6 +376,25 @@ def _register_blocked_by_cert(base):
             continue
     return False
 
+def _register_impossible(base):
+    """가입 경로 자체가 없는 사이트면 True(발굴 제외). 네트워크 오류·정상약관화면은 False(fail-open).
+       ★가입불가 발굴 필터(2026-11-15 대표님 '발굴 필터도'): 게시판은 실재하나 가입이 구조적으로 불가능한
+       사이트(가입차단 오류페이지·404)를 발굴에서 제외 — 노드가 claim조차 안 하게 함(노드 조기차단으로
+       60초→<1초는 이미 막았지만, 애초에 큐에 안 넣는 게 근본). 실측: scast.kr register.php='오류안내 페이지'(200),
+       pfkco register.php=404. **과차단 방지(핵심)**: register.php가 200으로 열리고 오류단어가 없으면 전부 통과
+       (약관 동의가 필요한 정상 그누보드도 register.php는 200+약관내용이라 통과 — '약관 후 빈 폼'류는 여기서 안 거르고
+       노드 조기차단에 맡긴다). _ERR_WORDS는 _is_real_board가 게시판에 쓰는 것과 동일 기준. 서버 검수가 백업."""
+    try:
+        r = requests.get(base + "/bbs/register.php", headers=UA, timeout=7, verify=False, allow_redirects=True)
+    except Exception:
+        return False   # 네트워크 오류는 통과(fail-open) — 서버가 백업으로 잡음
+    if r.status_code >= 400:
+        return True    # 가입 페이지 4xx/5xx = 가입 경로 없음(pfkco 404)
+    body = (r.text or "")[:30000]
+    if any(w in body for w in _ERR_WORDS):
+        return True    # register.php가 오류안내/존재안함 페이지(scast '오류안내 페이지')
+    return False       # 그 외(정상 약관화면 포함)는 통과
+
 def _has_board(dom):
     """도메인에 '실제 존재하는' 그누보드 게시판이 있는지 확인. 있으면 게시판 URL 반환, 없으면 ''.
        ★cafe24 판정 제거(수율0)·오판정 정밀화(2026-09-18 실측): 단순 'bo_table 문자열 존재'로 판정하면
@@ -403,6 +422,10 @@ def _has_board(dom):
                     # ★본인인증 벽이면 발굴 제외 — 자동가입 불가 사이트를 큐에 안 넣음(claim·가입 60초 낭비 차단).
                     if _register_blocked_by_cert(base):
                         log(f"  ⛔본인인증 벽 — 발굴 제외: {base}")
+                        return "", 0
+                    # ★가입 경로 자체가 없는 사이트(오류페이지·404)도 발굴 제외(2026-11-15).
+                    if _register_impossible(base):
+                        log(f"  ⛔가입 불가(오류페이지/404) — 발굴 제외: {base}")
                         return "", 0
                     return f"{base}/bbs/board.php?bo_table={bo}", _monopoly_score(body)
             except Exception:
@@ -540,26 +563,30 @@ def run_once(max_queries):
         try: server_post("/api/candidates/ingest", {"urls": [], "node_id": NODE_ID})  # 관제실 하트비트만
         except Exception: pass
         return
-    # ★본인인증 벽 발굴 필터(2026-11-14): 검색경로도 crt.sh와 동일하게 — 가입페이지에 진짜 본인인증 벽이
-    #   있는 사이트는 자동가입 불가라 전송 전 걸러낸다(서버 claim·가입 60초 낭비 차단). 병렬 확인(노드 IP).
+    # ★가입불가 발굴 필터(2026-11-14 본인인증 + 2026-11-15 오류페이지/404): 검색경로도 crt.sh와 동일하게 —
+    #   ①가입페이지에 진짜 본인인증 벽 ②가입 경로 자체 없음(오류페이지·404)인 사이트는 자동가입 불가라
+    #   전송 전 걸러낸다(서버 claim·가입 60초 낭비 차단). 병렬 확인(노드 IP). 둘 다 fail-open·과차단 방지.
     before = len(urls)
-    def _cert_ok(u):
+    def _signup_ok(u):
         try:
             sp = urllib.parse.urlsplit(u)
             base = f"{sp.scheme}://{sp.netloc}"
-            return (not _register_blocked_by_cert(base)), u
+            if _register_blocked_by_cert(base): return False, u, "cert"
+            if _register_impossible(base):      return False, u, "impossible"
+            return True, u, ""
         except Exception:
-            return True, u   # 판정 실패는 통과(fail-open) — 서버가 백업으로 잡음
-    kept = []
+            return True, u, ""   # 판정 실패는 통과(fail-open) — 서버가 백업으로 잡음
+    kept = []; _n_cert = 0; _n_imp = 0
     with ThreadPoolExecutor(max_workers=12) as _ex:
-        for ok, u in _ex.map(_cert_ok, urls):
+        for ok, u, why in _ex.map(_signup_ok, urls):
             if ok: kept.append(u)
+            elif why == "cert": _n_cert += 1
+            elif why == "impossible": _n_imp += 1
     urls = kept
-    _blocked = before - len(urls)
-    if _blocked:
-        log(f"  ⛔본인인증 벽 {_blocked}곳 발굴 제외(자동가입 불가) — 전송 {len(urls)}개")
+    if _n_cert or _n_imp:
+        log(f"  ⛔발굴 제외 — 본인인증 벽 {_n_cert}곳·가입불가(오류/404) {_n_imp}곳 → 전송 {len(urls)}개")
     if not urls:
-        log("본인인증 벽 제외 후 전송할 신규 URL 없음.")
+        log("가입불가 제외 후 전송할 신규 URL 없음.")
         try: server_post("/api/candidates/ingest", {"urls": [], "node_id": NODE_ID})
         except Exception: pass
         return
