@@ -8868,6 +8868,14 @@ def screen_candidate(url, cfg=None):
             # 챌린지라 폼 확인 불가 — 하지만 cafe24는 챌린지 통과 후 폼이 나오므로 write_url은 이 경로로 기록해 발행이 시도되게.
             if not res.get('write_url'): res['write_url']=wu
             continue
+        # ★cafe24 CUPID JS 쿠키검사(2026-11-15 대표님 링크 실측): cafe24 호스팅의 /bbs/write.php가 cupid.js/slowAES로
+        #   쿠키 심고 리로드하는 봇체크 쉘(~1.6KB)만 HTTP로 돌아와 wr_subject가 안 보임 → 정적검수가 '폼 없음'으로 대량 탈락.
+        #   이건 Turnstile 같은 사람확인이 아니라 '브라우저면 자동 통과'하는 JS 쿠키라, 셀레늄은 넘어가 실제 그누보드 폼에 도달해
+        #   발행된다(실제로 과거 발행·구글색인 확인). → 탈락 말고 needs_browser로 유지(발행은 셀레늄이 처리).
+        if ('cupid.js' in wl or 'slowaes' in wl or 'ckattempt' in wl) and 'wr_subject' not in wl:
+            res['needs_browser']=True
+            if not res.get('write_url'): res['write_url']=wu
+            continue
         has_subject=('wr_subject' in wl or 'name="subject"' in wl or "name='subject'" in wl)
         has_content=('wr_content' in wl or 'name="content"' in wl or "name='content'" in wl)
         # ★Froala 등 JS 에디터: content textarea가 정적 HTML에 안 뜰 수 있음 → subject만 있어도 cafe24는 폼으로 인정.
@@ -9079,7 +9087,7 @@ def add_candidates_from(items, cfg, source='search'):
             url_is_board=bool(re.search(r'(bbs/board\.php|bo_table=|/board/.*list\.html|board_no=)',url.lower()))
             _is_board_login=bool(form_check.get('login_required')) and (
                 form_check.get('platform') in ('gnuboard','cafe24','kboard') or url_is_board)
-            if source!='manual' and not form_check.get('write_form') and not _is_board_login:
+            if source!='manual' and not form_check.get('write_form') and not _is_board_login and not form_check.get('needs_browser'):
                 blocked_write+=1
                 if form_check.get('reachable') and not form_check.get('captcha') and not form_check.get('cafe24_challenge'):
                     _quality_cache[url]={'reason':'no_write_form','retry_after':time.time()+6*3600}
