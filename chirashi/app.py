@@ -9637,6 +9637,19 @@ def auto_signup(site, submit=True):
         try: _hok0,_hmsg0=_gnuboard_signup_http(site,cfg,vals_by_role)
         except Exception as _he0: _hok0,_hmsg0=None,f'HTTP 가입 오류({str(_he0)[:50]})'
         if _hok0 is not None: return _hok0,_hmsg0
+        # ★타임아웃 조기차단(2026-11-14 대표님 '타임아웃 수정'): HTTP가 None(적용불가)이되 사유가 '구조적으로 가입 불가'
+        #   (가입차단 오류페이지·404·죽은서버·비표준스킨·약관 후 빈 폼)면 브라우저로 재시도해도 같은 결과다.
+        #   실측(probe_http_layer): scast.kr(오류안내 페이지)·pfkco(404)·eco-land(비표준)·canofix/hansoulil(죽음)·
+        #   dplaza/gsmf(약관 후 빈 폼) 전부 HTTP가 0.1~0.6초에 정확 판정하는데, 종전엔 이 None을 '브라우저 재시도'로
+        #   오해해 get_driver()→page_load 25s+폼폴링 30s=60초 타임아웃을 통째로 날렸음(타임아웃 55건/31%의 주범).
+        #   → 구조적 불가 사유면 즉시 False(발행 못하는 건 같지만 60초→<1초, 그 시간에 다른 후보 처리).
+        #   '브라우저로만 되는 JS 가입폼' 극소수 보호를 위해 명확한 구조적 None만 차단(과차단 금지).
+        _hm=str(_hmsg0 or '')
+        _STRUCT_NONE=('표준 약관 화면 아님','가입 접속 실패','약관 동의 후 가입 폼 없음',
+                      '표준 아이디/비밀번호 칸 없음','가입 폼 열기 실패','HTTP 가입 오류')
+        if any(k in _hm for k in _STRUCT_NONE):
+            add_log(f'[자동가입] {_snm} — HTTP 구조적 불가({_hm[:50]}) → 브라우저 60초 생략, 즉시 넘어감')
+            return False,f'자동가입 불가(구조적) — {_hm[:80]}'
         site['_http_signup_tried']=_hmsg0
     d=get_driver()
     # 그누보드 가입은 register.php(약관) → 동의 → register_form.php(실제 폼) 2단계다.
