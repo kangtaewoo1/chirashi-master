@@ -1071,9 +1071,25 @@ def build_title(r,s,b,cfg,raw=None):
             if _w.strip(): _strip.add(_w.strip().rstrip('동') or _w.strip())
     except Exception: pass
     _names=set(_all_region_names())
+    try: _sis=set(_region_sis())
+    except Exception: _sis=set()
+    _keepset=set(KEEP_DONG)
+    try:
+        for _w in re.split(r'[,\s]+',str((cfg or {}).get('region_keep_dong','') or '')):
+            if _w.strip(): _keepset.add(_w.strip())
+    except Exception: pass
+    def _is_gu_si(_bare):
+        # 맨이름 자체가 구/시(계양=계양구, 과천=과천시)면 동을 떼야 함(대표님 2026-11-15).
+        return len(_bare)>=2 and ((_bare+'구' in _names) or (_bare+'시' in _names) or (_bare in _sis))
     def _keep_dong(_tok):
-        # 실존 '동'이면 기본 유지. 단 맨이름이 거점(STRIP_DONG)이면 제거 대상(폴백에서 normalize가 뗌).
-        return _tok.endswith('동') and _tok in _names and _tok[:-1] not in _strip
+        # 실존 '동'이면 기본 유지. 단 ①KEEP 큐레이션은 무조건 유지 ②맨이름이 거점(STRIP_DONG)이거나
+        #   ③맨이름이 구/시(계양동→계양·과천동→과천)면 제거 대상(폴백 normalize가 뗌).
+        if not (_tok.endswith('동') and _tok in _names): return False
+        if _tok in _keepset: return True
+        _bare=_tok[:-1]
+        if _bare in _strip: return False
+        if _is_gu_si(_bare): return False
+        return True
     def _nrm_region(_x):
         try:
             _s=str(_x or '').strip()
