@@ -1199,11 +1199,16 @@ def _kw_service_suffixes():
             '1인샵','타이마사지','아로마','로미로미','스포츠마사지','감성마사지','왁싱샵','1인샵마사지'},key=len,reverse=True)
     return _KW_SERVICE_SUF
 
+# ★대표님이 명시한 '살릴' 읍/법정동(2026-11-14 '김포면 통진 고촌 … 인천 을왕리 …'): 기본 면·읍 제외·미등록이라 걸러지지만
+#   대표님이 콕 집은 번화·관광 지역이라 예외로 발행 허용(_region_is_real=True, _is_rural_myeon_eup=False).
+_KEEP_RURAL_REGIONS={'통진','고촌','북변','을왕리'}
+
 def _region_is_real(reg):
     """지역부분(reg)이 실존하는지 판정. ★보수적(오탐방지): 조금이라도 실존 근거 있으면 True.
        실존: regions_full 행정구역 / 387개 지하철역 / 광역·축약형 / 실제지역명으로 시작 or 끝."""
     r=str(reg or '').strip()
     if not r: return True   # 판정불가 → 통과
+    if r in _KEEP_RURAL_REGIONS: return True
     names=set(_all_region_names())
     METRO={'경기','서울','인천','부산','대구','대전','광주','울산','강원','충남','충북','세종','전북','전남','경북','경상','제주'}
     # ★법정동·KTX역 보강(2026-11-14 천안 추가): regions_full은 행정동만 있어 법정동(두정동→부성동, 신부동→신안동 소속)과
@@ -10895,6 +10900,7 @@ def _is_rural_myeon_eup(r):
     try:
         r=str(r or '').strip()
         if not r: return False
+        if r in _KEEP_RURAL_REGIONS: return False   # 대표님 지정 — 면·읍이라도 유지
         names=set(_all_region_names())
         # ① 역세권(번화가) → 유지
         if r in _STATIONS or (r+'역') in _STATIONS: return False
