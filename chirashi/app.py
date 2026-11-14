@@ -1060,9 +1060,21 @@ def build_title(r,s,b,cfg,raw=None):
     ph=format_phone_random(raw)   # 번호 표기만 매번 살짝 변형(순서·키워드는 고정)
     # ★지역명 정규화(2026-11-10 버그수정): normalize_region_in_text는 '지역+업종 결합형'만 처리해
     #   순수 지역 토큰(_split로 분리된 '부평동')은 동이 안 떨어졌다 → 미변시 normalize_region 폴백.
-    #   r(메인)·b(키워드3) 둘 다 적용 → 제목 리드와 키워드3의 동 표기가 규칙(부평/화정→동제거, 서창동/서현동→유지)을 따름.
+    #   r(메인)·b(키워드3) 둘 다 적용 → 제목 리드와 키워드3의 동 표기가 규칙을 따름.
+    # ★2026-11-14 대표님 '하대원노래방 아니라 하대원동노래방': 조합(keyword_csv)·_auto_subkeywords는
+    #   '하대원동/심곡동/면목동'처럼 동을 살려 저장하는데, 이 폴백이 실존 동 547개를 전부 다시 축약해
+    #   제목만 동이 빠졌다(본문엔 동 유지 → 어긋남). 실존 '동' 지역은 조합이 정한 표기를 제목에서
+    #   그대로 둔다(KEEP_DONG 목록 의존 없이 regions_full 기준 O(1) 판정). 강동/검단동 등도 축약(강→)되던 것 함께 방지.
     def _nrm_region(_x):
         try:
+            _s=str(_x or '').strip()
+            if not _s: return _s
+            _names=set(_all_region_names())
+            if _s.endswith('동') and _s in _names:
+                return _s                       # 순수 동 토큰: 하대원동·심곡동 그대로
+            _rg,_sv=_split_main_keyword(_s)
+            if _sv and _rg.endswith('동') and _rg in _names:
+                return _rg+_s[len(_rg):]         # 동+업종(하대원동가라오케): 동 유지, 뒤는 그대로
             _y=normalize_region_in_text(_x,cfg)
             if _y==_x: _y=normalize_region(_x,cfg)
             return _y
