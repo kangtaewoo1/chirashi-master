@@ -10340,6 +10340,63 @@ def _has_write_path(c):
     u=(c.get('url') or '').lower()
     return bool(re.search(r'(bbs/|board\.php|write\.php|bo_table=|/board/|board_no=|kboard)', u))
 
+# ★도메인별 계정 1개 재사용(2026-11-14 대표님 지시 '가입 병목'): 한 사이트의 게시판마다 따로 가입해
+#   계정을 버리고 '이미 사용중인 이메일'로 실패하던 문제. 가입 성공하면 도메인→계정을 저장해 두고,
+#   같은 도메인의 다른 게시판·다음 시도는 가입을 건너뛰고 이 계정으로 로그인만 한다(발행 실패해도 계정은 보존).
+DOMAIN_ACCOUNTS_FILE=DATA_DIR/'domain_accounts.json'
+_DOMAIN_ACCT_LOCK=threading.Lock()          # 파일 R/W 보호
+_DOMAIN_SIGNUP_LOCKS={}                      # 도메인 -> Lock(도메인별 동시가입 1개로 직렬화)
+_DOMAIN_SIGNUP_LOCKS_GUARD=threading.Lock()
+
+def _domain_signup_lock(domain):
+    with _DOMAIN_SIGNUP_LOCKS_GUARD:
+        return _DOMAIN_SIGNUP_LOCKS.setdefault(str(domain or ''),threading.Lock())
+
+def _domain_acct_get(domain):
+    """저장된 도메인 계정 {mb_id,mb_pass,base,http_member} 또는 None."""
+    d=str(domain or '').lower()
+    if not d: return None
+    with _DOMAIN_ACCT_LOCK:
+        store=load_json(DOMAIN_ACCOUNTS_FILE,{}) or {}
+    rec=store.get(d)
+    if not isinstance(rec,dict) or not rec.get('mb_id'): return None
+    out=dict(rec); out['mb_pass']=_decrypt_password(rec.get('mb_pass_enc') or rec.get('mb_pass','') or '')
+    return out if out.get('mb_pass') else None
+
+def _domain_acct_put(domain,mb_id,mb_pass,base='',http_member=False):
+    d=str(domain or '').lower()
+    if not d or not mb_id or not mb_pass: return
+    with _DOMAIN_ACCT_LOCK:
+        store=load_json(DOMAIN_ACCOUNTS_FILE,{})
+        if not isinstance(store,dict): store={}
+        if store.get(d,{}).get('mb_id')==mb_id: return   # 이미 같은 계정 저장됨
+        store[d]={'mb_id':mb_id,'mb_pass_enc':_encrypt_password(mb_pass),'base':base,
+                  'http_member':bool(http_member),'created_at':datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+        save_json(DOMAIN_ACCOUNTS_FILE,store)
+
+def _reuse_domain_account(tmp,domain):
+    """tmp에 도메인 저장계정을 채운다. 채웠으면 True(=가입 생략)."""
+    if str(tmp.get('mb_id') or '').strip(): return True
+    rec=_domain_acct_get(domain)
+    if not rec: return False
+    tmp['mb_id']=rec['mb_id']; tmp['mb_pass']=rec['mb_pass']
+    tmp['login_required']=True
+    if rec.get('http_member'): tmp['http_member']=True
+    return True
+
+def _signup_or_reuse(tmp,domain,base,timeout):
+    """도메인 락 안에서: 저장계정 있으면 재사용(가입 생략), 없으면 가입 1회 후 계정 저장.
+       반환 (ok, msg, reused)."""
+    lk=_domain_signup_lock(domain)
+    with lk:
+        if _reuse_domain_account(tmp,domain):
+            return True,'저장된 도메인 계정 재사용',True
+        ok,msg=auto_signup_guarded(tmp,submit=True,timeout=timeout)
+        if ok and str(tmp.get('mb_id') or '').strip():
+            try: _domain_acct_put(domain,tmp.get('mb_id'),tmp.get('mb_pass'),base,bool(tmp.get('http_member')))
+            except Exception: pass
+        return ok,msg,False
+
 def auto_pipeline_once(limit=5):
     """완전 자동 파이프라인: ready 후보 → (필요시)자동가입 → 실제 글1건 발행 → 성공시 자동등록.
        배치당 limit개만 처리(부하·탐지 회피). 반환: 요약 dict."""
@@ -10531,14 +10588,17 @@ def auto_pipeline_once(limit=5):
                 tmp['write_entry_url']=_curl   # /article/ 아니어도 발굴 URL을 진입 후보로
         # ★대표님 지시: 이미 등록된 사이트에 저장된 계정(mb_id/mb_pass)이 있으면 그걸 써서 로그인 발행한다.
         #   (계정이 있는데 새로 자동가입하려다 '중복ID'로 실패하던 버그 — sungsim처럼 대표님이 준 계정)
+        _dom0=(c.get('domain') or _domain_of(c.get('url',''))).lower()
         try:
-            _dom0=(c.get('domain') or _domain_of(c.get('url',''))).lower()
             _saved=next((s for s in load_sites()
                          if _domain_of(s.get('site_url',''))==_dom0 and str(s.get('mb_id') or '').strip()),None)
             if _saved:
                 tmp['mb_id']=_saved.get('mb_id',''); tmp['mb_pass']=_saved.get('mb_pass','')
                 tmp['bo_table']=_saved.get('bo_table') or tmp['bo_table']
                 add_log(f'[계정 재사용] {name} — 저장된 계정({tmp["mb_id"]})으로 로그인 발행(자동가입 생략)')
+            # 등록 사이트에 없으면 도메인 계정 저장소(가입만 성공하고 아직 발행 전인 형제 게시판 포함)에서 재사용
+            elif _reuse_domain_account(tmp,_dom0):
+                add_log(f'[계정 재사용] {name} — 같은 사이트에서 만든 계정({tmp["mb_id"]})으로 로그인(자동가입 생략)')
         except Exception: pass
         try:
             _just_signed=False
@@ -10559,11 +10619,12 @@ def auto_pipeline_once(limit=5):
             _has_account = bool(str(tmp.get('mb_id') or '').strip())
             _login_first = (not _has_account) and bool(c.get('login_required')) and not c.get('write_form')
             if _login_first:
-                # 게시판 자체가 로그인 필수 + 저장된 계정 없음 → 자동가입으로 계정 생성(성공시 저장·재사용)
-                ok_su,msg_su=auto_signup_guarded(tmp,submit=True,timeout=int(load_config().get('pipeline_signup_timeout',150) or 150))
+                # 게시판 자체가 로그인 필수 + 저장된 계정 없음 → 도메인당 1회 가입(성공시 저장·형제 게시판 재사용)
+                ok_su,msg_su,_reused=_signup_or_reuse(tmp,_dom0,tmp.get('site_url',''),int(load_config().get('pipeline_signup_timeout',150) or 150))
                 if ok_su:
-                    with _pipe_lock: signed+=1
-                    _just_signed=True
+                    if not _reused:
+                        with _pipe_lock: signed+=1
+                    _just_signed=not _reused   # 재사용은 브라우저 세션이 없으니 로그인부터(skip_login 금지)
                 else:
                     # ★본인인증(휴대폰) 필수 사이트는 phone_cert 마킹 → 앞으로 자동가입 시도 자체를 안 함(7261 manual_signup 분류).
                     _pc=any(k in str(msg_su) for k in ('본인인증','휴대폰','실명','인증해주'))
@@ -10582,12 +10643,13 @@ def auto_pipeline_once(limit=5):
             if (not ok) and (not tmp.get('mb_id')) and _need_su:
                 reset_driver(); time.sleep(1)
                 add_log(f'[파이프라인] {name} 로그인필요 → 자동가입 시도')
-                ok_su,msg_su=auto_signup_guarded(tmp,submit=True,timeout=int(load_config().get('pipeline_signup_timeout',150) or 150))
+                ok_su,msg_su,_reused=_signup_or_reuse(tmp,_dom0,tmp.get('site_url',''),int(load_config().get('pipeline_signup_timeout',150) or 150))
                 if ok_su:
-                    with _pipe_lock: signed+=1
-                    add_log(f'[파이프라인] {name} 자동가입 성공 → 세션 재사용 재발행')
-                    # reset_driver 하지 않음 — 가입 직후 로그인된 세션을 그대로 써서 발행(비표준 로그인폼 구제)
-                    ok,msg=do_post(tmp,title,html,skip_login=not tmp.get('http_member'))   # ★HTTP 가입 직후엔 HTTP 로그인 발행(2026-11-09 세안타올 실측)
+                    if not _reused:
+                        with _pipe_lock: signed+=1
+                    add_log(f'[파이프라인] {name} {"계정 재사용" if _reused else "자동가입 성공"} → 재발행')
+                    # 가입 직후면 로그인된 세션 그대로(skip_login), 재사용이면 세션이 없으니 로그인부터
+                    ok,msg=do_post(tmp,title,html,skip_login=(not _reused) and not tmp.get('http_member'))
                 else:
                     add_log(f'[파이프라인] {name} 자동가입 실패: {str(msg_su)[:80]}')
                     msg=f'{msg} · 자동가입 실패: {str(msg_su)[:60]}'
