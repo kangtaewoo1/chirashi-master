@@ -10374,6 +10374,35 @@ def _domain_acct_put(domain,mb_id,mb_pass,base='',http_member=False):
                   'http_member':bool(http_member),'created_at':datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         save_json(DOMAIN_ACCOUNTS_FILE,store)
 
+def _domain_acct_mark_fail(domain,threshold=2):
+    """계정은 있는데 로그인/권한이 안 돼 발행 실패한 횟수를 도메인에 누적. threshold 이상이면 blocked=True로 표시하고
+       blocked 여부를 반환. (게시판 하나가 관리자전용일 수 있으니 2곳 이상 실패해야 사이트 전체를 접는다.)"""
+    d=str(domain or '').lower()
+    if not d: return False
+    with _DOMAIN_ACCT_LOCK:
+        store=load_json(DOMAIN_ACCOUNTS_FILE,{})
+        if not isinstance(store,dict): store={}
+        rec=store.get(d) if isinstance(store.get(d),dict) else {}
+        rec['write_fail']=int(rec.get('write_fail',0) or 0)+1
+        if rec['write_fail']>=threshold: rec['blocked']=True
+        store[d]=rec; save_json(DOMAIN_ACCOUNTS_FILE,store)
+        return bool(rec.get('blocked'))
+
+def _domain_blocked(domain):
+    d=str(domain or '').lower()
+    if not d: return False
+    with _DOMAIN_ACCT_LOCK:
+        store=load_json(DOMAIN_ACCOUNTS_FILE,{}) or {}
+    return bool(isinstance(store.get(d),dict) and store[d].get('blocked'))
+
+def _domain_blocked_set():
+    with _DOMAIN_ACCT_LOCK:
+        store=load_json(DOMAIN_ACCOUNTS_FILE,{}) or {}
+    return {k for k,v in store.items() if isinstance(v,dict) and v.get('blocked')}
+
+# 계정(mb_id)이 있는데도 이 문구로 실패하면 '로그인/권한 안 됨'(사이트 전체 의심) 신호.
+_LOGIN_PERM_FAIL_RE=re.compile(r'(권한이? ?없|로그인이? 필요|로그인 실패|로그인 화면|회원이시라면 로그인|글을 쓸 권한|회원 발행 불가|비회원 글쓰기 폼 아님|회원만)')
+
 def _reuse_domain_account(tmp,domain):
     """tmp에 도메인 저장계정을 채운다. 채웠으면 True(=가입 생략)."""
     if str(tmp.get('mb_id') or '').strip(): return True
@@ -10479,6 +10508,16 @@ def auto_pipeline_once(limit=5):
                 pruned+=1
             if pruned:
                 save_cands(cands); add_log(f'[빡센검수 정리] 홍보흔적 없는 대기 후보 {pruned}곳 탈락 — 될 만한 것만 남김','정리')
+    # ★'가입해도 글 못 씀' 사이트 정리(2026-11-14): 같은 도메인에서 계정이 있는데도 2곳 이상 로그인/권한으로 막힌 사이트는
+    #   회원가입 후 관리자승인·등급제한이 걸린 곳 → 같은 사이트의 남은 게시판을 더 시도하지 않고 한꺼번에 탈락(슬롯 절약).
+    _blocked_doms=_domain_blocked_set()
+    if _blocked_doms:
+        _bp=0
+        for _c in cands:
+            if _c.get('status') in ('ready','approved') and (_c.get('domain') or _domain_of(_c.get('url',''))).lower() in _blocked_doms:
+                _c['status']='rejected'; _c['reject_reason']='회원가입해도 글쓰기 권한 없음(사이트 전체 — 승인대기/등급제한 추정)'; _bp+=1
+        if _bp:
+            save_cands(cands); add_log(f'[회원 글쓰기 불가 정리] 가입해도 막힌 사이트의 게시판 {_bp}곳 탈락 — 될 만한 곳에 집중','정리')
     # 대상: 검수완료(ready) + 아직 사이트 미등록 + 자동탈락 아님 + '글쓰기 가능성'이 있는 것.
     # (114/맵 등 전화번호·디렉토리 사이트는 게시판이 아니라 제외. 그 외 게시판형 후보는
     #  글쓰기폼 미확인이라도 일단 자동가입→발행 시도해 되는지 판별한다 — 방치 없이 되거나 탈락)
@@ -10589,6 +10628,11 @@ def auto_pipeline_once(limit=5):
         # ★대표님 지시: 이미 등록된 사이트에 저장된 계정(mb_id/mb_pass)이 있으면 그걸 써서 로그인 발행한다.
         #   (계정이 있는데 새로 자동가입하려다 '중복ID'로 실패하던 버그 — sungsim처럼 대표님이 준 계정)
         _dom0=(c.get('domain') or _domain_of(c.get('url',''))).lower()
+        # 같은 배치에서 형제 게시판이 이미 '가입해도 글 못 씀'으로 판정했으면 더 시도하지 않음
+        if _domain_blocked(_dom0):
+            try: _cand_set(c['id'],status='rejected',reject_reason='회원가입해도 글쓰기 권한 없음(사이트 전체 — 승인대기/등급제한 추정)')
+            except Exception: pass
+            return
         try:
             _saved=next((s for s in load_sites()
                          if _domain_of(s.get('site_url',''))==_dom0 and str(s.get('mb_id') or '').strip()),None)
@@ -10682,6 +10726,15 @@ def auto_pipeline_once(limit=5):
                 #   특히 cafe24 '스팸/금지어 차단'은 문구에 '일시적'이 들어가 classify_fail이 일시적으로 오판하므로 명시 차단.
                 if any(k in str(msg) for k in ('스팸/금지어 차단','콘텐츠 거부','본인인증','영구 제외','승인제 게시판')):
                     is_temp=False
+                # ★계정이 있는데도 로그인/권한으로 막힌 실패면 도메인에 누적 → 2곳째면 사이트 전체를 '가입해도 글 못 씀'으로 접는다.
+                #   (가입 후 관리자승인·등급제한 사이트. cafe24는 사람확인 등 다른 경로라 제외.)
+                if (str(tmp.get('mb_id') or '').strip() and tmp.get('platform')!='cafe24'
+                        and _LOGIN_PERM_FAIL_RE.search(str(msg)) and '[admin_only]' not in str(msg)):
+                    try:
+                        if _domain_acct_mark_fail(_dom0):
+                            is_temp=False
+                            add_log(f'[회원 글쓰기 불가] {name} — 가입했지만 로그인/권한 거부 2회 → 이 사이트 회원 게시판 전체 접음({_dom0})','정리')
+                    except Exception: pass
                 # 일시적 실패라도 무한 재시도로 배치 슬롯을 소모하지 않게 상한(5회)을 둔다.
                 attempts=int(c.get('pipeline_attempts',0) or 0)+1
                 if '[admin_only]' in str(msg):
