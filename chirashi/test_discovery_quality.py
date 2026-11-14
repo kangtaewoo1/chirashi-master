@@ -26,7 +26,8 @@ class DiscoveryQualityTests(unittest.TestCase):
         self.assertEqual(len(rows),2);self.assertEqual(skipped,1);self.assertEqual(rows[0]['title'],'홍보게시판')
     def test_queries_use_board_intent_instead_of_phone_ads(self):
         queries=finder_queries();self.assertGreaterEqual(len(queries),10)
-        self.assertTrue(all('홍보' in x or '광고' in x for x in queries));self.assertFalse(any('010' in x for x in queries))
+        # 게시판 의도(홍보/광고 게시판 + cafe24 상품 Q&A 게시판)만 허용, 전화번호 광고 쿼리는 금지.
+        self.assertTrue(all(('홍보' in x or '광고' in x or '상품' in x) for x in queries));self.assertFalse(any('010' in x for x in queries))
     def test_campaign_terms_create_deduplicated_board_searches(self):
         queries=campaign_queries('사무실 청소, 정기 청소\n서울 청소업체, 사무실 청소')
         self.assertEqual(len(queries),6)
