@@ -8775,7 +8775,12 @@ def screen_candidate(url, cfg=None):
         if _corp_t or _bt in _CORP_STRONG:
             res['corp_board']=(_corp_t[0] if _corp_t else _bt)
     except Exception: pass
-    res['parked']=(any(w in low or w in tl for w in PARKED_WORDS) or len(html)<800)
+    # ★CUPID JS-쿠키 봇체크 쉘(cupid.js/slowAES/ckattempt, ~789B)은 len<800에 걸려 '주차/만료'로 오판됐음
+    #   (2026-11-16 aureumdental 실측). 이건 주차가 아니라 '브라우저면 자동통과'하는 쿠키 쉘 → needs_browser로 유지.
+    _is_cupid_shell=('cupid.js' in low or 'slowaes' in low or 'ckattempt' in low)
+    res['parked']=(any(w in low or w in tl for w in PARKED_WORDS) or (len(html)<800 and not _is_cupid_shell))
+    if _is_cupid_shell and not res['parked']:
+        res['needs_browser']=True
     # ★언론사·관리자페이지 오발굴 컷(2026-09-15 대표님 '발굴 품질·오발굴 컷'): 실측상 자동가입 실패 최다(7건)가
     #   신문/저널/일보/투데이/뉴스 등 언론사와 '게시판관리/관리자매뉴얼' 관리자페이지였음 — 회원가입이 없거나
     #   기자용이라 앱이 가입 불가. 후보 단계에서 걸러 헛가입 시도를 원천 차단(발행 대상 아님).
