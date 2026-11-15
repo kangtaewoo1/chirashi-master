@@ -4545,14 +4545,36 @@ def _gnuboard_signup_http(site, cfg, vals):
     if 'mb_nick' in data: _chk.append(('ajax.mb_nick.php',{'reg_mb_nick':data['mb_nick'],'reg_mb_id':data.get('mb_id','')},'mb_nick'))
     if 'mb_email' in data: _chk.append(('ajax.mb_email.php',{'reg_mb_email':data['mb_email'],'reg_mb_id':data.get('mb_id','')},'mb_email'))
     if data.get('mb_hp'): _chk.append(('ajax.mb_hp.php',{'reg_mb_hp':data['mb_hp'],'reg_mb_id':data.get('mb_id','')},'mb_hp'))
+    # ★ajax 응답은 '세션 priming' 보조 단계일 뿐 — 최종 판정이 아니다(2026-11-16 가입성공0 원인).
+    #   예전: 응답에 메시지만 있으면 즉시 False → (a)'이미 사용중'(고정계정 존재)인데도 중복 로그인 폴백에
+    #   도달 못함, (b)'회원아이디를 입력해 주십시오'처럼 ajax가 추가 파라미터를 요구하는 사이트는 제출을 한 번도
+    #   안 해보고 포기. 이제: 중복이면 바로 고정계정 로그인 폴백 시도, 그 외 메시지는 priming만 하고 제출 단계가
+    #   (제출 응답 + 로그인 확인으로) 판정하게 넘긴다.
     for _php,_dat,_fld in _chk:
         try:
             cr=s.post(f'{bbs}/{_php}',data=_dat,timeout=12,headers={'Referer':r2.url,'X-Requested-With':'XMLHttpRequest'})
         except Exception:
             continue
         _msg=re.sub(r'<[^>]+>','',cr.text or '').strip()
-        if cr.status_code<400 and _msg and len(_msg)<200:
-            return False,f'HTTP 가입 실패 — {_fld} 확인 거절({_msg[:60]})'
+        if not (cr.status_code<400 and _msg and len(_msg)<200):
+            continue
+        if _fld=='mb_id' and re.search(r'이미\s*(?:사용|등록|가입|존재)|중복',_msg):
+            # ★고정계정이 이 사이트엔 이미 있음 → 재가입 대신 그 계정으로 바로 로그인(제출·캡차 생략).
+            _fid=str(cfg.get('signup_fixed_id') or '').strip()
+            _fpw=str(cfg.get('signup_fixed_pw') or '').strip()
+            if _fid and _fpw:
+                _lmid=data.get('mb_id') or _fid; _lpw=data.get('mb_password') or _fpw
+                try: _dli=_gnuboard_http_login(_rq.Session(),base,_lmid,_lpw)
+                except Exception: _dli=False
+                if _dli:
+                    site['mb_id']=_lmid; site['mb_pass']=_lpw; site['http_member']=True; site['no_verify']=True
+                    set_site_flag(site.get('id'),mb_id=_lmid,mb_pass=_lpw,signup_status='complete',login_saved=True,
+                                  no_verify=True,http_member=True,signup_via='http_dup_login',
+                                  signup_updated_at=datetime.now().isoformat(timespec='seconds'))
+                    add_log(f'[자동가입 성공] 🌐HTTP ajax중복→로그인 {nm} — {_lmid}(이미 가입된 계정 재사용)')
+                    return True,f'자동가입 성공(HTTP 중복계정 로그인) — {_lmid}'
+            # 고정계정 미설정이거나 로그인 실패면 제출 단계로 넘겨 거기서 판정(ajax만으로 포기하지 않음).
+        # 그 외 메시지(입력 요구 등)는 priming만 — 제출 단계가 최종 판정.
     cap_m=re.search(r'g5_captcha_url\s*=\s*["\']([^"\']+)["\']',r2.text or '')
     needs_cap=bool(cap_m) or 'captcha_key' in low
     cap_base=cap_m.group(1) if cap_m else base+'/plugin/kcaptcha'
