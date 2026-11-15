@@ -2503,6 +2503,26 @@ def send_telegram_doc(cfg, filename, data_bytes, caption=''):
         return bool(j.get('ok')),('' if j.get('ok') else str(j)[:150])
     except Exception as e: return False,str(e)[:150]
 
+# ==================== Turnstile 사이트키 탐지·분류 (보고용 — 솔버 연결 없음) ====================
+#  공개 DOM의 data-sitekey/turnstile.render sitekey를 읽어 '테스트키(자동통과) vs 실제키(사람 클릭 필요)'로
+#  분류해 후보기록에 남긴다. 외부 캡차 풀이 서비스로 보내지 않는다(대표님 2026-11-16: 탐지→분류→보고까지만).
+_CF_TEST_SITEKEYS={'1x00000000000000000000AA','2x00000000000000000000AB',
+                   '1x00000000000000000000BB','2x00000000000000000000BB',
+                   '3x00000000000000000000FF'}
+def extract_turnstile_sitekey(html):
+    """페이지 HTML에서 Cloudflare Turnstile 사이트키를 읽어온다(공개 DOM 값 — 탐지/분류용, 풀이 아님)."""
+    if not html: return ''
+    for pat in (r'data-sitekey\s*=\s*["\']([0-9][xX][A-Za-z0-9_-]{18,})["\']',
+                r'sitekey["\']?\s*[:=]\s*["\']([0-9][xX][A-Za-z0-9_-]{18,})["\']'):
+        m=re.search(pat,html)
+        if m: return m.group(1)
+    return ''
+def classify_sitekey(sk):
+    """test=클플 공식 테스트키(사람·솔버 없이 자동통과) · real=실제키(사람 클릭 노드 필요) · ''=없음."""
+    if not sk: return ''
+    if sk in _CF_TEST_SITEKEYS or re.match(r'^[123][xX]0{16,}[A-Za-z]{2}$',sk): return 'test'
+    return 'real'
+
 # ==================== 캡차 / 보안 인증 감지 (우회 아님 — 감지해서 제외) ====================
 def detect_captcha(d):
     """현재 페이지에 캡차/보안 인증이 '실제로' 있는지 감지. 있으면 종류, 없으면 ''.
@@ -8913,6 +8933,10 @@ def screen_candidate(url, cfg=None):
         if ('veritas-hub' in _finu or '/challenge' in _finu or 'cf-turnstile' in wl or 'turnstile' in _finu
              or 'cf-chl' in wl or 'challenges.cloudflare' in wl):
             res['cafe24_challenge']=True; res['captcha']='turnstile'
+            # ★Turnstile 사이트키 탐지·분류(보고용): 테스트키면 자동통과(노드 불필요), 실제키면 사람 클릭 노드 대상.
+            _sk=extract_turnstile_sitekey(wh)
+            if _sk:
+                res['turnstile_sitekey']=_sk; res['turnstile_sitekey_kind']=classify_sitekey(_sk)
             # 챌린지라 폼 확인 불가 — 하지만 cafe24는 챌린지 통과 후 폼이 나오므로 write_url은 이 경로로 기록해 발행이 시도되게.
             if not res.get('write_url'): res['write_url']=wu
             continue
