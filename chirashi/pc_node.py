@@ -670,6 +670,192 @@ def run(once=False, workers=None, idle=30):
             log(f"루프 오류: {e} — 15초 후 계속"); time.sleep(15)
 
 
+#  ═══════════════ 한국 IP 발굴 수집기(2026-11-17) ═══════════════
+#  서버(Hetzner)는 Brave 크레딧 0 + Bing/DDG/Google이 서버 IP엔 결과 0(차단/JS셸)이라 신규 발굴이 0에 수렴.
+#  노드는 한국 주거 IP라 Google(크롬 렌더링)이 깊은 한국 게시판 색인을 땀 → 신규 게시판 URL만
+#  서버 /api/candidates/ingest로 보낸다(source='pc', 서버가 검수·발행테스트).
+#  Google은 크롬 필요(JS 렌더링)·Bing은 HTTP 보조(크롬 없어도 됨).
+import re as _dre, json as _djson, random as _drandom, urllib.parse as _duparse, base64 as _db64
+
+_DISC_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+_DISC_BLACK = ('naver.', 'daum.net', 'google.', 'youtube.', 'facebook.', 'instagram.',
+               'tistory.com', 'blog.', 'bing.com', 'microsoft', 'msn.com', 'wikipedia.',
+               'namu.wiki', 'kakao.', 'tiktok.', 'twitter.', 'x.com', 'pinterest.',
+               'zhihu', 'gstatic', 'gov.kr', 'go.kr')   # 공공기관은 홍보 부적합·검수에서 어차피 탈락
+_DISC_BOARD = ('/bbs/board.php', 'bo_table=', '/board/', 'mid=', '/zboard/',
+               'write.php', '/g5/', 'board_no=', '/community')
+_DISC_CURSOR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.discover_cursor')
+
+
+def _disc_get_queries():
+    """서버에서 발굴 쿼리 + known/rejected 도메인을 받는다(서버와 단일 소스)."""
+    try:
+        r = requests.get(f"{SERVER}/api/discovery/queries?token={SERVER_TOKEN}",
+                         headers=UA, timeout=60, verify=False)
+        if r.status_code != 200:
+            log(f"[발굴] 쿼리 수신 실패 HTTP {r.status_code}"); return [], set(), set()
+        j = r.json()
+        if not j.get('ok'):
+            log(f"[발굴] 쿼리 수신 실패: {str(j.get('error'))[:80]}"); return [], set(), set()
+        qs = j.get('queries') or []
+        known = set(j.get('known_domains') or [])
+        rej = set(j.get('rejected_domains') or [])
+        return qs, known, rej
+    except Exception as e:
+        log(f"[발굴] 쿼리 수신 오류: {str(e)[:80]}"); return [], set(), set()
+
+
+def _disc_domain(u):
+    try: return (_duparse.urlparse(u).netloc or '').lower().lstrip('www.')
+    except Exception: return ''
+
+
+def _disc_boardish(u):
+    lu = u.lower()
+    if any(b in lu for b in _DISC_BLACK): return False
+    return any(p in lu for p in _DISC_BOARD)
+
+
+def _disc_fetch(url, timeout=20):
+    try:
+        r = requests.get(url, headers={'User-Agent': _DISC_UA,
+                         'Accept-Language': 'ko-KR,ko;q=0.9,en;q=0.5'},
+                         timeout=timeout, verify=False)
+        return r.text or '' if r.status_code == 200 else ''
+    except Exception:
+        return ''
+
+
+def _disc_search_bing(query, pages=1):
+    """Bing을 한국 IP로 검색(보조). 결과를 직접 <h2><a>·추적 리다이렉트(&u=a1<b64>)에서 추출."""
+    out = []
+    for p in range(pages):
+        first = 1 + p * 10
+        u = ('https://www.bing.com/search?q=' + _duparse.quote(query)
+             + f'&first={first}&setlang=ko&cc=kr&count=20')
+        h = _disc_fetch(u)
+        if not h: continue
+        for m in _dre.findall(r'<h2>\s*<a[^>]+href="(https?://[^"]+)"', h):
+            out.append(m)
+        for m in _dre.findall(r'[?&]u=a1([A-Za-z0-9_\-]+)', h):
+            try:
+                s = m + '=' * (-len(m) % 4)
+                dec = _db64.urlsafe_b64decode(s).decode('utf-8', 'ignore')
+                if dec.startswith('http'): out.append(dec)
+            except Exception: pass
+        time.sleep(_drandom.uniform(1.2, 2.6))
+    return out
+
+
+def _disc_search_google_browser(driver, query, pages=2):
+    """★Google을 노드의 실제 크롬(한국 주거 IP)으로 검색. Google은 순수 HTTP엔 JS셸만 주므로
+       브라우저 렌더링이 필수. 서버(데이터센터 IP)는 절대 못 얻는 깊은 한국 게시판 색인을 땀.
+       반환: (url리스트, ok). ok=False면 캡차/동의 차단 감지 → 이번 사이클 Google 중단."""
+    out = []
+    for p in range(pages):
+        start = p * 10
+        u = ('https://www.google.com/search?q=' + _duparse.quote(query)
+             + f'&num=20&hl=ko&gl=kr&start={start}')
+        try:
+            driver.get(u)
+        except Exception:
+            return out, True
+        time.sleep(_drandom.uniform(1.8, 3.2))
+        cur = ''
+        try: cur = (driver.current_url or '').lower()
+        except Exception: pass
+        if '/sorry/' in cur or 'consent.google' in cur or 'captcha' in cur:
+            return out, False       # 구글 차단 — 중단 신호(Bing으로 폴백)
+        try:
+            links = driver.execute_script(
+                "return Array.from(document.querySelectorAll('a[href^=\"http\"]')).map(function(a){return a.href;});") or []
+            out.extend(links)
+        except Exception:
+            pass
+    return out, True
+
+
+def discover_run(once=False, idle=45, batch=40):
+    """★한국 IP 발굴 루프: 서버 쿼리를 회전 슬라이스로 받아 Google(크롬)+Bing(HTTP) 검색 →
+       신규 게시판 URL만 서버 ingest. 서버가 최종 검수(screen)·발행테스트하므로 노드는 수집만.
+       Google 렌더링에 크롬 필요(발행노드와 동일 환경). Bing은 크롬 없이도 보조로 동작."""
+    log(f"한국IP 발굴노드 시작 — node_id={NODE_ID} · 서버={SERVER} · 배치 {batch}쿼리/사이클")
+    sent_session = set()
+    while True:
+        try:
+            qs, known, rej = _disc_get_queries()
+            if not qs:
+                log("[발굴] 쿼리 0개 — 60초 후 재시도"); time.sleep(60)
+                if once: break
+                continue
+            # 회전 커서(재시작해도 이어감) — 매 사이클 batch개씩 다른 구간 검색
+            try: cur = int(open(_DISC_CURSOR).read().strip())
+            except Exception: cur = 0
+            cur %= len(qs)
+            slice_qs = [qs[(cur + i) % len(qs)] for i in range(min(batch, len(qs)))]
+            try: open(_DISC_CURSOR, 'w').write(str((cur + len(slice_qs)) % len(qs)))
+            except Exception: pass
+
+            # 크롬 1개를 사이클 내내 재사용(Google 렌더링용). 실패하면 Bing만 사용.
+            driver = None; google_ok = True
+            try:
+                driver = app.get_driver()
+            except Exception as e:
+                google_ok = False
+                log(f"[발굴] 크롬 준비 실패({str(e)[:50]}) — 이번 사이클 Bing만 사용")
+
+            found, pushed, g_blocked = [], 0, False
+            try:
+                for q in slice_qs:
+                    urls = []
+                    if driver is not None and google_ok and not g_blocked:
+                        g, ok = _disc_search_google_browser(driver, q, pages=2)
+                        urls += g
+                        if not ok:
+                            g_blocked = True
+                            log("[발굴] Google 차단 감지 — 이번 사이클 나머지는 Bing만")
+                    urls += _disc_search_bing(q, pages=1)   # Bing은 보조(한국결과 약하나 공짜)
+                    for u in urls:
+                        u = u.split('#')[0].strip()
+                        if not _disc_boardish(u): continue
+                        dom = _disc_domain(u)
+                        if not dom or dom in known or dom in rej: continue
+                        if u in sent_session: continue
+                        found.append(u); sent_session.add(u)
+                    if len(found) >= 100:
+                        pushed += _disc_ingest(found[:100]); found = found[100:]
+            finally:
+                if driver is not None:
+                    try: app.reset_driver()
+                    except Exception: pass
+            if found:
+                pushed += _disc_ingest(found)
+            log(f"[발굴] 사이클 완료 — 쿼리 {len(slice_qs)}개 검색 · 신규 게시판 {pushed}개 서버전송 "
+                f"(커서 {cur}→{(cur + len(slice_qs)) % len(qs)}/{len(qs)})")
+            if once: break
+            time.sleep(max(10, idle))
+        except KeyboardInterrupt:
+            log("발굴 중단(Ctrl+C)"); break
+        except Exception as e:
+            log(f"[발굴] 루프 오류: {str(e)[:80]} — 30초 후 계속"); time.sleep(30)
+
+
+def _disc_ingest(urls):
+    """신규 URL을 서버 ingest로 전송(≤100). 반환: 전송 개수(서버 수신 기준)."""
+    urls = list(dict.fromkeys([u for u in urls if u.startswith('http')]))[:100]
+    if not urls: return 0
+    try:
+        r = requests.post(f"{SERVER}/api/candidates/ingest?token={SERVER_TOKEN}",
+                         json={'urls': urls, 'node_id': NODE_ID}, headers=UA,
+                         timeout=90, verify=False)
+        if r.status_code != 200:
+            log(f"[발굴] ingest 실패 HTTP {r.status_code}"); return 0
+        return len(urls)
+    except Exception as e:
+        log(f"[발굴] ingest 오류: {str(e)[:80]}"); return 0
+
+
 def cafe24_test(url, mb_id="", mb_pass=""):
     """★Cafe24 로컬크롬 발행 테스트(대표님 지시 2026-09-09 'PC 로컬크롬로 Cafe24 뚫기').
        Bright Data 없이 PC 실제 IP·실제 크롬으로 CF 통과 + (계정 주면)로그인 + 실제 글1건 발행 검증.
@@ -813,6 +999,8 @@ if __name__ == "__main__":
     ap.add_argument("--id", dest="mb_id", default="", help="(선택) Cafe24 로그인 아이디 — 주면 로그인 발행 테스트")
     ap.add_argument("--pw", dest="mb_pass", default="", help="(선택) Cafe24 로그인 비번 — 명령줄 노출 주의, 테스트 후 창 닫기 권장")
     ap.add_argument("--headful", action="store_true", help="크롬 창을 보이게 실행 — Turnstile '사람 클릭 모드'(직원이 체크박스 클릭)에 필요")
+    ap.add_argument("--discover", action="store_true", help="한국 IP 발굴 모드 — Google(크롬)+Bing 검색해 신규 게시판 URL을 서버로 전송")
+    ap.add_argument("--batch", type=int, default=40, help="발굴 1사이클당 검색 쿼리 수(--discover)")
     a = ap.parse_args()
     if a.headful:
         os.environ["CHIRASHI_HEADFUL"] = "1"   # app.get_driver가 이 값을 보고 headless를 끈다(드라이버 생성 전에 설정)
@@ -823,7 +1011,10 @@ if __name__ == "__main__":
     #     queue      = pc_queue.run — 서버 리뷰 큐만(자율AI 새 방식, 가입·캡차 없음).
     #   full이어도 서버가 claim으로 ready 후보를 내려줘야 승격함(서버 node_publish_all·claim 조건은 서버쪽 별도 수정).
     _mode=os.environ.get('PC_NODE_MODE','full').strip().lower()
-    if a.cafe24_inspect:
+    if a.discover or _mode=='discover':
+        # 한국 IP 발굴 — Google(크롬)+Bing 검색으로 신규 게시판 수집. 발행노드와 별도 실행 가능(다른 터미널/PC).
+        discover_run(once=a.once, idle=a.idle, batch=a.batch)
+    elif a.cafe24_inspect:
         cafe24_inspect(a.cafe24_inspect)
     elif a.cafe24_test:
         cafe24_test(a.cafe24_test, mb_id=a.mb_id, mb_pass=a.mb_pass)
