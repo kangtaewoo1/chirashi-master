@@ -434,11 +434,16 @@ _PHONE_WM_FONTS=['/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf',
                  '/usr/share/fonts/truetype/nanum/NanumSquareB.ttf',
                  '/usr/share/fonts/truetype/nanum/NanumSquareRoundB.ttf']
 def _media_local_path(url):
-    """'/media/...' URL을 서버 로컬 파일 경로로. 로컬에 있으면 Path, 아니면 None(노드·외부URL)."""
+    """URL(상대 '/media/..' 또는 절대 'https://host/media/..')에서 /media/ 뒷부분을 떼어
+       서버 로컬 파일 경로로. 로컬에 실제 있으면 Path, 아니면 None(노드엔 파일 없어 None=안전)."""
     try:
         u=str(url or '')
-        if not u.startswith('/media/'): return None
-        p=UPLOAD_DIR/ u[len('/media/'):]
+        i=u.find('/media/')
+        if i<0: return None
+        rel=u[i+len('/media/'):].split('?')[0].split('#')[0]
+        rel=urllib.parse.unquote(rel)
+        if not rel or '..' in rel: return None
+        p=UPLOAD_DIR/rel
         return p if p.exists() and p.is_file() else None
     except Exception:
         return None
@@ -509,7 +514,7 @@ def _gen_post_image(base_url, keyword, cfg, mode=None, brand='', phone='', seed=
                 fs=sorted(_IMG_GEN_DIR.glob('g_*.webp'),key=lambda p:p.stat().st_mtime)
                 for old in fs[:-8000]: old.unlink()
             except Exception: pass
-        return '/media/gen/'+fn
+        return _abs_media_url('/media/gen/'+fn)   # 외부 게시판에서도 로드되게 절대 URL(pick_images와 동일)
     except Exception as e:
         try: add_log(f'[이미지생성 예외] {str(e)[:60]}')
         except Exception: pass
