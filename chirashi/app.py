@@ -3278,6 +3278,41 @@ def _twocaptcha_has_balance(api_key):
     _2C_BAL_CACHE['ts']=now; _2C_BAL_CACHE['ok']=ok
     return ok
 
+def _turnstile_test_autopass(d, site, cfg):
+    """★Turnstile 테스트 사이트키 자동통과(사람·솔버·확장 전부 불필요, 2026-11-17):
+       Cloudflare 테스트키(1x…/2x…/3x…0000…AA/BB/FF)는 챌린지를 띄우지 않고 위젯이
+       cf-turnstile-response 토큰을 스스로 발급하도록 CF가 공개 설계한 값이다. 캡차를 '푸는' 게 아니라,
+       테스트키가 원래 누구에게나 통과 토큰을 내주는 것이라 외부 솔버가 전혀 개입하지 않는다.
+       현재 페이지의 sitekey를 읽어 테스트키면 토큰이 채워질 때까지 잠깐(기본 15초) 기다려 반환한다.
+       테스트키가 아니거나(=실키) 토큰이 안 뜨면 None → 호출부가 기존 사람 클릭 경로로 폴백.
+       반환: (ok,msg,token,info) 또는 None. headless에서도 동작(테스트키는 상호작용 불필요)."""
+    try: src=str(d.page_source or '')
+    except Exception: src=''
+    sk=extract_turnstile_sitekey(src)
+    if not sk:
+        try:
+            from selenium.webdriver.common.by import By
+            el=d.find_element(By.CSS_SELECTOR,'[data-sitekey]')
+            sk=(el.get_attribute('data-sitekey') or '').strip()
+        except Exception: sk=''
+    if not sk or classify_sitekey(sk)!='test':
+        return None
+    try: wait=max(3,min(60,int(cfg.get('turnstile_test_wait_sec') or 15)))
+    except Exception: wait=15
+    name=str(site.get('name') or site.get('site_url') or '')[:30]
+    t0=time.time(); tok=''
+    while time.time()-t0<wait:
+        try: tok=str(d.execute_script("var t=document.querySelector('[name=\"cf-turnstile-response\"]');return t?(t.value||''):'';") or '')
+        except Exception: tok=''
+        if tok: break
+        time.sleep(0.5)
+    if not tok:
+        add_log(f'[Turnstile 테스트키] {name} — 테스트키({sk}) 감지했으나 {wait}초 내 토큰 미발급 → 사람 경로 폴백')
+        return None
+    _record_captcha_usage('turnstile_testkey',True,cfg)
+    add_log(f'[Turnstile 테스트키] {name} — 자동통과(사람·솔버 불필요, {sk}, {int(time.time()-t0)}초)')
+    return True,f'turnstile 테스트키 자동통과({sk})',tok,{'type':'turnstile','token':tok,'testkey':sk}
+
 def _turnstile_human_click(d, site, cfg):
     """★Turnstile 사람 클릭 모드(2026-10-02 대표님 '우리가 2captcha 형식으로 — 직원이 클릭'):
        카페24 '사람인지 확인'(veritas-hub Turnstile)을 자동으로 풀거나 우회하지 않는다. 노드 PC의 보이는 크롬 창을
@@ -3354,6 +3389,11 @@ def solve_captcha_with_2captcha(d,site,cap_type,cfg,timeout=300):
     # ★Turnstile 사람 클릭 모드(2026-10-02): turnstile_mode auto(2captcha 불가 시 사람)/human(항상 사람)/2captcha(자동만).
     #   사람 모드는 노드가 --headful(보이는 크롬)일 때만 실제 대기하고, headless(서버)면 즉시 실패 반환(기존과 동일 결과).
     _tmode=str(cfg.get('turnstile_mode') or 'auto').strip().lower()
+    # ★테스트키면 모드와 무관하게 먼저 자동통과 시도(사람·솔버 불필요). 실키면 None → 아래 사람 경로로.
+    if cap_type=='turnstile':
+        _ap=_turnstile_test_autopass(d,site,cfg)
+        if _ap is not None:
+            return _ap
     if cap_type=='turnstile' and (_tmode=='human' or (_tmode=='auto' and not _2c_on)):
         return _turnstile_human_click(d,site,cfg)
     # kcaptcha=OCR 무료, recaptcha=오디오 음성인식 무료 → 2captcha 없어도 시도. turnstile만 2captcha 필수.
@@ -9225,8 +9265,14 @@ def screen_pending(limit=30):
         elif r.get('ad_banned'): r['status']='rejected'; r['reject_reason']='광고 금지 명시'
         elif r.get('captcha'): r['status']='ready'; r['reject_reason']='캡차 있음 — 2captcha 자동해결 시도 예정'
         elif r.get('cafe24_challenge'):
-            # ★Cloudflare Turnstile 챌린지로 폼 확인 불가(2026-09-12): 정적 검수는 못 봐도 노드가 2captcha로 뚫어 발행 가능.
-            r['status']='ready'; r['reject_reason']='Cloudflare 챌린지 — 발행 시 2captcha 자동해결(후보 유지)'
+            # ★Cloudflare Turnstile 챌린지로 폼 확인 불가(2026-09-12): 정적 검수는 못 봐도 노드가 발행 가능.
+            if r.get('turnstile_sitekey_kind')=='test':
+                # 테스트키 = 브라우저가 챌린지 없이 토큰 자동발급 → 사람·솔버 불필요, 일반 자동발행 대상.
+                r['status']='ready'; r['reject_reason']='Turnstile 테스트키 — 브라우저 자동통과(사람·솔버 불필요)'
+                r['turnstile_autopass']=True
+            else:
+                # 실키 = 노드(한국 IP)+사람 1회 클릭 필요(turnstile_mode=human). 2captcha 자동풀이 안 함.
+                r['status']='ready'; r['reject_reason']='Cloudflare 챌린지(실키) — 노드+사람 클릭 필요(후보 유지)'
         elif not r.get('write_form'):
             # 글쓰기 폼이 없다: 그누보드/카페24면 로그인 후 쓰기 가능성 있어 ready 유지(자동가입 대상).
             # 그 외(디렉토리·전화번호검색·경쟁업체 랜딩 등 게시판 아님)는 자동 탈락시켜 목록을 깨끗이.
