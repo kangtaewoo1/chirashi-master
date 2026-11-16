@@ -416,6 +416,105 @@ def _credential_keys():
     except Exception: pass
     return ks
 
+def _image_jsonld(url, name):
+    """schema.org ImageObject JSON-LD(구글 이미지 색인 강화). 우리 자체 사이트에서 유효.
+       외부 게시판은 <script>를 보통 제거하므로 거기선 무시됨(무해). url 없으면 빈 문자열."""
+    if not url or not name: return ''
+    try:
+        import json as _j
+        return ('<script type="application/ld+json">'
+                + _j.dumps({'@context':'https://schema.org','@type':'ImageObject',
+                            'contentUrl':url,'url':url,'name':name,'caption':name},ensure_ascii=False)
+                + '</script>')
+    except Exception:
+        return ''
+
+_IMG_GEN_DIR=UPLOAD_DIR/'gen'
+_PHONE_WM_FONTS=['/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf',
+                 '/usr/share/fonts/truetype/nanum/NanumSquareB.ttf',
+                 '/usr/share/fonts/truetype/nanum/NanumSquareRoundB.ttf']
+def _media_local_path(url):
+    """'/media/...' URL을 서버 로컬 파일 경로로. 로컬에 있으면 Path, 아니면 None(노드·외부URL)."""
+    try:
+        u=str(url or '')
+        if not u.startswith('/media/'): return None
+        p=UPLOAD_DIR/ u[len('/media/'):]
+        return p if p.exists() and p.is_file() else None
+    except Exception:
+        return None
+
+def _gen_post_image(base_url, keyword, cfg, mode=None, brand='', phone='', seed=None):
+    """★발행마다 고유 이미지(2026-11-17): 기존 작업실 사진을 발행 때마다 물리적으로 다른 파일로 만들어
+       구글 이미지 중복제거를 회피(같은 사진 재사용=한 장만 노출 → 글마다 고유=다 노출).
+       mode: off(기본·아무것도 안 함) / variant(미세 재인코딩·크롭·품질 지터로 고유화, 깨끗한 사진 불필요) /
+             overlay(브랜드+번호+대각선 워터마크 — '글자 없는 원본사진'에만. 기존 사진은 글자 이중겹침이라 금지).
+       서버 로컬파일('/media/..')에만 동작. 노드가 받는 http URL은 None 반환→호출부가 원본 그대로 사용(안전).
+       반환: 새 '/media/gen/..' URL 또는 None."""
+    _m=str(mode or cfg.get('image_gen_mode') or 'off').strip().lower()
+    if _m not in ('variant','overlay'): return None
+    src=_media_local_path(base_url)
+    if src is None: return None
+    try:
+        from PIL import Image, ImageDraw, ImageFont, ImageEnhance
+        import hashlib
+        rnd=random.Random(seed if seed is not None else (str(base_url)+str(keyword)+secrets.token_hex(4)))
+        im=Image.open(src).convert('RGB'); W,H=im.size
+        if _m=='variant':
+            # 미세 고유화: 가장자리 1~3% 크롭 + 밝기/대비 소폭 + 품질 지터. 눈에 안 띄되 파일·지각해시 변화.
+            cx=int(W*rnd.uniform(0.01,0.03)); cy=int(H*rnd.uniform(0.01,0.03))
+            im=im.crop((cx,cy,W-cx,H-cy))
+            im=ImageEnhance.Brightness(im).enhance(rnd.uniform(0.97,1.03))
+            im=ImageEnhance.Contrast(im).enhance(rnd.uniform(0.97,1.03))
+            q=rnd.randint(82,92)
+        else:  # overlay — 깨끗한 원본에 브랜드+번호+대각선 워터마크(발행마다 스타일 랜덤)
+            if max(W,H)<900:
+                sc=900/max(W,H); im=im.resize((int(W*sc),int(H*sc)),Image.LANCZOS); W,H=im.size
+            fpath=next((f for f in _PHONE_WM_FONTS if os.path.exists(f)),None)
+            ph=re.sub(r'\D','',str(phone or ''));
+            if len(ph)==11: ph=f'{ph[:3]}-{ph[3:7]}-{ph[7:]}'
+            wm=str(brand or keyword or '')[:14]
+            draw=ImageDraw.Draw(im,'RGBA')
+            if fpath:
+                wmf=ImageFont.truetype(fpath,max(22,W//18))
+                layer=Image.new('RGBA',(W,H),(0,0,0,0)); wd=ImageDraw.Draw(layer)
+                sx=max(160,W//3); sy=max(150,H//5); off=rnd.randint(-sx//2,0); a=rnd.randint(70,120)
+                for yy in range(-sy,H+sy,sy):
+                    ro=off+(sx//2 if (yy//sy)%2 else 0)
+                    for xx in range(-sx+ro,W+sx,sx):
+                        wd.text((xx,yy),wm or ' ',font=wmf,fill=(255,255,255,a))
+                layer=layer.rotate(rnd.choice([28,32,-30,35]),expand=False,resample=Image.BICUBIC)
+                im=Image.alpha_composite(im.convert('RGBA'),layer).convert('RGB'); draw=ImageDraw.Draw(im,'RGBA')
+                bf=ImageFont.truetype(fpath,max(30,W//14)); pf=ImageFont.truetype(fpath,max(40,W//9))
+                pad=max(14,W//40); at_top=rnd.random()<0.7
+                def _tw(s,f):
+                    bb=draw.textbbox((0,0),s,font=f); return bb[2]-bb[0],bb[3]-bb[1]
+                bw,bh=_tw(wm or ' ',bf); pw,phh=_tw(ph or ' ',pf)
+                bw2=max(bw,pw)+pad*2; bh2=bh+phh+pad*3
+                bx=rnd.choice([pad,pad,(W-bw2)//2]); by=pad if at_top else H-bh2-pad
+                plate=Image.new('RGBA',(bw2,bh2),(0,0,0,0)); pd=ImageDraw.Draw(plate)
+                pd.rounded_rectangle([0,0,bw2-1,bh2-1],radius=max(10,W//50),fill=(15,15,20,rnd.randint(120,175)))
+                im.paste(plate,(bx,by),plate); draw=ImageDraw.Draw(im,'RGBA')
+                def _sh(x,y,s,f,col):
+                    draw.text((x+2,y+2),s,font=f,fill=(0,0,0,210)); draw.text((x,y),s,font=f,fill=col+(255,))
+                _sh(bx+pad,by+pad,wm,bf,rnd.choice([(255,60,110),(255,255,255),(255,210,70),(120,220,130)]))
+                if ph: _sh(bx+pad,by+pad*2+bh,ph,pf,rnd.choice([(255,255,255),(255,220,90),(120,230,140)]))
+            q=rnd.randint(84,92)
+        _IMG_GEN_DIR.mkdir(parents=True,exist_ok=True)
+        h=hashlib.md5((str(base_url)+str(keyword)+secrets.token_hex(6)).encode()).hexdigest()[:16]
+        fn=f'g_{h}.webp'; out=_IMG_GEN_DIR/fn
+        im.save(out,'WEBP',quality=q,method=4)
+        # 디스크 폭주 방지: 가끔 gen 디렉토리가 너무 크면 오래된 것 정리.
+        if rnd.random()<0.03:
+            try:
+                fs=sorted(_IMG_GEN_DIR.glob('g_*.webp'),key=lambda p:p.stat().st_mtime)
+                for old in fs[:-8000]: old.unlink()
+            except Exception: pass
+        return '/media/gen/'+fn
+    except Exception as e:
+        try: add_log(f'[이미지생성 예외] {str(e)[:60]}')
+        except Exception: pass
+        return None
+
 def _credential_fernet(raw=None):
     """사이트 로그인정보용 서버측 암호화기. raw 미지정이면 1순위 키 사용(암호화·기존 동작 그대로)."""
     try:
@@ -579,6 +678,8 @@ def load_config():
        'telegram_control':False,'backup_time':'','verify_enabled':True,'mix_keywords':True,
        'block_unpaid':True,
        'google_api_key':'','google_cx':'','brave_api_key':'','serper_api_key':'','search_provider':'brave','discover_enabled':True,
+       'image_gen_mode':'off',   # ★발행마다 고유 이미지(2026-11-17): off/variant(기존사진 미세고유화)/overlay(깨끗한 원본에 번호굽기)
+
        'discover_daily_target':500,'discover_query_limit':500,'discover_batch':50,'discover_keywords':'',
        'finder_ratio':0.7,   # 게시판 찾기와 사용자가 입력한 홍보 키워드를 섞는 비율
        'site_goal':50,   # 실제 발행 가능 사이트 확보 목표(대시보드 진행률 표시용)
@@ -1730,6 +1831,10 @@ def generate_rich_html(keywords, cfg, workroom_id=None, image_urls=None):
     p=format_phone(rawphone)
     mood=random.choice(SERVICE_FLAVOR.get(s,DEFAULT_FLAVOR)['mood'])
     imgs=pick_images(1,workroom_id=workroom_id,image_urls=image_urls)   # 게시물당 이미지 1개(작업실에 이미지 없으면 [] → 이미지 없이 발행)
+    # ★발행마다 고유 이미지(2026-11-17): image_gen_mode 켜지면 서버 로컬사진을 글마다 다른 파일로 생성(중복제거 회피).
+    if imgs:
+        _pg=_gen_post_image(imgs[0], f'{r}{s}', cfg, brand=b, phone=p)
+        if _pg: imgs=[_pg]+list(imgs[1:])
     # 대표님 지시(2026-09-07): 붙여준 예시처럼 '단일 강조색'을 게시물마다 하나 골라 전체에 일관 적용.
     AC=random.choice(COLORS)              # 강조색 하나(제목·소제목·라벨·별점 등 전부 이 색)
     c1=c2=c3=AC                           # 기존 c1/c2/c3 참조 호환(모두 같은 강조색)
@@ -1976,6 +2081,7 @@ def generate_rich_html(keywords, cfg, workroom_id=None, image_urls=None):
         body=[_p_metaintro, IMG(0,f'{r} {s}의 {mood.split()[0]} 공간'), _sec_guide, _sec_price,
               ''.join(random.sample(blocks,min(3,len(blocks)))), _sec_steps, _sec_faqdl, _sec_tags]
     html=head+''.join(body)+_cta+_foot
+    html+=_image_jsonld(imgs[0] if imgs else '', f'{r}{s}')   # ImageObject(자체사이트 색인강화·외부판 무시)
     return html, title
 
 # ==================== GPT 본문 생성 (선택) ====================
@@ -2195,8 +2301,12 @@ def generate_post_gpt(keywords, cfg, workroom_id=None, image_urls=None, model_ov
     _label=random.choice(['총정리','이용 안내','완벽 가이드','한눈에 정리','상세 안내'])
     # 이미지 alt=메인 키워드(지역+업종) — 구글 이미지 노출용(대표님 2026-09-12). 캡션에 키워드+브랜드도 넣어 주변텍스트 강화.
     # ★이미지 SEO 강화(2026-09-18): alt/caption을 지역변형+업종+번호+앵글로 고유화(구글 이미지노출 극대화).
+    # ★발행마다 고유 이미지(2026-11-17): 서버 로컬사진이면 글마다 다른 파일로 생성(중복제거 회피). 노드 URL은 그대로.
+    if imgs:
+        _pg=_gen_post_image(imgs[0], f'{r}{s}', cfg, brand=b, phone=p)
+        if _pg: imgs=[_pg]+list(imgs[1:])
     _ialt,_icap=_img_alt_caption(r,s,b,p,0)
-    _img_block=(f'<div style="text-align:center;margin:0 0 28px;"><img src="{imgs[0]}" alt="{_ialt}" title="{_ialt}" style="max-width:100%;border-radius:8px;" loading="lazy"/><p style="color:#888;font-size:13px;margin-top:8px;">▲ {_icap}</p></div>' if imgs else '')
+    _img_block=(f'<div style="text-align:center;margin:0 0 28px;"><img src="{imgs[0]}" alt="{_ialt}" title="{_ialt}" style="max-width:100%;border-radius:8px;" loading="lazy"/><p style="color:#888;font-size:13px;margin-top:8px;">▲ {_icap}</p></div>'+_image_jsonld(imgs[0],f'{r}{s}') if imgs else '')
     # ★메타설명 최적화 도입부(대표님 지시 2026-09-15): H1 바로 뒤, 메인키워드로 시작하는 지역SEO 메타 문장.
     #   구글 스니펫이 이 문장이 되게 이미지·목차보다 위에 둔다(매 글 유니크).
     _mood_g=random.choice(SERVICE_FLAVOR.get(s,DEFAULT_FLAVOR)['mood'])
