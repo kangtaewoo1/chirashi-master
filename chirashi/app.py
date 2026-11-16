@@ -9397,7 +9397,7 @@ def discover_once(cfg=None, max_queries=10):
     try: finder_ratio=float(cfg.get('finder_ratio',0.7))
     except (TypeError,ValueError): finder_ratio=0.7
     added=0; used=0; errs=[]; search_results=0
-    brave_attempts=0; brave_results=0; provider_results=0; fallback_queries=0
+    brave_attempts=0; brave_results=0; provider_results=0; fallback_queries=0; serper_results=0
     for _ in range(max_queries):
         if st['queries']>=qlimit: errs.append('일일 쿼리 한도 도달'); break
         if st['found']>=target: errs.append('일일 후보 목표 달성'); break
@@ -9407,12 +9407,15 @@ def discover_once(cfg=None, max_queries=10):
         try:
             items,search_source,fallback_reason=_web_search_with_trace(cfg,q)
             search_results+=len(items)
-            if provider=='brave' and fallback_reason!='brave_cooldown':
-                brave_attempts+=1
-            if search_source=='brave': brave_results+=1
-            if search_source==provider or (provider=='ddg' and fallback_reason is None):
-                provider_results+=1
-            if fallback_reason: fallback_queries+=1
+            if search_source=='serper':
+                serper_results+=1   # ★Serper 키 있으면 최우선 — brave/무료 카운터와 분리(2026-11-17)
+            else:
+                if provider=='brave' and fallback_reason!='brave_cooldown':
+                    brave_attempts+=1
+                if search_source=='brave': brave_results+=1
+                if search_source==provider or (provider=='ddg' and fallback_reason is None):
+                    provider_results+=1
+                if fallback_reason: fallback_queries+=1
             for it in items: it['query']=q
             n=add_candidates_from(items,cfg,source=qsrc); added+=n; st['found']+=n
         except Exception as e:
@@ -9425,14 +9428,17 @@ def discover_once(cfg=None, max_queries=10):
     try: screened=screen_pending(20)
     except Exception as e: errs.append('검수 오류 '+str(e)[:80])
     provider_name={'brave':'Brave','google':'Google','ddg':'무료 검색'}.get(provider,provider)
-    provider_stats=f' · 검색결과 {search_results}건 · {provider_name} 결과 {provider_results}회 · 무료 폴백 {fallback_queries}회'
-    if provider=='brave':
+    if serper_results:
+        provider_stats=f' · 검색결과 {search_results}건 · Serper {serper_results}회 · 무료 폴백 {fallback_queries}회'
+    elif provider=='brave':
         provider_stats=f' · 검색결과 {search_results}건 · Brave 시도 {brave_attempts}회(결과 {brave_results}) · 무료 폴백 {fallback_queries}회'
+    else:
+        provider_stats=f' · 검색결과 {search_results}건 · {provider_name} 결과 {provider_results}회 · 무료 폴백 {fallback_queries}회'
     add_log(f'[발굴] 쿼리 {used}회 · 신규 {added}개 · 검수 {screened}건'+provider_stats+(' · '+errs[0] if errs else ''))
     return {'ok':True,'queries':used,'added':added,'screened':screened,
             'today_queries':st['queries'],'today_found':st['found'],'search_results':search_results,
             'provider_results':provider_results,'brave_attempts':brave_attempts,'brave_results':brave_results,
-            'fallback_queries':fallback_queries,'errors':errs}
+            'serper_results':serper_results,'fallback_queries':fallback_queries,'errors':errs}
 
 # ==================== 임시메일(mail.tm) — 이메일 인증 자동 처리 ====================
 TEMPMAIL_API='https://api.mail.tm'
