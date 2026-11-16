@@ -578,7 +578,7 @@ def load_config():
        'notify_done':False,'notify_fail':True,'update_token':'',
        'telegram_control':False,'backup_time':'','verify_enabled':True,'mix_keywords':True,
        'block_unpaid':True,
-       'google_api_key':'','google_cx':'','brave_api_key':'','search_provider':'brave','discover_enabled':True,
+       'google_api_key':'','google_cx':'','brave_api_key':'','serper_api_key':'','search_provider':'brave','discover_enabled':True,
        'discover_daily_target':500,'discover_query_limit':500,'discover_batch':50,'discover_keywords':'',
        'finder_ratio':0.7,   # 게시판 찾기와 사용자가 입력한 홍보 키워드를 섞는 비율
        'site_goal':50,   # 실제 발행 가능 사이트 확보 목표(대시보드 진행률 표시용)
@@ -8592,8 +8592,45 @@ def _free_search(cfg, query, start, num):
     return naver_web_search(cfg,query,start,num)
 
 _BRAVE_SKIP_UNTIL=[0.0]   # ★Brave 402(크레딧소진) 감지 시 이 시각까지 Brave 시도 건너뜀(대표님 2026-09-18 'Brave 건너뛰기')
+def serper_search(cfg, query, start=1, num=10):
+    """★Serper.dev Google SERP API(2026-11-17 대표님 선택). 서버 IP는 Google에 직접 가면 /sorry/ 캡차,
+       Bing은 포털만, 네이버는 소진 — Serper가 자기 인프라로 구글을 검색해 JSON으로 돌려줘 이 벽을 통째 우회.
+       X-API-KEY 헤더, body {q,gl,hl,num,page}. organic[].link를 표준형 [{url,title,snippet}]로 반환.
+       start(1,11,21…)→page(1,2,3…) 매핑으로 기존 다페이지 발굴 루프와 호환."""
+    import requests as _rq
+    key=(cfg.get('serper_api_key') or '').strip()
+    if not key: return []
+    try: _num=min(max(int(num or 10),10),100)
+    except Exception: _num=10
+    try: page=1+max(0,(int(start)-1)//max(1,_num))
+    except Exception: page=1
+    r=_rq.post('https://google.serper.dev/search',
+               headers={'X-API-KEY':key,'Content-Type':'application/json'},
+               json={'q':query,'gl':'kr','hl':'ko','num':_num,'page':page},timeout=20)
+    if r.status_code>=400:
+        raise RuntimeError(f'serper {r.status_code}: {(r.text or "")[:60]}')
+    j=r.json() if r.content else {}
+    out=[]
+    for row in (j.get('organic') or []):
+        u=row.get('link') or ''
+        if isinstance(u,str) and u.startswith('http'):
+            out.append({'url':u,'title':row.get('title') or '','snippet':row.get('snippet') or ''})
+    return out
+
 def _web_search_with_trace(cfg, query, start=1, num=10):
     provider=(cfg.get('search_provider') or 'brave').lower()
+    # ★Serper.dev 전용 SERP API: 키가 있으면 provider 무관 최우선(Google급 결과·서버 차단 우회).
+    #   빈 결과/실패면 아래 기존 brave/무료 경로로 폴백 → 발굴 안 멈춤.
+    if (cfg.get('serper_api_key') or '').strip():
+        try:
+            r=serper_search(cfg,query,start,num)
+            if r: return r,'serper',None
+        except Exception as e:
+            _es=str(e)
+            if '429' in _es or '403' in _es:
+                add_log(f'[발굴] Serper 한도/권한({_es[:40]}) → 폴백','발굴')
+            else:
+                add_log(f'[발굴] Serper 실패({_es[:40]}) → 폴백','발굴')
     if provider=='ddg':
         return _free_search(cfg,query,start,num),'free',None
     if provider=='google':
@@ -14660,7 +14697,7 @@ def api_cfg():
                   'model','workers','post_delay','daily_limit',
                   'use_gpt','telegram_token','telegram_chat_id','notify_done','notify_fail','update_token',
                   'telegram_control','backup_time','verify_enabled','mix_keywords','block_unpaid',
-                  'google_api_key','google_cx','brave_api_key','search_provider','discover_enabled','discover_daily_target',
+                  'google_api_key','google_cx','brave_api_key','serper_api_key','search_provider','discover_enabled','discover_daily_target',
                   'discover_query_limit','discover_keywords','discover_direct_queries','excluded_domains','finder_ratio',
                   'workroom_workers','vps_reserve_mb','vps_mb_per_worker','site_goal',
                   'daily_publish_goal','region_keep_dong','region_keep_eupmyeon',
@@ -14673,7 +14710,7 @@ def api_cfg():
                   'unlocker_enabled','unlocker_api_key','unlocker_zone',
                   'sbr_enabled','sbr_endpoint','sbr_country','signup_fixed_id','signup_fixed_pw']:
             if k in d:
-                if k in ('openai_key','openai_admin_key','nvidia_api_key','openrouter_api_key','telegram_token','google_api_key','brave_api_key','guest_post_password','twocaptcha_api_key','imap_password','proxy_pass','unlocker_api_key','sbr_endpoint','signup_fixed_pw') and d[k]=='***설정됨***': continue  # 마스크 값은 무시(기존 유지)
+                if k in ('openai_key','openai_admin_key','nvidia_api_key','openrouter_api_key','telegram_token','google_api_key','brave_api_key','serper_api_key','guest_post_password','twocaptcha_api_key','imap_password','proxy_pass','unlocker_api_key','sbr_endpoint','signup_fixed_pw') and d[k]=='***설정됨***': continue  # 마스크 값은 무시(기존 유지)
                 cfg[k]=d[k]
         if (cfg.get('llm_provider') or '').strip().lower() not in ('openrouter','nvidia'): cfg['llm_provider']='openrouter'   # 빈 select·구버전 'openai' 값 방어(OpenAI 퇴출)
         if d.get('password'): cfg['password']=generate_password_hash(d['password'])  # 해시 저장
@@ -14702,6 +14739,7 @@ def api_cfg():
     if c.get('telegram_token'): c['telegram_token']='***설정됨***'
     if c.get('google_api_key'): c['google_api_key']='***설정됨***'
     if c.get('brave_api_key'): c['brave_api_key']='***설정됨***'
+    if c.get('serper_api_key'): c['serper_api_key']='***설정됨***'
     if c.get('guest_post_password'): c['guest_post_password']='***설정됨***'
     if c.get('twocaptcha_api_key'): c['twocaptcha_api_key']='***설정됨***'
     if c.get('imap_password'): c['imap_password']='***설정됨***'
