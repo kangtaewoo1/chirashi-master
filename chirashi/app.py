@@ -687,6 +687,7 @@ def load_config():
 
        'discover_daily_target':500,'discover_query_limit':500,'discover_batch':50,'discover_keywords':'',
        'finder_ratio':0.7,   # 게시판 찾기와 사용자가 입력한 홍보 키워드를 섞는 비율
+       'discover_pages':1,   # ★발굴 시 쿼리당 긁을 SERP 페이지 수(serper 전용, 깊을수록 롱테일 신규↑·페이지당 1크레딧). 유료전환 후 3 권장
        'site_goal':50,   # 실제 발행 가능 사이트 확보 목표(대시보드 진행률 표시용)
        # 웹빌더/템플릿 플랫폼 등 발행 불가 도메인 제외 목록(한 줄에 하나, 발굴에서 즉시 제외). 설정에서 관리.
        'excluded_domains':'isweb.co.kr\nimweb.me\nimweb.io\nmodoo.at\ncreatorlink.net\nwixsite.com\nweebly.com\nblog.me',
@@ -9513,6 +9514,11 @@ def discover_once(cfg=None, max_queries=10):
     except (TypeError,ValueError): finder_ratio=0.7
     added=0; used=0; errs=[]; search_results=0
     brave_attempts=0; brave_results=0; provider_results=0; fallback_queries=0; serper_results=0
+    # ★페이지네이션 발굴(2026-11-17 실측): serper는 호출당 결과 10개 고정이나 page를 깊이 파면
+    #   page2~4가 경쟁사 덜 긁은 롱테일 보드 → 같은 쿼리에서 신규 3배(20쿼리 신규도메인 19→57, 크레딧효율 동일 0.95/크레딧).
+    #   serper 경로만 멀티페이지(무료/네이버 폴백은 자체 멀티페이지라 1회). 페이지당 1크레딧=queries 1증가.
+    try: _pages=max(1,min(10,int(cfg.get('discover_pages',1) or 1)))
+    except (TypeError,ValueError): _pages=1
     for _ in range(max_queries):
         if st['queries']>=qlimit: errs.append('일일 쿼리 한도 도달'); break
         if st['found']>=target: errs.append('일일 후보 목표 달성'); break
@@ -9520,23 +9526,33 @@ def discover_once(cfg=None, max_queries=10):
             finder,secondary,st['queries'],finder_ratio,st['fcursor'],st['cursor'])
         if q is None: errs.append('쿼리 없음'); break
         try:
-            items,search_source,fallback_reason=_web_search_with_trace(cfg,q)
-            search_results+=len(items)
-            if search_source=='serper':
-                serper_results+=1   # ★Serper 키 있으면 최우선 — brave/무료 카운터와 분리(2026-11-17)
-            else:
-                if provider=='brave' and fallback_reason!='brave_cooldown':
-                    brave_attempts+=1
-                if search_source=='brave': brave_results+=1
-                if search_source==provider or (provider=='ddg' and fallback_reason is None):
-                    provider_results+=1
-                if fallback_reason: fallback_queries+=1
-            for it in items: it['query']=q
-            n=add_candidates_from(items,cfg,source=qsrc); added+=n; st['found']+=n
+            _page_items=[]
+            for _pg in range(_pages):
+                if st['queries']>=qlimit: break
+                items,search_source,fallback_reason=_web_search_with_trace(cfg,q,start=1+_pg*10)
+                st['queries']+=1; used+=1   # 페이지당 1크레딧
+                if search_source=='serper':
+                    serper_results+=1   # ★Serper 키 있으면 최우선 — brave/무료 카운터와 분리(2026-11-17)
+                else:
+                    if provider=='brave' and fallback_reason!='brave_cooldown':
+                        brave_attempts+=1
+                    if search_source=='brave': brave_results+=1
+                    if search_source==provider or (provider=='ddg' and fallback_reason is None):
+                        provider_results+=1
+                    if fallback_reason: fallback_queries+=1
+                if not items: break                       # 더 깊은 페이지 없음
+                _page_items.extend(items)
+                if search_source!='serper': break          # 폴백(brave/무료/네이버)은 멀티페이지 안 함
+                time.sleep(0.5)
+            search_results+=len(_page_items)
+            _seen=set(); _uniq=[]
+            for it in _page_items:
+                u=it.get('url')
+                if u and u not in _seen: _seen.add(u); it['query']=q; _uniq.append(it)
+            if _uniq:
+                n=add_candidates_from(_uniq,cfg,source=qsrc); added+=n; st['found']+=n
         except Exception as e:
             errs.append(str(e)[:120]); break
-        finally:
-            st['queries']+=1; used+=1
         time.sleep(1)
     save_json(DISCO_FILE,st)
     screened=0
@@ -14819,7 +14835,7 @@ def api_cfg():
                   'use_gpt','telegram_token','telegram_chat_id','notify_done','notify_fail','update_token',
                   'telegram_control','backup_time','verify_enabled','mix_keywords','block_unpaid',
                   'google_api_key','google_cx','brave_api_key','serper_api_key','search_provider','discover_enabled','discover_daily_target',
-                  'discover_query_limit','discover_keywords','discover_direct_queries','excluded_domains','finder_ratio',
+                  'discover_query_limit','discover_keywords','discover_direct_queries','excluded_domains','finder_ratio','discover_pages',
                   'workroom_workers','vps_reserve_mb','vps_mb_per_worker','site_goal',
                   'daily_publish_goal','region_keep_dong','region_keep_eupmyeon',
                   'video_url','landing_url','post_email','guest_post_password',
