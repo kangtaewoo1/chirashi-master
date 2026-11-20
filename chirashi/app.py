@@ -11086,17 +11086,28 @@ def auto_pipeline_once(limit=5):
     #   가입은 이메일 인증 대기로 느려 순차 처리하면 슬롯 낭비 → 후보들을 병렬 스레드로 동시 처리.
     #   로그인 후보 상한도 크게(병렬이라 슬롯 안 막힘). 동시 크롬은 전역 세마포어로 상한.
     _login_cap=int(cfg.get('signup_parallel',4) or 4)*3   # 병렬이라 더 많이 잡아도 됨
-    pend=_manual + _guest[:max(1,limit)] + _login[:max(0,_login_cap)]
+    # ★비회원(guest) 1회 처리량 상향(2026-11-20 대표님 '발행가능 93 정체'): guest는 가입 불필요·템플릿 HTTP라
+    #   수초면 전환되는데 예전엔 limit(25)로 조였음. 전용 패스트레인(_gsem_fast)으로 돌리므로 더 많이 잡아도 안전.
+    _guest_cap=max(1,int(cfg.get('guest_batch',max(60,limit)) or max(60,limit)))
+    pend=_manual + _guest[:_guest_cap] + _login[:max(0,_login_cap)]
     done=0; registered=0; signed=0; results=[]
     _pipe_lock=threading.Lock()
     _sfan=max(1,min(6,int(cfg.get('signup_parallel',4) or 4)))
-    _ssem=threading.Semaphore(_sfan)          # 동시 가입/발행테스트 수(이 배치 내)
+    _ssem=threading.Semaphore(_sfan)          # 동시 로그인가입 수(이 배치 내)
+    # ★비회원(guest) 전용 패스트레인(2026-11-20): guest 시험발행은 템플릿+HTTP라 크롬을 거의 안 쓰고 수초면 끝난다.
+    #   예전엔 guest가 로그인가입과 _ssem(3)을 공유 → 각 ~150초 걸리는 로그인 스레드가 세마포어를 점유하면 빠른 guest가
+    #   뒤에서 굶어 사이클당 2~9곳만 처리·발행가능 등록 0이었음(실측). 별도 세마포어로 분리해 로그인가입과 독립 처리.
+    #   (크롬 누수 재발 방지: guest는 대부분 HTTP라 크롬을 안 쓰고, 쓰더라도 각 스레드 finally의 reset_driver로 정리된다.)
+    _gfan=max(_sfan,min(16,int(cfg.get('guest_parallel',8) or 8)))
+    _gsem_fast=threading.Semaphore(_gfan)
     _gsem=_global_chrome_sem()                # 전역 크롬 상한(발행 워커와 공유)
     def _proc(c):
       # ★2026-11-09: 전역 크롬 상한(publish_max_chromes=12)을 발행 슬롯(워커4×팬아웃3=12)이 늘 다 써서 전환 스레드가
       #   크롬 자리를 영영 못 얻음 → 재가동 뒤 10분간 후보 0곳 처리. 전환은 자기 상한(signup_parallel)으로만 묶는다.
       #   비회원 후보 시험발행은 대부분 HTTP라 크롬을 안 쓰고, 셀레늄이 필요해도 최대 signup_parallel개만 더해진다.
-      with _ssem:
+      # ★비회원은 패스트레인(_gsem_fast), 로그인가입은 _ssem — 느린 가입이 빠른 비회원을 굶기지 않게 세마포어 분리.
+      _is_guest=bool(c.get('write_form')) and not c.get('login_required')
+      with (_gsem_fast if _is_guest else _ssem):
         nonlocal done,registered,signed
         name=c.get('board_name') or c.get('domain') or c.get('url','')[:30]
         # 쿨다운 기록: 이 후보를 방금 시도했음을 남겨, 실패/hang해도 다음 사이클에 곧바로 다시
