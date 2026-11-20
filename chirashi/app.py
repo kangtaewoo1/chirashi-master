@@ -13056,69 +13056,98 @@ def api_pipeline_report():
     results=d.get('results') or []
     if not isinstance(results,list): return jsonify({'ok':False,'error':'results 배열 필요'}),400
     applied=0; registered=0
-    for r in results:
-        cid=str(r.get('cand_id') or '').strip()
-        if not cid: continue
-        # 이 후보가 이 노드의 claim이 맞는지 확인(엉뚱한/늦은 회신 무시)
-        c=None
-        with _cand_lock:
-            for x in load_cands():
-                if x.get('id')==cid: c=x; break
-        if not c: continue
-        if c.get('posting_authorized') is not True: continue
-        if c.get('claimed_by') and c.get('claimed_by')!=node_id:
-            continue   # 다른 노드/서버로 이미 넘어간 claim — 무시
-        ok=bool(r.get('ok')); result_url=str(r.get('result_url') or '')
-        name=c.get('board_name') or c.get('domain') or (c.get('url','') or '')[:30]
-        # ★가짜 성공 차단(2026-09-11): cafe24 결과 글번호가 발굴 때 본 글번호보다 크지 않으면 남의 글(목록 첫 글) → 실패 처리
-        if ok and c.get('platform')=='cafe24' and not _cafe24_result_is_new(c.get('url'),result_url):
-            ok=False; r=dict(r); r['msg']=f'동일/이전 글 URL 재보고({result_url[-14:]}) — 미등록(가짜 성공 차단)'; r['is_temp']=False
-        try:
-            if ok and result_url.startswith(('http://','https://')):
-                _promote_candidate_to_site(c,result_url,bo=r.get('bo_table') or c.get('bo_table'),permission=True)
-                if r.get('mb_id'):
-                    sid=_promoted_site_id(c)
-                    if sid: set_site_flag(sid,mb_id=r.get('mb_id'),mb_pass=r.get('mb_pass',''))
-                registered+=1
-                add_log(f'[발행가능 등록] {name} — PC노드 검증 통과 → 발행가능 {result_url}'.rstrip())
-            elif ok:
-                # ★발행 성공(ok)인데 결과 URL이 텍스트여도 발행은 된 것 → 탈락 아닌 승격(2026-09-12 approved 정체 실측).
-                #   cafe24 가짜성공은 위 8941에서 이미 ok=False로 걸러졌으므로 여기 오는 ok는 진짜 발행. 후보 URL로 승격.
-                _alt=c.get('url') or c.get('base') or ''
-                _promote_candidate_to_site(c,_alt,bo=r.get('bo_table') or c.get('bo_table'),permission=True)
-                if r.get('mb_id'):
-                    sid=_promoted_site_id(c)
-                    if sid: set_site_flag(sid,mb_id=r.get('mb_id'),mb_pass=r.get('mb_pass',''))
-                registered+=1
-                add_log(f'[발행가능 등록] {name} — PC노드 발행 성공(결과: {str(r.get("msg") or "등록됨")[:24]}) → 발행가능')
-            else:
-                msg=str(r.get('msg') or '')[:90]; is_temp=bool(r.get('is_temp'))
-                att=int(c.get('pipeline_attempts',0) or 0)+1
-                # ★가입 성공 계정 보존(2026-09-20 지메일 실측: cafe24 가입축하 메일 17통, 원사이언스엔 계정 4개 — 발행 실패 시 mb_id를
-                #   버려 매 시도마다 재가입). 발행이 실패해도 노드가 만든 계정은 후보에 저장 → 다음 시도는 가입 대신 로그인.
-                if r.get('mb_id'):
-                    try: _cand_set(c['id'],mb_id=str(r.get('mb_id'))[:60],mb_pass=str(r.get('mb_pass') or ''),login_saved=True)
-                    except Exception: pass
-                if '[admin_only]' in msg:
-                    _cand_set(cid,status='rejected',reject_reason=msg,write_access_state='admin_only',
-                              claimed_by='',claim_expire=0)
-                    add_log(f'[관리자 전용 제외] {name} — 일반회원 발행 대상에서 제외')
-                elif '[human_verification_required]' in msg:
-                    _cand_set(cid,status='manual_review',reject_reason=msg,write_access_state='human_verification_required',
-                              claimed_by='',claim_expire=0)
-                    add_log(f'[사람 확인 대기] {name} — 자동 재시도 보류')
-                elif is_temp and att<5:
-                    _cand_set(cid,status='ready',reject_reason=f'일시적 실패({att}/5): {msg}',pipeline_attempts=att,claimed_by='',claim_expire=0)
-                    add_log(f'[발행 재시도] {name} ({att}/5) — {msg}')
+    # ★report 과부하 해소(2026-11-20 반복claim 원인규명): 이전엔 결과 1건마다 _cand_set이 candidates.json을
+    #   통째로 load+save(실패 1건=풀 I/O 2~3회)라 _cand_lock 아래 O(N)회 직렬화 → report가 60초 타임아웃으로
+    #   떨어지고 실패 후보가 rejected로 저장 안 돼 같은 사이트가 수십~94번 재claim됐다. 이제 cands를 1회 로드해
+    #   메모리에서 전부 반영하고 마지막에 1회만 저장(O(N)→O(1)). 성공(ok) 경로는 sites.json을 건드리는
+    #   _promote_candidate_to_site가 전담하므로 종전대로 두되, 그것이 바꾼 cands가 아래 1회 저장에 덮이지 않도록
+    #   성공 후보 id는 _promoted set으로 추적해 저장 대상에서 제외한다(과수정 방지).
+    with _cand_lock:
+        cands=load_cands()
+        by_id={c.get('id'):c for c in cands}
+        _dirty=set()       # 메모리에서 바꾼(저장 필요) 후보 id
+        _promoted=set()     # _promote가 자체 저장한 성공 후보 id(아래 1회 저장에서 제외)
+        _reject_doms=[]     # 루프 후 일괄 기록할 (도메인, 사유)
+        for r in results:
+            cid=str(r.get('cand_id') or '').strip()
+            if not cid: continue
+            c=by_id.get(cid)
+            if not c: continue
+            if c.get('posting_authorized') is not True: continue
+            if c.get('claimed_by') and c.get('claimed_by')!=node_id:
+                continue   # 다른 노드/서버로 이미 넘어간 claim — 무시
+            ok=bool(r.get('ok')); result_url=str(r.get('result_url') or '')
+            name=c.get('board_name') or c.get('domain') or (c.get('url','') or '')[:30]
+            # ★가짜 성공 차단(2026-09-11): cafe24 결과 글번호가 발굴 때 본 글번호보다 크지 않으면 남의 글(목록 첫 글) → 실패 처리
+            if ok and c.get('platform')=='cafe24' and not _cafe24_result_is_new(c.get('url'),result_url):
+                ok=False; r=dict(r); r['msg']=f'동일/이전 글 URL 재보고({result_url[-14:]}) — 미등록(가짜 성공 차단)'; r['is_temp']=False
+            try:
+                if ok and result_url.startswith(('http://','https://')):
+                    _promote_candidate_to_site(c,result_url,bo=r.get('bo_table') or c.get('bo_table'),permission=True)
+                    if r.get('mb_id'):
+                        sid=_promoted_site_id(c)
+                        if sid: set_site_flag(sid,mb_id=r.get('mb_id'),mb_pass=r.get('mb_pass',''))
+                    _promoted.add(cid); registered+=1
+                    add_log(f'[발행가능 등록] {name} — PC노드 검증 통과 → 발행가능 {result_url}'.rstrip())
+                elif ok:
+                    # ★발행 성공(ok)인데 결과 URL이 텍스트여도 발행은 된 것 → 탈락 아닌 승격(2026-09-12 approved 정체 실측).
+                    #   cafe24 가짜성공은 위 8941에서 이미 ok=False로 걸러졌으므로 여기 오는 ok는 진짜 발행. 후보 URL로 승격.
+                    _alt=c.get('url') or c.get('base') or ''
+                    _promote_candidate_to_site(c,_alt,bo=r.get('bo_table') or c.get('bo_table'),permission=True)
+                    if r.get('mb_id'):
+                        sid=_promoted_site_id(c)
+                        if sid: set_site_flag(sid,mb_id=r.get('mb_id'),mb_pass=r.get('mb_pass',''))
+                    _promoted.add(cid); registered+=1
+                    add_log(f'[발행가능 등록] {name} — PC노드 발행 성공(결과: {str(r.get("msg") or "등록됨")[:24]}) → 발행가능')
                 else:
-                    _cand_set(cid,status='rejected',reject_reason=msg or '발행 실패',pipeline_attempts=att,claimed_by='',claim_expire=0)
-                    add_log(f'[탈락] {name} — {msg}')
-            # 성공/등록 케이스도 claim 해제(_promote가 status=approved로 바꾸지만 claim 필드는 남으므로 정리)
-            if ok:
-                _cand_set(cid,claimed_by='',claim_expire=0)
-            applied+=1
-        except Exception as e:
-            add_log(f'[PC노드 회신오류] {name} {str(e)[:60]}')
+                    msg=str(r.get('msg') or '')[:90]; is_temp=bool(r.get('is_temp'))
+                    att=int(c.get('pipeline_attempts',0) or 0)+1
+                    # ★가입 성공 계정 보존(2026-09-20 지메일 실측: cafe24 가입축하 메일 17통, 원사이언스엔 계정 4개 — 발행 실패 시 mb_id를
+                    #   버려 매 시도마다 재가입). 발행이 실패해도 노드가 만든 계정은 후보에 저장 → 다음 시도는 가입 대신 로그인.
+                    if r.get('mb_id'):
+                        c['mb_id']=str(r.get('mb_id'))[:60]; c['mb_pass']=str(r.get('mb_pass') or ''); c['login_saved']=True
+                        _dirty.add(cid)
+                    if '[admin_only]' in msg:
+                        c.update({'status':'rejected','reject_reason':msg,'write_access_state':'admin_only',
+                                  'claimed_by':'','claim_expire':0}); _dirty.add(cid)
+                        _reject_doms.append((c.get('domain') or _domain_of(c.get('url','')),msg))
+                        add_log(f'[관리자 전용 제외] {name} — 일반회원 발행 대상에서 제외')
+                    elif '[human_verification_required]' in msg:
+                        c.update({'status':'manual_review','reject_reason':msg,'write_access_state':'human_verification_required',
+                                  'claimed_by':'','claim_expire':0}); _dirty.add(cid)
+                        add_log(f'[사람 확인 대기] {name} — 자동 재시도 보류')
+                    elif is_temp and att<5:
+                        c.update({'status':'ready','reject_reason':f'일시적 실패({att}/5): {msg}','pipeline_attempts':att,
+                                  'claimed_by':'','claim_expire':0}); _dirty.add(cid)
+                        add_log(f'[발행 재시도] {name} ({att}/5) — {msg}')
+                    else:
+                        c.update({'status':'rejected','reject_reason':msg or '발행 실패','pipeline_attempts':att,
+                                  'claimed_by':'','claim_expire':0}); _dirty.add(cid)
+                        _reject_doms.append((c.get('domain') or _domain_of(c.get('url','')),msg or '발행 실패'))
+                        add_log(f'[탈락] {name} — {msg}')
+                # 성공/등록 케이스도 claim 해제(_promote가 status=approved로 바꾸지만 claim 필드는 남으므로 정리).
+                #   _promote가 이미 cands를 재로드·저장했으므로 그 디스크본에 claim 해제를 반영하려면 여기서도
+                #   메모리 후보를 고치고 저장 대상에 넣는다(단 _promoted라 아래 저장 시 디스크 최신본 위에 머지).
+                if ok:
+                    c['claimed_by']=''; c['claim_expire']=0; _dirty.add(cid)
+                applied+=1
+            except Exception as e:
+                add_log(f'[PC노드 회신오류] {name} {str(e)[:60]}')
+        # ★단 한 번의 저장: 실패/claim해제로 바뀐 후보가 있으면 저장. _promote가 중간에 디스크를 바꿨을 수 있어
+        #   (성공 후보를 approved로) 최신 디스크본을 다시 읽어 그 위에 메모리 변경분만 덮어쓴다 → _promote 결과 보존.
+        if _dirty:
+            disk=load_cands(); disk_by={c.get('id'):c for c in disk}
+            for cid in _dirty:
+                mem=by_id.get(cid)
+                if mem is None: continue
+                if cid in disk_by: disk_by[cid].update(mem)
+                else: disk.append(mem)
+            save_cands(disk)
+    # rejected 도메인은 락 밖에서 일괄 기록(add_rejected_domains는 자체 파일·락을 씀)
+    for dom,reason in _reject_doms:
+        if dom:
+            try: add_rejected_domains(dom,reason)
+            except Exception: pass
     _node_beat(node_id, action=(f'발행 {registered}곳 등록' if registered else f'회신 {applied}건'), publish=registered)
     return jsonify({'ok':True,'applied':applied,'registered':registered})
 
