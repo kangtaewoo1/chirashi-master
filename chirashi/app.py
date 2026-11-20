@@ -9077,6 +9077,22 @@ def _recheck_write_form(c):
     """★JS에디터 개방 그누보드 가벼운 재검출(2026-11-21): write.php만 GET해 개선된 _is_write_form_html로
        재판정. True=write_form 새로 인정(c 갱신). 로그인/캡차/cafe24는 호출측에서 거름. 실패해도 무해(추가만)."""
     try:
+        import requests as _rq
+        _UA={'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36'}
+        _cfg_rc=load_config()
+        def _rfetch(u):
+            try: rr=_rq.get(u,timeout=12,verify=False,headers=_UA,allow_redirects=True)
+            except Exception: rr=None
+            try:
+                _blk=(rr is None) or (rr.status_code in (403,503)) or ('just a moment' in (rr.text or '')[:3000].lower() or 'cf-chl' in (rr.text or '')[:3000].lower() or '_cf_chl' in (rr.text or '')[:3000].lower())
+            except Exception: _blk=True
+            if _blk and unlocker_enabled(_cfg_rc):
+                uhtml=unlocker_fetch(u,_cfg_rc,timeout=90)
+                if uhtml:
+                    class _UR:
+                        def __init__(s,t,u): s.text=t; s.status_code=200; s.url=u
+                    return _UR(uhtml,u)
+            return rr
         base=c.get('base') or ''
         if not base:
             m=re.match(r'(https?://[^/]+)', str(c.get('url') or '')); base=m.group(1) if m else ''
@@ -9086,7 +9102,7 @@ def _recheck_write_form(c):
         urls.append(base+f'/bbs/write.php?{bp}={bo}')
         if bp!='bo_table': urls.append(base+f'/bbs/write.php?bo_table={bo}')
         for wu in list(dict.fromkeys([u for u in urls if u]))[:3]:
-            wr=get(wu)
+            wr=_rfetch(wu)
             if not wr or getattr(wr,'status_code',0)>=400: continue
             if _is_write_form_html((wr.text or '').lower(), c.get('platform')):
                 c['write_form']=True; c['write_url']=str(getattr(wr,'url','') or wu)
