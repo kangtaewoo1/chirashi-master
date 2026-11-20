@@ -10970,6 +10970,22 @@ def auto_pipeline_once(limit=5):
                 c['reject_reason']='글쓰기 폼 없음 판정 재검토(회원전용·게시판주소·설치경로 판정 수정 후)'; _rv+=1
         if _rv:
             save_cands(cands); add_log(f'[후보 재검토] 글쓰기 폼 없음으로 탈락한 허가 후보 {_rv}곳 다시 확인','정리')
+        # ★게시 허가 자동 백필(2026-11-20 대표님 '발행가능 93 정체' 실측): auto_authorize가 켜져 있으면
+        #   screen()이 신규 ready를 posting_authorized=True로 승인(9577)하지만, (a)11-10 자동승인 코드 이전에 선별된
+        #   레거시 ready와 (b)가입실패→ready로 되살린 후보는 승인 플래그가 안 붙어, 전환 pend 필터
+        #   (posting_authorized is True)에서 영영 제외됐음. 실측: ready/approved 2,952곳 중 1,361곳
+        #   (비회원 즉시전환 567 포함)이 미승인 → 전환 신규 0건으로 발행가능이 93에 정체. screen과 동일 규칙으로
+        #   매 사이클 자가치유 승인한다(parked·불법·인증벽·읽기제한 등은 이미 screen에서 rejected라 여기 대상 아님 → 안전).
+        if cfg.get('auto_authorize'):
+            _auth=0
+            for c in cands:
+                if (c.get('screened') and c.get('status') in ('ready','approved')
+                        and c.get('posting_authorized') is not True):
+                    c['posting_authorized']=True; c['auto_authorized']=True
+                    c['posting_authorization_updated_at']=_kst_now().strftime('%Y-%m-%d %H:%M')
+                    _auth+=1
+            if _auth:
+                save_cands(cands); add_log(f'[게시허가 백필] 미승인 ready/approved 후보 {_auth}곳 자동승인 → 전환 대기 진입','정리')
         # ★빡센검수 소급 적용(대표님 지시 2026-09-09 '대기 너무 쌓임'): strict_screen 켜져 있으면,
         #   기존 backlog의 ready 후보 중 '홍보 흔적 없는 것'(방치·개방 게시판 아님)을 대기줄에서 탈락.
         #   (예전 느슨한 검수로 통과된 것들이 가입 안 되며 대기만 쌓이던 문제 — 될 만한 것만 남긴다.)
