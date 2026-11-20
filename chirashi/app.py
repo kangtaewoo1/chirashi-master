@@ -4455,13 +4455,48 @@ def _kill_pid(pid, sig):
     try: os.kill(pid, sig); return True
     except Exception: return False
 
+def _reap_dead_thread_drivers():
+    """★크롬 누수 근본수정(2026-11-21 대표님 '왜 이리 느리냐' — 10일에 크롬 423개·스왑 데드 실측):
+       _drivers 캐시 드라이버는 소유 스레드가 reset_driver()를 불러야만 해제된다. PUB/가입 워커가
+       reset 없이 끝나거나(예외·조기 return·hang) 죽으면 그 드라이버가 _drivers에 영영 남고 →
+       chromedriver/크롬이 계속 살며 → reaper는 '_drivers에 있으니 사용 중(live)'으로 보존 → 수백 개 누적.
+       여기서 '소유 스레드가 이미 죽은' 캐시 드라이버만 골라 quit+프로세스 kill로 해제한다(살아있는 워커는 보존).
+       반환: 해제한 드라이버 수."""
+    try:
+        alive={t.name for t in threading.enumerate()}
+    except Exception:
+        return 0
+    dead=[]
+    with _drv_lock:
+        for k in list(_drivers.keys()):
+            owner=k[7:] if k.startswith('__SBR__') else k   # '__SBR__' 접두(원격) 제거 후 스레드명
+            if owner not in alive:
+                dead.append((k,_drivers.pop(k,None)))
+    n=0
+    for k,x in dead:
+        if not x: continue
+        n+=1
+        try: x.quit()
+        except Exception: pass
+        # quit()이 hang/실패해도 chromedriver subprocess를 직접 kill·reap(reset_driver와 동일 처리)
+        try:
+            _p=getattr(getattr(x,'service',None),'process',None)
+            if _p is not None:
+                try: _p.kill()
+                except Exception: pass
+                try: _p.wait(timeout=5)
+                except Exception: pass
+        except Exception: pass
+    return n
+
 def reap_orphan_chrome():
     """고아 chromedriver(+크롬 자식) 종료·reap, 좀비 chromedriver reap, 고아 크롬(ppid=1·chr_ 프로필) 종료,
        프로세스 없는 /tmp/chr_* 프로필 삭제. posix(서버) 전용. 반환: 정리한 프로세스 수.
-       ★사용 중 드라이버(_drivers 등록분)는 pid로 보존 — 활성 발행/WR 지속워커 안 끊김."""
+       ★사용 중 드라이버(_drivers 등록분)는 pid로 보존 — 활성 발행/WR 지속워커 안 끊김.
+       ★맨 먼저 '죽은 스레드의 캐시 드라이버'를 해제(_reap_dead_thread_drivers) — 이게 423개 누수의 뿌리였음."""
     if os.name!='posix': return 0
     import signal, glob, shutil, tempfile, re as _re
-    mypid=os.getpid(); live=_chrome_live_driver_pids(); done=0
+    mypid=os.getpid(); done=_reap_dead_thread_drivers(); live=_chrome_live_driver_pids()
     try: entries=[d for d in os.listdir('/proc') if d.isdigit()]
     except Exception: return 0
     for d in entries:
