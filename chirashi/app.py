@@ -4388,6 +4388,16 @@ def reset_driver():
         if x:
             try: x.quit()
             except: pass
+            # ★quit()이 hang/예외로 실패해도 chromedriver subprocess를 직접 종료·reap해 좀비/고아 크롬 누수 차단
+            #   (2026-11-20: quit 실패가 58시간 누적돼 크롬 300여개·좀비 수십개→RAM/스왑 고갈→사이트 접속지연).
+            try:
+                _p=getattr(getattr(x,'service',None),'process',None)
+                if _p is not None:
+                    try: _p.kill()
+                    except Exception: pass
+                    try: _p.wait(timeout=5)   # 우리 자식이므로 reap → 좀비 방지
+                    except Exception: pass
+            except Exception: pass
 
 def quit_all_drivers():
     """★모든 스레드의 크롬 드라이버를 강제 종료(2026-09-13 좀비 크롬 누적 해결).
@@ -4401,6 +4411,114 @@ def quit_all_drivers():
         try: x.quit(); n+=1
         except Exception: pass
     return n
+
+# ==================== ★크롬 고아/좀비 reaper (2026-11-20 메모리 누수·스왑 쓰레싱 해결) ====================
+#  배경: 발행 PUB 스레드가 끝날 때 reset_driver()→driver.quit()을 부르지만, quit()이 hang/예외로 실패하면
+#  (a) chromedriver subprocess가 app.py의 '좀비 자식'으로 남고(kill -9도 안 통함 — 부모가 wait해야 사라짐),
+#  (b) 그 chromedriver가 띄운 크롬 본체가 고아(ppid=1)로 살아남아 메모리를 계속 먹는다. 58시간 누적되며
+#  크롬 300여개·좀비 수십개 → RAM/스왑 고갈 → 사이트 접속 지연. reaper는 app.py의 자식 chromedriver 중
+#  _drivers에 없는(=사용 끝) 것만 골라 크롬 트리까지 죽이고 reap한다. '사용 중' 드라이버(_drivers에 등록된
+#  PUB/WR 지속 워커)는 pid 비교로 보존 → 활성 발행은 안 끊김.
+def _chrome_live_driver_pids():
+    """현재 _drivers에 살아있는(=사용 중) chromedriver subprocess pid 집합. 이건 reaper가 건드리지 않는다."""
+    pids=set()
+    try:
+        with _drv_lock:
+            for _d in list(_drivers.values()):
+                try:
+                    _p=getattr(getattr(_d,'service',None),'process',None)
+                    if _p is not None and _p.pid: pids.add(int(_p.pid))
+                except Exception: pass
+    except Exception: pass
+    return pids
+
+def _proc_stat(pid):
+    """/proc/<pid>/stat → (comm, state, ppid). comm은 15자 절단(‘chromedriver’=12자 OK). 실패시 None."""
+    try:
+        with open('/proc/%d/stat'%pid) as f: st=f.read()
+        lp=st.find('('); rp=st.rfind(')')
+        comm=st[lp+1:rp]; rest=st[rp+2:].split()
+        return comm, rest[0], int(rest[1])
+    except Exception: return None
+
+def _proc_children(ppid):
+    out=[]
+    try:
+        for d in os.listdir('/proc'):
+            if not d.isdigit(): continue
+            s=_proc_stat(int(d))
+            if s and s[2]==ppid: out.append(int(d))
+    except Exception: pass
+    return out
+
+def _kill_pid(pid, sig):
+    try: os.kill(pid, sig); return True
+    except Exception: return False
+
+def reap_orphan_chrome():
+    """고아 chromedriver(+크롬 자식) 종료·reap, 좀비 chromedriver reap, 고아 크롬(ppid=1·chr_ 프로필) 종료,
+       프로세스 없는 /tmp/chr_* 프로필 삭제. posix(서버) 전용. 반환: 정리한 프로세스 수.
+       ★사용 중 드라이버(_drivers 등록분)는 pid로 보존 — 활성 발행/WR 지속워커 안 끊김."""
+    if os.name!='posix': return 0
+    import signal, glob, shutil, tempfile, re as _re
+    mypid=os.getpid(); live=_chrome_live_driver_pids(); done=0
+    try: entries=[d for d in os.listdir('/proc') if d.isdigit()]
+    except Exception: return 0
+    for d in entries:
+        pid=int(d); s=_proc_stat(pid)
+        if not s: continue
+        comm,state,ppid=s
+        # 1) 우리 자식 chromedriver 좀비 → reap(waitpid). 특정 pid만 → subprocess.run 등 다른 자식과 무간섭.
+        if ppid==mypid and 'chromedriver' in comm and state=='Z':
+            try: os.waitpid(pid, os.WNOHANG); done+=1
+            except Exception: pass
+            continue
+        # 2) 우리 자식 chromedriver인데 _drivers에 없는 고아(살아있음) → 크롬 트리 죽이고 reap
+        if ppid==mypid and 'chromedriver' in comm and state!='Z' and pid not in live:
+            for ch in _proc_children(pid):
+                for g in _proc_children(ch): _kill_pid(g, signal.SIGKILL)   # 렌더러
+                _kill_pid(ch, signal.SIGKILL)                               # 크롬 런처
+            _kill_pid(pid, signal.SIGKILL)
+            try: os.waitpid(pid, 0)   # 우리 자식 → reap(좀비 방지)
+            except Exception: pass
+            done+=1
+            continue
+    # 3) 고아 크롬(ppid=1 + 우리 임시프로필) — chromedriver가 먼저 죽어 init으로 재부모화된 본체
+    for d in entries:
+        pid=int(d); s=_proc_stat(pid)
+        if not s: continue
+        comm,state,ppid=s
+        if ppid==1 and 'chrome' in comm:
+            try:
+                with open('/proc/%d/cmdline'%pid,'rb') as f: cl=f.read().replace(b'\x00',b' ').decode('utf-8','replace')
+            except Exception: cl=''
+            if '--user-data-dir=' in cl and '/chr_' in cl:
+                _kill_pid(pid, signal.SIGKILL); done+=1
+    # 4) 프로세스가 참조 안 하는 /tmp/chr_* 프로필 삭제(디스크/inode 회수). 사용 중 프로필은 보존.
+    try:
+        inuse=set()
+        for d in entries:
+            try:
+                with open('/proc/%s/cmdline'%d,'rb') as f: cl=f.read().replace(b'\x00',b' ').decode('utf-8','replace')
+            except Exception: continue
+            for m in _re.findall(r'--user-data-dir=(\S+)', cl): inuse.add(m)
+        for p in glob.glob(os.path.join(tempfile.gettempdir(),'chr_*')):
+            if p not in inuse and os.path.isdir(p):
+                try: shutil.rmtree(p, ignore_errors=True)
+                except Exception: pass
+    except Exception: pass
+    return done
+
+def chrome_reaper_loop():
+    """2분마다 고아/좀비 크롬 정리 — 메모리 누수·스왑 쓰레싱 재발 방지(2026-11-20)."""
+    while True:
+        try:
+            n=reap_orphan_chrome()
+            if n: add_log(f'[크롬정리] 고아·좀비 {n}개 회수','정리')
+        except Exception as e:
+            try: add_log(f'[크롬정리 오류] {str(e)[:80]}','정리')
+            except Exception: pass
+        time.sleep(120)
 
 # ==================== Selenium 그누보드 글쓰기 ====================
 def _robust_fill(d, el, value):
@@ -17967,7 +18085,7 @@ def main():
         print('⏰ 스케줄러 시작 (KST 기준)')
     except Exception as e: print('스케줄러 시작 실패:',e)
     # 지연 재시도 루프 / 텔레그램 명령 수신 / 발행글 생존 검증
-    for fn,nm in [(retry_loop,'RETRY'),(telegram_loop,'TG'),(verify_loop,'VERIFY'),(member_scheduler_loop,'MSCHED'),(discover_loop,'DISCO'),(pipeline_loop,'PIPELINE'),(publish_loop,'PUBLISH'),(ops_reap_loop,'OPS-REAP')]:
+    for fn,nm in [(retry_loop,'RETRY'),(telegram_loop,'TG'),(verify_loop,'VERIFY'),(member_scheduler_loop,'MSCHED'),(discover_loop,'DISCO'),(pipeline_loop,'PIPELINE'),(publish_loop,'PUBLISH'),(ops_reap_loop,'OPS-REAP'),(chrome_reaper_loop,'REAPER')]:
         try: threading.Thread(target=fn,name=nm,daemon=True).start()
         except Exception as e: print(f'{nm} 시작 실패:',e)
     print('🔁 재시도·📱텔레그램·🔎검증 스레드 시작')
