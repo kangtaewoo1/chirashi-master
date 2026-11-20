@@ -9055,6 +9055,46 @@ def _cafe24_board_map(html, page_url=''):
         pass
     return m
 
+def _is_write_form_html(wl, platform=None):
+    """★그누보드/카페24 '글쓰기 폼' 판정(정적 HTML·소문자). 2026-11-21 대표님 '발행가능 늘리기' 레버:
+       기존 정적검수가 그누보드에 대해 has_subject AND has_content(둘 다)를 요구해, content textarea를
+       JS 에디터(SmartEditor2/CKEditor/Froala/Summernote 등)로 그리는 '개방 그누보드'를 폼없음으로 대량
+       오분류했음(실측: ready 그누보드·무로그인·무캡차인데 write_form=False 537곳 + 거부 다수).
+       → write.php 페이지에 제목칸(wr_subject)이 있고, content칸 '또는' 그누보드 쓰기폼 컨테이너
+       (write_update.php/fwrite) '또는' JS 에디터 로더가 있으면 폼으로 인정. cafe24는 기존대로 subject만으로.
+       남의 글 오탐 방지: 제목칸(wr_subject)이 없으면 무조건 False(로그인/목록/댓글 페이지 배제)."""
+    has_subject=('wr_subject' in wl or 'name="subject"' in wl or "name='subject'" in wl)
+    if not has_subject:
+        return False
+    has_content=('wr_content' in wl or 'name="content"' in wl or "name='content'" in wl)
+    has_container=('write_update.php' in wl or 'name="fwrite"' in wl or "name='fwrite'" in wl
+                   or 'id="fwrite"' in wl or "id='fwrite'" in wl)
+    has_js_editor=any(k in wl for k in ('smarteditor','se2_','oeditors','cheditor','ckeditor',
+                                        'froala','summernote','tinymce','dext5','namoeditor'))
+    return bool(has_content or has_container or has_js_editor or platform=='cafe24')
+
+def _recheck_write_form(c):
+    """★JS에디터 개방 그누보드 가벼운 재검출(2026-11-21): write.php만 GET해 개선된 _is_write_form_html로
+       재판정. True=write_form 새로 인정(c 갱신). 로그인/캡차/cafe24는 호출측에서 거름. 실패해도 무해(추가만)."""
+    try:
+        base=c.get('base') or ''
+        if not base:
+            m=re.match(r'(https?://[^/]+)', str(c.get('url') or '')); base=m.group(1) if m else ''
+        if not base: return False
+        bo=c.get('bo_table') or 'free'; bp=c.get('bo_param') or 'bo_table'
+        urls=[c.get('write_url')] if c.get('write_url') else []
+        urls.append(base+f'/bbs/write.php?{bp}={bo}')
+        if bp!='bo_table': urls.append(base+f'/bbs/write.php?bo_table={bo}')
+        for wu in list(dict.fromkeys([u for u in urls if u]))[:3]:
+            wr=get(wu)
+            if not wr or getattr(wr,'status_code',0)>=400: continue
+            if _is_write_form_html((wr.text or '').lower(), c.get('platform')):
+                c['write_form']=True; c['write_url']=str(getattr(wr,'url','') or wu)
+                return True
+    except Exception:
+        pass
+    return False
+
 def screen_candidate(url, cfg=None):
     """HTTP 1~3회로 후보 자동 검수. 반환: 검수 결과 dict."""
     import requests as _rq
@@ -9294,10 +9334,10 @@ def screen_candidate(url, cfg=None):
             res['needs_browser']=True
             if not res.get('write_url'): res['write_url']=wu
             continue
-        has_subject=('wr_subject' in wl or 'name="subject"' in wl or "name='subject'" in wl)
-        has_content=('wr_content' in wl or 'name="content"' in wl or "name='content'" in wl)
-        # ★Froala 등 JS 에디터: content textarea가 정적 HTML에 안 뜰 수 있음 → subject만 있어도 cafe24는 폼으로 인정.
-        if has_subject and (has_content or res.get('platform')=='cafe24'):
+        # ★글쓰기 폼 판정(2026-11-21 _is_write_form_html로 통일): 그누보드도 content textarea가 JS 에디터
+        #   (SmartEditor2/CKEditor/Froala 등)로 그려져 정적 HTML에 안 떠도, 쓰기폼 컨테이너(write_update.php/
+        #   fwrite)나 에디터 로더가 있으면 폼으로 인정 → 개방 그누보드 대량 오분류 해소. cafe24는 기존대로.
+        if _is_write_form_html(wl, res.get('platform')):
             res['write_form']=True; res['write_url']=wr.url
         if any(k in wl for k in ['captcha_key','kcaptcha','g-recaptcha','h-captcha','cf-turnstile']) or '자동등록방지' in wh:
             res['captcha']='감지'
@@ -11005,6 +11045,22 @@ def auto_pipeline_once(limit=5):
                 c['reject_reason']='글쓰기 폼 없음 판정 재검토(회원전용·게시판주소·설치경로 판정 수정 후)'; _rv+=1
         if _rv:
             save_cands(cands); add_log(f'[후보 재검토] 글쓰기 폼 없음으로 탈락한 허가 후보 {_rv}곳 다시 확인','정리')
+        # ★JS에디터 개방 그누보드 write_form 재검출(2026-11-21 대표님 '발행가능 늘리기' 최대레버):
+        #   정적검수가 content textarea를 JS로 그리는 그누보드를 has_content=False로 폼없음 오분류해
+        #   ready인데 write_form=False인 무로그인·무캡차 그누보드가 다수(실측 537곳) guest 패스트레인에 못 들어감.
+        #   개선된 _is_write_form_html로 write.php만 가볍게 재GET해 재판정, 사이클당 상한(≤25 GET)으로 자가치유.
+        #   성공=write_form 인정→guest 전환 대기. 실패해도 플래그만 남겨 재시도 안 함(무해, 추가만). cafe24/로그인/캡차 제외.
+        _jatt=0; _jok=0
+        for c in cands:
+            if _jatt>=25: break
+            if (c.get('status') in ('ready','approved') and not c.get('write_form')
+                    and not c.get('login_required') and not c.get('captcha')
+                    and not c.get('jsform_recheck_v1')
+                    and str(c.get('platform') or 'gnuboard')!='cafe24'):
+                c['jsform_recheck_v1']=True; _jatt+=1
+                if _recheck_write_form(c): _jok+=1
+        if _jatt:
+            save_cands(cands); add_log(f'[폼 재검출] JS에디터 개방 그누보드 재검 {_jatt}곳 중 {_jok}곳 write_form 인정 → guest 전환 대기','정리')
         # ★게시 허가 자동 백필(2026-11-20 대표님 '발행가능 93 정체' 실측): auto_authorize가 켜져 있으면
         #   screen()이 신규 ready를 posting_authorized=True로 승인(9577)하지만, (a)11-10 자동승인 코드 이전에 선별된
         #   레거시 ready와 (b)가입실패→ready로 되살린 후보는 승인 플래그가 안 붙어, 전환 pend 필터
