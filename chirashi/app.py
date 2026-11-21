@@ -7555,9 +7555,10 @@ def _post_gnuboard_brightdata(site, title, content_html, skip_login=False):
         reset_driver()
 
 
-def do_post(site, title, content_html, skip_login=False):
+def do_post(site, title, content_html, skip_login=False, http_only=False):
     """발행 라우팅(하이브리드+자가학습): 학습레시피→플랫폼기본→자동학습.
-       skip_login=True: 가입 직후 이미 로그인된 세션에서 재로그인 없이 바로 글쓰기(비표준 로그인폼 구제)."""
+       skip_login=True: 가입 직후 이미 로그인된 세션에서 재로그인 없이 바로 글쓰기(비표준 로그인폼 구제).
+       http_only=True: 비회원(guest) 시험발행 전용 — HTTP만 쓰고 셀레늄 폴백을 타지 않는다(크롬 미사용 보장)."""
     # 비BMP(이모지 등) 제거 — ChromeDriver send_keys가 못 다뤄 발행 전체가 실패하던 문제 방지.
     if site.get('posting_authorized') is not True:
         return False,'발행 보류 — 사이트별 O 승인 필요'
@@ -7666,7 +7667,13 @@ def do_post(site, title, content_html, skip_login=False):
         #   폴백 실패 문구('로그인 입력칸 없음' 등)가 진짜 원인을 가린다(2026-11-09 실측) → HTTP 사유 그대로 반환.
         if site.get('http_member'):
             return False,f'HTTP 회원 발행 불가 — {hmsg}'
+        # ★비회원(guest) 시험발행 HTTP 전용(2026-11-21 스왑데드 재발 방지): HTTP가 애매(None)여도 셀레늄 폴백 안 탐.
+        #   guest 셀레늄은 전역 크롬캡 밖이라 동시성↑ 시 크롬이 무제한 누적→스왑사했음.
+        if http_only:
+            return False,f'HTTP 전용(비회원 시험발행) — 셀레늄 생략: {hmsg}'
         # hok is None → 셀레늄 폴백으로 진행
+    if http_only:
+        return False,'HTTP 전용 모드 — HTTP 경로 불가(셀레늄 생략)'
     try:
         ok,msg=(cafe24_post if plat=='cafe24' else gnuboard_post)(site,title,content_html,skip_login=skip_login)
     except Exception as e:
@@ -11297,7 +11304,7 @@ def auto_pipeline_once(limit=5):
                     add_log(f'[자동가입 실패] {name} — {str(msg_su)[:90]}')
                     return   # (병렬 처리: continue → return)
             # 발행 시도(②: 비회원 우선, 또는 방금 가입한 세션으로)
-            ok,msg=do_post(tmp,title,html,skip_login=(_just_signed and not tmp.get('http_member')))   # HTTP 가입이면 브라우저 세션이 없음 → HTTP 로그인 발행
+            ok,msg=do_post(tmp,title,html,skip_login=(_just_signed and not tmp.get('http_member')),http_only=_is_guest)   # HTTP 가입이면 브라우저 세션이 없음 → HTTP 로그인 발행. guest는 HTTP 전용(크롬 미사용)
             # 검수는 비회원 글쓰기로 봤지만 실제 write.php가 로그인으로 튕기는 게시판이 있다.
             # 이 경우 자동가입 후 1회 재시도(gjsec처럼 login_required 오판된 케이스 구제).
             # ★Cafe24는 '글쓰기 페이지 못찾음'도 대개 로그인 필요 → 자동가입 트리거에 포함(대표님 지시 2026-09-11).
