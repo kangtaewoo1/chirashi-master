@@ -4104,6 +4104,7 @@ def get_driver(remote=False):
         d=webdriver.Chrome(service=svc,options=opts)
         d.set_page_load_timeout(25); d.implicitly_wait(3)
         d._headful=_hf   # ★Turnstile 사람 클릭 모드 판정용(2026-10-02): headless면 사람이 클릭할 창이 없음
+        d._born=time.time()   # 수명 상한 판정용(_reap_overage_pub_drivers)
         _drivers[tid]=d; return d
 
 def dismiss_alerts(d):
@@ -4386,18 +4387,51 @@ def reset_driver():
         rd=_drivers.pop('__SBR__'+tid,None)
     for x in (d,rd):
         if x:
-            try: x.quit()
-            except: pass
-            # ★quit()이 hang/예외로 실패해도 chromedriver subprocess를 직접 종료·reap해 좀비/고아 크롬 누수 차단
+            # ★quit()은 시간 제한을 두고 기다린다(2026-11-23): Selenium 4.52 로컬 크롬은 명령 타임아웃이 없어
+            #   굳은 크롬에 quit()이 끝없이 대기하면 아래 강제종료까지 영영 못 갔다.
+            _quit_bounded(x)
+            # ★quit()이 hang/예외/시간초과여도 chromedriver·크롬 트리를 직접 종료·reap해 좀비/고아 크롬 누수 차단
             #   (2026-11-20: quit 실패가 58시간 누적돼 크롬 300여개·좀비 수십개→RAM/스왑 고갈→사이트 접속지연).
-            try:
-                _p=getattr(getattr(x,'service',None),'process',None)
-                if _p is not None:
-                    try: _p.kill()
-                    except Exception: pass
-                    try: _p.wait(timeout=5)   # 우리 자식이므로 reap → 좀비 방지
-                    except Exception: pass
+            try: _kill_driver_tree(x)
             except Exception: pass
+
+# ★크롬 슬롯·수명 상한(2026-11-23 대표님 'google.twseo.kr 접속안됨' — 스왑 4GB 꽉·크롬 409개·드라이버 34개(전부 PUB)·
+#   36시간 OOM-kill 크롬 295개, 22시~13시 발행 한 건 중앙값 45~90분·처리량 1/6): 상한(publish_max_chromes=10)인데 34개가
+#   뜬 이유는 둘이다. ①_publish_combo_to_site가 발행 성공 시 크롬을 연 채 슬롯부터 반납 → 후처리(finalize_post·
+#   reconcile_sites·5.4MB history 재기록 — 전부 파일락 직렬) 줄서기 동안 크롬이 슬롯 밖에서 살아 있었다. 부하가 오를수록
+#   후처리가 느려져 크롬이 더 쌓이는 양성 되먹임. ②로컬 크롬 명령 HTTP 타임아웃이 None(무한)이라 굳은 크롬에 명령 하나가
+#   끝없이 대기(한 건 60~160분). → 크롬은 닫은 뒤 슬롯 반납, quit은 시간제한 후 트리 강제종료, PUB 크롬은 수명 상한.
+_QUIT_TIMEOUT_S=15
+
+def _kill_driver_tree(x):
+    """드라이버의 chromedriver와 그 자식 크롬(+렌더러)을 강제종료하고 reap한다. 크롬을 먼저 죽여 고아(ppid=1)를 남기지
+       않는다. quit()이 정상 종료됐으면 대부분 이미 없어서 no-op. 원격(SBR) 드라이버는 로컬 프로세스가 없어 건너뛴다.
+       자식 크롬 직접 종료는 posix(서버)만 — 윈도우 PC 노드는 기존처럼 chromedriver만 종료."""
+    _p=getattr(getattr(x,'service',None),'process',None)
+    if _p is None: return
+    if os.name=='posix' and getattr(_p,'pid',None):
+        try:
+            import signal
+            for ch in _proc_children(_p.pid):
+                for g in _proc_children(ch): _kill_pid(g, signal.SIGKILL)   # 렌더러 등
+                _kill_pid(ch, signal.SIGKILL)                               # 크롬 본체
+        except Exception: pass
+    try: _p.kill()
+    except Exception: pass
+    try: _p.wait(timeout=5)   # 우리 자식이므로 reap → 좀비 방지
+    except Exception: pass
+
+def _quit_bounded(x, timeout=None):
+    """x.quit()을 별도 스레드에서 최대 timeout초(기본 _QUIT_TIMEOUT_S)만 기다린다. 제때 끝나면 True.
+       시간초과면 False — 호출자가 _kill_driver_tree로 정리하고, 남은 quit 스레드는 chromedriver가 죽으면 연결오류로 끝난다."""
+    done=threading.Event()
+    def _q():
+        try: x.quit()
+        except Exception: pass
+        finally: done.set()
+    try: threading.Thread(target=_q,name='QUIT-'+secrets.token_hex(3),daemon=True).start()
+    except Exception: return False
+    return done.wait(_QUIT_TIMEOUT_S if timeout is None else timeout)
 
 def quit_all_drivers():
     """★모든 스레드의 크롬 드라이버를 강제 종료(2026-09-13 좀비 크롬 누적 해결).
@@ -4476,18 +4510,33 @@ def _reap_dead_thread_drivers():
     for k,x in dead:
         if not x: continue
         n+=1
-        try: x.quit()
-        except Exception: pass
-        # quit()이 hang/실패해도 chromedriver subprocess를 직접 kill·reap(reset_driver와 동일 처리)
-        try:
-            _p=getattr(getattr(x,'service',None),'process',None)
-            if _p is not None:
-                try: _p.kill()
-                except Exception: pass
-                try: _p.wait(timeout=5)
-                except Exception: pass
+        # 소유 스레드가 죽었으니 정상 종료(quit)는 필요 없다 — reaper 스레드가 굳은 quit()에 묶이지 않게 바로 트리 종료.
+        try: _kill_driver_tree(x)
         except Exception: pass
     return n
+
+def _reap_overage_pub_drivers(max_age_s=None):
+    """★PUB(작업실 발행) 크롬 수명 상한(2026-11-23): 정상 발행은 한 건 전체가 길어야 17분(11-22 11~15시 실측 최대 17.5분,
+       중앙값 2~4분)인데, 굳은 크롬에 Selenium 명령이 무한 대기하면 한 건에 60~160분씩 크롬을 쥐고 있었다. 소유 스레드가
+       살아 있어도 max_age(config pub_chrome_max_age_min, 기본 20분)를 넘긴 PUB 크롬은 프로세스 트리를 강제종료한다 →
+       그 스레드의 다음 Selenium 명령이 즉시 실패해 시도 루프(300초 꼬리자르기)를 빠져나간다. 반환: 회수한 수."""
+    if max_age_s is None:
+        try: max_age_s=max(5,int(load_config().get('pub_chrome_max_age_min',20) or 20))*60
+        except Exception: max_age_s=1200
+    now=time.time(); old=[]
+    with _drv_lock:
+        for k in list(_drivers.keys()):
+            if not k.startswith('PUB-'): continue   # 원격(__SBR__)·가입·검수 등 다른 경로는 건드리지 않음
+            born=getattr(_drivers.get(k),'_born',None)
+            if born and now-born>max_age_s:
+                old.append(_drivers.pop(k,None))
+    for x in old:
+        try: _kill_driver_tree(x)
+        except Exception: pass
+    if old:
+        try: add_log(f'[크롬정리] 수명초과 발행크롬 {len(old)}개 강제회수(>{max_age_s//60}분 — 굳은 크롬)','정리')
+        except Exception: pass
+    return len(old)
 
 def reap_orphan_chrome():
     """고아 chromedriver(+크롬 자식) 종료·reap, 좀비 chromedriver reap, 고아 크롬(ppid=1·chr_ 프로필) 종료,
@@ -4496,7 +4545,10 @@ def reap_orphan_chrome():
        ★맨 먼저 '죽은 스레드의 캐시 드라이버'를 해제(_reap_dead_thread_drivers) — 이게 423개 누수의 뿌리였음."""
     if os.name!='posix': return 0
     import signal, glob, shutil, tempfile, re as _re
-    mypid=os.getpid(); done=_reap_dead_thread_drivers(); live=_chrome_live_driver_pids()
+    mypid=os.getpid(); done=_reap_dead_thread_drivers()
+    try: done+=_reap_overage_pub_drivers()   # 수명초과 PUB 크롬(굳은 크롬) — live 집합 계산 전에 회수
+    except Exception: pass
+    live=_chrome_live_driver_pids()
     try: entries=[d for d in os.listdir('/proc') if d.isdigit()]
     except Exception: return 0
     for d in entries:
@@ -11758,6 +11810,10 @@ def _publish_combo_to_site(s, kw, wname, rid, cfg, writer_name='', chrome_sem=No
             if '등록 확인 불가' in str(msg): break
             if time.time()-_t0>300: break
             if attempt<3: time.sleep(min(5*attempt,15))
+        # ★크롬을 닫고 나서 슬롯 반납(2026-11-23 스왑 데드 실측): 성공 시 크롬을 연 채 반납하면 아래 후처리(finalize_post·
+        #   reconcile_sites·history 재기록 — 파일락 직렬) 대기 동안 크롬이 상한 밖에 쌓였다(상한 10인데 34개). 후처리는 크롬을 안 쓴다.
+        try: reset_driver()
+        except Exception: pass
         if _cs_held:
             try: chrome_sem.release()
             except Exception: pass
@@ -11829,7 +11885,10 @@ def _publish_combo_to_site(s, kw, wname, rid, cfg, writer_name='', chrome_sem=No
                 +(f" 🔒비밀글→발행중단(구글 색인불가)" if _secret else ''))
     finally:
         # 크롬 세마포어 안전해제(예외로 발행 루프 뒤 release를 못 지났을 때만; acquire 전 return이면 _cs_held 미정의→건너뜀)
+        #   여기서도 크롬을 먼저 닫고 반납(슬롯 밖 크롬 금지 — 위와 같은 규칙).
         if locals().get('_cs_held') and chrome_sem is not None:
+            try: reset_driver()
+            except Exception: pass
             try: chrome_sem.release()
             except Exception: pass
         _slk.release()
