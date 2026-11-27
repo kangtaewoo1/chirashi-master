@@ -1246,12 +1246,22 @@ def build_title(r,s,b,cfg,raw=None):
     #   메인키워드는 맨 앞 고정 유지. 너무 길면(140자) 롱테일부터 줄인다.
     _near=[f'{x}{s}' for x in _nearby_regions(r,2)]
     _long=(' '+' '.join(_near)) if _near else ''
+    # ★홍만대표 브랜드 토큰(2026-11-27 대표님 지시 '제목에 랜덤 번호 앞뒤로 홍만대표 무조건'):
+    #   모든 제목 끝에 '홍만대표'+랜덤번호를 붙인다(번호는 앞/뒤 랜덤 배치). 맨 앞은 메인키워드와
+    #   작성자명(제목 첫 토큰)·앞15자 SEO 보존을 위해 건드리지 않고 반드시 끝에 둔다.
+    #   길이예산(_room)을 먼저 빼둬 140자 잘림에도 이 토큰은 항상 살아남게 한다.
+    _hmn=str(random.randint(1,9999))
+    _hm=random.choice([f'홍만대표{_hmn}', f'{_hmn}홍만대표'])
+    _room=140-len(_hm)-1
     base=f'{r}{s} {ph}{_long} {b}'.strip()
     angle=random.choice(TITLE_ANGLES)
     cand=f'{base} {angle}'
-    if len(cand)>140:
+    if len(cand)>_room:
         # 앵글 → 롱테일 순으로 줄여 길이 맞춤(메인키워드·번호·브랜드는 보존)
-        cand=base if len(base)<=140 else f'{r}{s} {ph} {b}'
+        cand=base if len(base)<=_room else f'{r}{s} {ph} {b}'
+        if len(cand)>_room:
+            cand=cand[:_room].rstrip()
+    cand=f'{cand} {_hm}'.strip()
     return cand[:140], raw
 
 # ==================== 키워드 풀 (엑셀/CSV 랜덤 치환) ====================
